@@ -3,84 +3,103 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>About — Finely</title>
-    <meta name="description" content="About Finely, a personalized finance platform built for calm, clarity, and control." />
-    <link rel="stylesheet" href="styles.css" />
+    <title>About Us — Finely</title>
+    <meta name="description" content="Finely is a personalized finance platform that turns messy PDFs into clear, actionable insights." />
+    <link rel="stylesheet" href="styles.css?v=2" />
   </head>
   <body>
     <div class="page">
       <header class="nav">
         <div class="logo">Finely</div>
         <nav class="nav-links">
-          <a href="index.html#features">Features</a>
-          <a href="index.html#workflow">Workflow</a>
-          <a href="index.html#pricing">Pricing</a>
-          <a href="about.html">About</a>
+          <a href="#about">About</a>
+          <a href="#goal">Our goal</a>
+          <a href="#product">Product</a>
+          <a href="#who">Who we are</a>
         </nav>
         <div class="nav-cta">
-          <button class="ghost">Sign in</button>
-          <button class="primary">Request access</button>
+          <a class="ghost" href="#demo">Try our demo</a>
         </div>
       </header>
 
       <main>
-        <section class="section">
-          <div class="section-title">
+        <section id="about" class="hero">
+          <div class="hero-copy">
             <p class="eyebrow">About us</p>
-            <h1>We build finance tools for real life.</h1>
-            <p class="subhead">Finely exists to replace anxiety with clarity. We design systems that are personal, calm, and useful day to day.</p>
-          </div>
-        </section>
-
-        <section class="section glass">
-          <div class="steps">
-            <div class="step">
-              <div class="step-num">Focus</div>
-              <div>
-                <h3>Personalization first</h3>
-                <p>Plans and insights adapt to your habits, not the other way around.</p>
-              </div>
-            </div>
-            <div class="step">
-              <div class="step-num">Care</div>
-              <div>
-                <h3>Calm by design</h3>
-                <p>Simple language, clear next steps, and fewer decisions at once.</p>
-              </div>
-            </div>
-            <div class="step">
-              <div class="step-num">Trust</div>
-              <div>
-                <h3>Privacy by default</h3>
-                <p>Strong encryption, transparent permissions, and minimal data collection.</p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section class="section">
-          <div class="section-title">
-            <p class="eyebrow">Our story</p>
-            <h2>Built for people who want a simpler money system.</h2>
+            <h1>Clarity for every financial decision.</h1>
             <p class="subhead">
-              We started Finely after watching smart, busy people struggle with tools that were either too rigid or too noisy.
-              Our goal is to make money guidance feel as natural as checking the weather: clear, quick, and helpful.
+              Finely is a personalized finance platform designed for calm, control, and real-world simplicity.
+              We transform complex statements into clear, usable insights you can act on.
+            </p>
+            <div class="hero-cta">
+              <a class="primary" href="#demo">Try our demo</a>
+              <a class="ghost" href="#product">See how it works</a>
+            </div>
+          </div>
+        </section>
+
+        <section id="goal" class="section">
+          <div class="section-title">
+            <p class="eyebrow">Our goal</p>
+            <h2>Help people see their money clearly — and act confidently.</h2>
+            <p class="subhead">
+              We want to remove the noise from personal finance so anyone can plan, adjust, and improve with a few
+              meaningful steps.
             </p>
           </div>
+          <div class="pillars">
+            <div class="pillar">
+              <h3>Clarity</h3>
+              <p>Explain what matters, hide what doesn’t, and keep it actionable.</p>
+            </div>
+            <div class="pillar">
+              <h3>Personalization</h3>
+              <p>Insights are tailored to your habits, goals, and timelines.</p>
+            </div>
+            <div class="pillar">
+              <h3>Trust</h3>
+              <p>Your data stays private, secured, and under your control.</p>
+            </div>
+          </div>
         </section>
 
-        <section class="section">
+        <section id="product" class="section glass">
           <div class="section-title">
-            <p class="eyebrow">Team</p>
-            <h2>The people behind Finely.</h2>
+            <p class="eyebrow">Product</p>
+            <h2>Personalized finance that starts with your documents.</h2>
+            <p class="subhead">
+              Upload a PDF statement and Finely extracts transactions, highlights patterns, and summarizes next steps.
+              We will connect this demo to our parsing engine so you can see real results instantly.
+            </p>
           </div>
-          <div class="features">
-            <div class="feature-card">
+          <div class="product-grid">
+            <div class="product-card">
+              <h3>PDF parsing</h3>
+              <p>Automatic extraction of transactions and balances from uploaded PDFs.</p>
+            </div>
+            <div class="product-card">
+              <h3>Smart summaries</h3>
+              <p>Clear insights about cash flow, recurring charges, and upcoming risks.</p>
+            </div>
+            <div class="product-card">
+              <h3>Next steps</h3>
+              <p>Recommended actions tuned to your goals and habits.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="who" class="section">
+          <div class="section-title">
+            <p class="eyebrow">Who we are</p>
+            <h2>A small team focused on calm, usable finance tools.</h2>
+          </div>
+          <div class="team-grid">
+            <div class="team-card">
               <div class="headshot" aria-label="Photo placeholder for Shreya Mishra"></div>
               <h3>Shreya Mishra</h3>
               <p>Product strategy and customer research. Focused on making finance feel calm and human.</p>
             </div>
-            <div class="feature-card">
+            <div class="team-card">
               <div class="headshot" aria-label="Photo placeholder for Kshitij Gupta"></div>
               <h3>Kshitij Gupta</h3>
               <p>Engineering and systems design. Builds reliable, privacy-first financial infrastructure.</p>
@@ -88,21 +107,27 @@
           </div>
         </section>
 
-        <section class="cta">
+        <section id="demo" class="cta">
           <div>
-            <h2>Want to build with us?</h2>
-            <p class="subhead">We partner with early customers to shape the product.</p>
+            <h2>Try our demo</h2>
+            <p class="subhead">Upload a PDF statement. We will connect this to our parser to extract and summarize data.</p>
           </div>
-          <button class="primary">Request access</button>
+          <form class="demo" action="#" method="post">
+            <label class="upload">
+              <input type="file" accept="application/pdf" />
+              <span>Choose PDF</span>
+            </label>
+            <button class="primary" type="submit">Run demo</button>
+          </form>
         </section>
       </main>
 
       <footer class="footer">
         <div class="logo">Finely</div>
         <div class="footer-links">
-          <a href="index.html#">Privacy</a>
-          <a href="index.html#">Security</a>
-          <a href="index.html#">Support</a>
+          <a href="#about">About</a>
+          <a href="#product">Product</a>
+          <a href="#demo">Demo</a>
         </div>
         <div class="footer-note">© 2026 Finely. All rights reserved.</div>
       </footer>
