@@ -198,6 +198,15 @@ main {
   gap: 20px;
 }
 
+.pillars-note {
+  text-align: center;
+  margin-top: 20px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.5px;
+  width: 100%;
+}
+
 .pillar,
 .product-card,
 .team-card {
@@ -270,6 +279,13 @@ main {
   background: var(--bg);
 }
 
+.upload-block {
+  display: inline-flex;
+  justify-content: center;
+  width: 100%;
+  padding: 16px 18px;
+}
+
 .upload input {
   position: absolute;
   inset: 0;
@@ -293,6 +309,44 @@ main {
 
 .footer-note {
   text-align: right;
+}
+
+.demo-page {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(320px, 2fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.demo-panel {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 24px;
+  box-shadow: 0 14px 36px rgba(18, 22, 25, 0.08);
+  display: grid;
+  gap: 12px;
+}
+
+.demo-meta {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.demo-preview {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 12px;
+  box-shadow: 0 14px 36px rgba(18, 22, 25, 0.08);
+  min-height: 480px;
+}
+
+.pdf-frame {
+  width: 100%;
+  height: 100%;
+  min-height: 456px;
+  border: none;
+  border-radius: 16px;
+  background: #f2f4f7;
 }
 
 @media (max-width: 900px) {
@@ -319,6 +373,10 @@ main {
 
   .footer-note {
     text-align: left;
+  }
+
+  .demo-page {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Demo — Finely</title>
+    <meta name="description" content="Upload a PDF and preview it in the browser." />
+    <link rel="stylesheet" href="styles.css?v=2" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="nav">
+        <div class="logo">Finely</div>
+        <nav class="nav-links">
+          <a href="index.html#about">About</a>
+          <a href="index.html#goal">Our goal</a>
+          <a href="index.html#product">Product</a>
+          <a href="index.html#who">Who we are</a>
+        </nav>
+        <div class="nav-cta">
+          <a class="primary" href="demo.html">Try our demo</a>
+        </div>
+      </header>
+
+      <main>
+        <section class="section">
+          <div class="section-title">
+            <p class="eyebrow">Demo</p>
+            <h2>Upload a PDF statement</h2>
+            <p class="subhead">Your file stays in your browser for this demo. We will connect this to our parser soon.</p>
+          </div>
+
+          <div class="demo-page">
+            <div class="demo-panel">
+              <label class="upload upload-block">
+                <input id="pdfInput" type="file" accept="application/pdf" />
+                <span>Choose PDF</span>
+              </label>
+              <div class="demo-meta" id="pdfMeta">No file selected.</div>
+            </div>
+            <div class="demo-preview">
+              <iframe id="pdfFrame" title="PDF preview" class="pdf-frame"></iframe>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <div class="logo">Finely</div>
+        <div class="footer-links">
+          <a href="index.html#about">About</a>
+          <a href="index.html#product">Product</a>
+        </div>
+        <div class="footer-note">© 2026 Finely. All rights reserved.</div>
+      </footer>
+    </div>
+
+    <script>
+      const input = document.getElementById("pdfInput");
+      const frame = document.getElementById("pdfFrame");
+      const meta = document.getElementById("pdfMeta");
+
+      input.addEventListener("change", (event) => {
+        const file = event.target.files && event.target.files[0];
+        if (!file) {
+          meta.textContent = "No file selected.";
+          frame.removeAttribute("src");
+          return;
+        }
+        if (file.type !== "application/pdf") {
+          meta.textContent = "Please choose a PDF file.";
+          frame.removeAttribute("src");
+          return;
+        }
+        const url = URL.createObjectURL(file);
+        frame.src = url;
+        meta.textContent = `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+      });
+    </script>
+  </body>
+</html>
