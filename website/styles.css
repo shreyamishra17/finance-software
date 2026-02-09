@@ -25,6 +25,7 @@ body {
   background: #ffffff;
   color: var(--ink);
   line-height: 1.6;
+  min-height: 100%;
 }
 
 a {
@@ -37,10 +38,14 @@ a {
   max-width: 1100px;
   margin: 0 auto;
   padding: 28px 24px 60px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 main {
   background: #ffffff;
+  flex: 1;
 }
 
 .nav {
@@ -105,6 +110,9 @@ main {
   font-family: "Playfair Display", serif;
   font-size: clamp(2.4rem, 3vw, 3.2rem);
   margin: 12px 0 16px;
+  /* Force optical alignment with paragraph start in this hero block. */
+  margin-left: -0.045em;
+  text-indent: 0;
 }
 
 .hero-split {
@@ -198,6 +206,10 @@ main {
   gap: 20px;
 }
 
+.team-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .pillars-note {
   text-align: center;
   margin-top: 20px;
@@ -249,11 +261,44 @@ main {
   background: var(--card);
   border-radius: var(--radius);
   padding: 40px;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 20px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
   align-items: center;
   box-shadow: var(--shadow);
+}
+
+.cta > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cta .demo {
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.cta .primary {
+  font-size: clamp(0.95rem, 1.5vw, 1.1rem);
+  padding: clamp(8px, 1vw, 10px) clamp(14px, 1.8vw, 18px);
+  white-space: nowrap;
+}
+
+/* Keep CTA in one row when possible, but never clip the button on narrower widths. */
+@media (max-width: 1100px) {
+  .cta {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+
+  .cta .demo {
+    justify-content: flex-start;
+  }
 }
 
 .demo-section {
@@ -295,20 +340,31 @@ main {
 
 .footer {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: auto 1fr auto;
+  align-items: baseline;
   gap: 20px;
-  padding: 40px 0 10px;
+  margin-top: auto;
+  padding: 56px 0 18px;
   color: var(--muted);
   font-size: 14px;
 }
 
+.footer .logo {
+  justify-self: start;
+}
+
 .footer-links {
   display: flex;
-  gap: 16px;
+  gap: 34px;
+  justify-self: center;
+  align-items: baseline;
 }
 
 .footer-note {
+  justify-self: end;
   text-align: right;
+  white-space: nowrap;
+  line-height: 1;
 }
 
 .demo-page {
@@ -316,6 +372,94 @@ main {
   grid-template-columns: minmax(240px, 1fr) minmax(320px, 2fr);
   gap: 24px;
   align-items: start;
+}
+
+.demo-shell {
+  padding-top: 36px;
+}
+
+.demo-title {
+  margin-bottom: 18px;
+}
+
+.demo-title .subhead {
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+.demo-simple {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.results {
+  margin-top: 28px;
+  display: grid;
+  gap: 16px;
+}
+
+.results-head h3 {
+  font-size: 1.4rem;
+  margin-bottom: 4px;
+}
+
+.results-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.result-card {
+  background: #f7faf9;
+  border: 1px solid #dbe8e4;
+  border-radius: 14px;
+  padding: 12px 14px;
+}
+
+.result-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.result-value {
+  font-weight: 700;
+}
+
+.results-table-wrap {
+  border: 1px solid #d8dee3;
+  border-radius: 14px;
+  overflow: auto;
+  background: #fff;
+}
+
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 640px;
+}
+
+.results-table th,
+.results-table td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.results-table th {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  background: #fafbfd;
+}
+
+.results-table tbody tr:hover {
+  background: #f9fbfd;
 }
 
 .demo-panel {
@@ -327,9 +471,71 @@ main {
   gap: 12px;
 }
 
+.demo-upload-focus {
+  border: 2px solid #bfe2da;
+  background: linear-gradient(180deg, #f6fcfa 0%, #ffffff 100%);
+}
+
+.demo-step {
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.demo-panel-title {
+  font-size: 1.35rem;
+  line-height: 1.3;
+}
+
+.demo-help {
+  color: var(--muted);
+}
+
 .demo-meta {
   color: var(--muted);
   font-size: 14px;
+}
+
+.upload-cta {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  border-style: solid;
+  box-shadow: 0 14px 30px rgba(31, 95, 85, 0.28);
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.upload-cta:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 18px 36px rgba(31, 95, 85, 0.34);
+}
+
+.upload-cta span {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.upload-cta.is-uploaded {
+  background: #ffffff;
+  color: var(--ink);
+  border-color: #cfd3d7;
+  box-shadow: none;
+}
+
+.upload-cta.is-loading {
+  background: #ffffff;
+  color: var(--ink);
+  border-color: #bfc7ce;
+  box-shadow: none;
+}
+
+.upload-cta.is-error {
+  background: #ffffff;
+  color: var(--ink);
+  border-color: #cfd3d7;
+  box-shadow: none;
 }
 
 .demo-preview {
@@ -338,6 +544,15 @@ main {
   padding: 12px;
   box-shadow: 0 14px 36px rgba(18, 22, 25, 0.08);
   min-height: 480px;
+}
+
+.demo-preview-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--muted);
+  font-weight: 700;
+  margin: 6px 8px 10px;
 }
 
 .pdf-frame {
@@ -350,13 +565,19 @@ main {
 }
 
 @media (max-width: 900px) {
+  .page {
+    overflow-x: auto;
+  }
+
   .nav {
-    flex-direction: column;
-    align-items: flex-start;
+    flex-wrap: nowrap;
+    align-items: center;
   }
 
   .nav-links {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    white-space: nowrap;
   }
 
   .hero-split {
@@ -369,27 +590,31 @@ main {
 
   .demo {
     justify-content: flex-start;
-  }
-
-  .footer-note {
-    text-align: left;
+    flex-wrap: nowrap;
+    overflow-x: auto;
   }
 
   .demo-page {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(240px, 1fr) minmax(320px, 2fr);
+  }
+
+  .pillars,
+  .product-grid {
+    grid-template-columns: repeat(3, minmax(220px, 1fr));
   }
 }
 
 @media (max-width: 600px) {
   .nav-cta,
   .hero-cta {
-    flex-direction: column;
-    width: 100%;
+    flex-direction: row;
+    width: auto;
+    white-space: nowrap;
   }
 
   .primary,
   .ghost {
-    width: 100%;
+    width: auto;
     text-align: center;
   }
 }

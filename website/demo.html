@@ -12,10 +12,10 @@
       <header class="nav">
         <div class="logo">Finely</div>
         <nav class="nav-links">
-          <a href="index.html#about">About</a>
-          <a href="index.html#goal">Our goal</a>
-          <a href="index.html#product">Product</a>
-          <a href="index.html#who">Who we are</a>
+          <a href="about.html#about">About</a>
+          <a href="about.html#goal">Our goal</a>
+          <a href="about.html#product">Product</a>
+          <a href="about.html#who">Who we are</a>
         </nav>
         <div class="nav-cta">
           <a class="primary" href="demo.html">Try our demo</a>
@@ -23,23 +23,39 @@
       </header>
 
       <main>
-        <section class="section">
-          <div class="section-title">
+        <section class="section demo-shell">
+          <div class="section-title demo-title">
             <p class="eyebrow">Demo</p>
             <h2>Upload a PDF statement</h2>
-            <p class="subhead">Your file stays in your browser for this demo. We will connect this to our parser soon.</p>
+            <p class="subhead">Upload your statement PDF to begin.</p>
           </div>
 
-          <div class="demo-page">
-            <div class="demo-panel">
-              <label class="upload upload-block">
-                <input id="pdfInput" type="file" accept="application/pdf" />
-                <span>Choose PDF</span>
-              </label>
-              <div class="demo-meta" id="pdfMeta">No file selected.</div>
+          <div class="demo-simple">
+            <label class="upload upload-cta">
+              <input id="pdfInput" type="file" accept="application/pdf" />
+              <span id="uploadLabel">Upload PDF</span>
+            </label>
+            <div class="demo-meta" id="pdfMeta">No file selected.</div>
+            <div class="demo-meta" id="parseMeta"></div>
+          </div>
+
+          <div id="results" class="results" hidden>
+            <div class="results-head">
+              <h3>Parsed results</h3>
+              <p id="resultsInfo" class="demo-meta"></p>
             </div>
-            <div class="demo-preview">
-              <iframe id="pdfFrame" title="PDF preview" class="pdf-frame"></iframe>
+            <div class="results-summary" id="resultsSummary"></div>
+            <div class="results-table-wrap">
+              <table class="results-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Merchant</th>
+                    <th>Amount</th>
+                  </tr>
+                </thead>
+                <tbody id="resultsBody"></tbody>
+              </table>
             </div>
           </div>
         </section>
@@ -47,34 +63,124 @@
 
       <footer class="footer">
         <div class="logo">Finely</div>
-        <div class="footer-links">
-          <a href="index.html#about">About</a>
-          <a href="index.html#product">Product</a>
-        </div>
+        <div class="footer-links"></div>
         <div class="footer-note">© 2026 Finely. All rights reserved.</div>
       </footer>
     </div>
 
     <script>
       const input = document.getElementById("pdfInput");
-      const frame = document.getElementById("pdfFrame");
       const meta = document.getElementById("pdfMeta");
+      const parseMeta = document.getElementById("parseMeta");
+      const uploadLabel = document.getElementById("uploadLabel");
+      const uploadCta = document.querySelector(".upload-cta");
+      const results = document.getElementById("results");
+      const resultsInfo = document.getElementById("resultsInfo");
+      const resultsSummary = document.getElementById("resultsSummary");
+      const resultsBody = document.getElementById("resultsBody");
+
+      function setUploadState(state) {
+        uploadCta.classList.remove("is-uploaded", "is-loading", "is-error");
+        if (state === "uploaded") uploadCta.classList.add("is-uploaded");
+        if (state === "loading") uploadCta.classList.add("is-loading");
+        if (state === "error") uploadCta.classList.add("is-error");
+      }
+
+      function renderSummary(payload) {
+        const summary = payload.account_summary || {};
+        const income = summary.deposits_additions || "-";
+        const expenses = summary.withdrawals_subtractions || "-";
+        const fees = summary.service_fees || "-";
+        const cards = [
+          ["Beginning Balance", summary.beginning_balance || "-"],
+          ["Income", income],
+          ["Expenses", expenses],
+          ["Fees", fees],
+          ["Ending Balance", summary.ending_balance || "-"],
+        ];
+        resultsSummary.innerHTML = cards
+          .map(
+            ([label, value]) =>
+              `<div class="result-card"><div class="result-label">${label}</div><div class="result-value">${value}</div></div>`
+          )
+          .join("");
+      }
+
+      function renderTransactions(payload) {
+        const txns = payload.transactions || [];
+        resultsBody.innerHTML = txns
+          .map(
+            (t) =>
+              `<tr><td>${t.date || ""}</td><td>${t.merchant_clean || t.raw_description || ""}</td><td>${t.amount || ""}</td></tr>`
+          )
+          .join("");
+      }
 
       input.addEventListener("change", (event) => {
         const file = event.target.files && event.target.files[0];
         if (!file) {
           meta.textContent = "No file selected.";
-          frame.removeAttribute("src");
+          parseMeta.textContent = "";
+          uploadLabel.textContent = "Upload PDF";
+          setUploadState("");
+          results.hidden = true;
           return;
         }
         if (file.type !== "application/pdf") {
           meta.textContent = "Please choose a PDF file.";
-          frame.removeAttribute("src");
+          parseMeta.textContent = "";
+          uploadLabel.textContent = "Upload PDF";
+          setUploadState("error");
+          results.hidden = true;
           return;
         }
-        const url = URL.createObjectURL(file);
-        frame.src = url;
         meta.textContent = `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+        uploadLabel.textContent = "PDF uploaded";
+        setUploadState("uploaded");
+        parseMeta.textContent = "Parsing statement...";
+        setUploadState("loading");
+
+        const formData = new FormData();
+        formData.append("file", file, file.name);
+
+        fetch("/api/parse", { method: "POST", body: formData })
+          .then(async (res) => {
+            if (!res.ok) {
+              let errMsg = "";
+              const contentType = res.headers.get("content-type") || "";
+              if (contentType.includes("application/json")) {
+                const err = await res.json().catch(() => ({}));
+                errMsg = err.error || "";
+              }
+              if (!errMsg && (res.status === 404 || res.status === 405)) {
+                errMsg = "Backend parse API not available. Start: python3 serve_demo.py";
+              }
+              if (!errMsg) {
+                errMsg = `Parsing failed (HTTP ${res.status})`;
+              }
+              throw new Error(errMsg);
+            }
+            return res.json();
+          })
+          .then((payload) => {
+            setUploadState("uploaded");
+            parseMeta.textContent = "Parsed successfully.";
+            results.hidden = false;
+            const count = (payload.transactions || []).length;
+            resultsInfo.textContent = `${count} transactions extracted`;
+            renderSummary(payload);
+            renderTransactions(payload);
+          })
+          .catch((err) => {
+            setUploadState("error");
+            const msg = String(err && err.message ? err.message : "");
+            const friendly =
+              msg.includes("Failed to fetch") || msg.includes("Load failed")
+                ? "Backend is not running. Start it with: python3 start_demo.py"
+                : `Could not parse PDF: ${msg}`;
+            parseMeta.textContent = friendly;
+            results.hidden = true;
+          });
       });
     </script>
   </body>

@@ -1,0 +1,138 @@
+{
+  "markers": {
+    "TST*": { "type": "toast", "action": "extract_after" },
+    "SQ": { "type": "square", "action": "extract_after" },
+    "AMZN": { "type": "amazon", "canonical": "Amazon" }
+  },
+  "merchant_markers": [
+    { "match": "contains", "value": "APPLE.COM/BILL", "action": "canonical", "canonical": "Apple" },
+    { "match": "token", "value": "SPOTIFY", "action": "canonical", "canonical": "SPOTIFY" },
+    { "match": "contains", "value": "AMZN", "action": "canonical", "canonical": "Amazon" },
+    { "match": "contains", "value": "AMAZON", "action": "canonical", "canonical": "Amazon" },
+    { "match": "token", "value": "VENMO", "action": "extract_after", "max_tokens": 2, "stop_tokens": ["VISA", "DIRECT"] },
+    { "match": "prefix", "value": "TST*", "action": "extract_after" },
+    { "match": "token", "value": "SQ", "action": "extract_after" }
+  ],
+  "p2p_rules": [
+    {
+      "match_tokens": ["ZELLE"],
+      "prefix": "Zelle payment",
+      "direction_tokens": ["FROM", "TO"],
+      "memo_token": "FOR",
+      "stop_tokens": ["CONF#", "CONF", "ID:", "PPD", "WEB", "VISA", "DIRECT", "CONTINUED"],
+      "max_name_tokens": 6,
+      "min_name_tokens": 1
+    },
+    {
+      "match_tokens": ["VENMO"],
+      "prefix": "Venmo payment",
+      "direction_tokens": ["FROM", "TO"],
+      "memo_token": "FOR",
+      "stop_tokens": ["CONF#", "CONF", "ID:", "PPD", "WEB", "VISA", "DIRECT", "CONTINUED"],
+      "max_name_tokens": 6,
+      "min_name_tokens": 1
+    }
+  ],
+  "locations": [
+    "San Diego",
+    "Los Angeles",
+    "La Jolla",
+    "New York",
+    "Berlin",
+    "Madrid",
+    "Carlsbad",
+    "Universal City"
+  ],
+  "stop_phrases": [
+    "continued on the next page",
+    "Your goals are waiting",
+    "Withdrawals",
+    "Date Description Amount",
+    "Service fees",
+    "LifePlan",
+    "bankofamerica.com"
+  ],
+  "fee_keywords": [
+    "INTERNATIONAL TRANSACTION FEE"
+  ],
+  "fee_labels": {
+    "INTERNATIONAL TRANSACTION FEE": "International Transaction Fee"
+  },
+  "section_headers": {
+    "deposits": ["Deposits and Other Additions"],
+    "withdrawals": ["Withdrawals and Other Subtractions"],
+    "fees": ["Service Fees"]
+  },
+  "section_end_markers": [
+    "Account summary",
+    "Important information"
+  ],
+  "table_header_markers": [
+    "Date Description Amount"
+  ],
+  "bank_name": "Bank of America",
+  "bank_aliases": ["bank of america", "bofa", "boa"],
+  "state_abbrs": [
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+    "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+    "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+    "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+    "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"
+  ],
+  "boilerplate_patterns": [
+    "\\bMOBILE PURCHASE\\b",
+    "\\bCARD PURCHASE\\b",
+    "\\bDEBIT CARD\\b",
+    "\\bCHECKCARD\\b",
+    "\\bPOS\\b",
+    "\\bPURCHASE\\b",
+    "\\bDES:\\s*",
+    "\\bID:\\s*",
+    "\\bINDN:\\s*",
+    "\\bCO ID:\\s*",
+    "\\bPPD\\b",
+    "\\bWEB\\b",
+    "\\bEFT\\b",
+    "\\bACH\\b",
+    "\\bVISA DIRECT\\b",
+    "\\bCONTINUED ON THE NEXT PAGE\\b",
+    "\\bWITHDRAWALS AND OTHER SUBTRACTIONS\\b",
+    "\\bSERVICE FEES\\b",
+    "\\bDATE\\b",
+    "\\bDESCRIPTION\\b",
+    "\\bAMOUNT\\b"
+  ],
+  "header_hints": [
+    "statement",
+    "account number",
+    "account #",
+    "previous balance",
+    "new balance",
+    "total",
+    "payment",
+    "balance",
+    "interest",
+    "credit limit",
+    "minimum payment",
+    "page ",
+    "bank of america"
+  ],
+  "ignorable_tail_patterns": [
+    "(?i)ID:?.*",
+    "(?i)CO",
+    "(?i)PPD",
+    "(?i)WEB",
+    "(?i)DES:?.*",
+    "(?i)INDN:?.*",
+    "(?i)PMT",
+    "(?i)INFO:?.*",
+    "(?i)continued",
+    "(?i)on",
+    "(?i)the",
+    "(?i)next",
+    "(?i)page",
+    "#?[0-9]{6,}",
+    "[0-9.,-]+",
+    "[A-Z0-9,.-]{6,}"
+  ]
+}
