@@ -86,6 +86,9 @@
         if (state === "error") uploadCta.classList.add("is-error");
       }
 
+      // Cloud Run backend that parses the PDF and returns JSON.
+      const API_BASE = "https://finance-demo-558632999562.us-central1.run.app";
+
       function renderSummary(payload) {
         const summary = payload.account_summary || {};
         const income = summary.deposits_additions || "-";
@@ -155,7 +158,8 @@
         const formData = new FormData();
         formData.append("file", file, file.name);
 
-        fetch("/api/parse", { method: "POST", body: formData })
+        // Send PDF to the backend API for parsing.
+        fetch(`${API_BASE}/api/parse`, { method: "POST", body: formData })
           .then(async (res) => {
             if (!res.ok) {
               let errMsg = "";
@@ -165,7 +169,7 @@
                 errMsg = err.error || "";
               }
               if (!errMsg && (res.status === 404 || res.status === 405)) {
-                errMsg = "Backend parse API not available. Start: python3 serve_demo.py";
+                errMsg = "Backend parse API not available.";
               }
               if (!errMsg) {
                 errMsg = `Parsing failed (HTTP ${res.status})`;
@@ -188,7 +192,7 @@
             const msg = String(err && err.message ? err.message : "");
             const friendly =
               msg.includes("Failed to fetch") || msg.includes("Load failed")
-                ? "Backend is not running. Start it with: python3 start_demo.py"
+                ? "Backend is not reachable. Check the API URL."
                 : `Could not parse PDF: ${msg}`;
             parseMeta.textContent = friendly;
             results.hidden = true;

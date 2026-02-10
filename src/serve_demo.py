@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import tempfile
 from email.parser import BytesParser
@@ -22,21 +23,41 @@ class DemoHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(WEB_ROOT), **kwargs)
 
+    def _add_cors_headers(self) -> None:
+        # Allow Cloudflare Pages (or any frontend) to call this API.
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
     def _send_json(self, status: int, payload: dict) -> None:
         data = json.dumps(payload).encode("utf-8")
         self.send_response(status)
+        self._add_cors_headers()
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
 
     def do_GET(self) -> None:
+        # Serve the static site from the website/ folder.
         path = urlparse(self.path).path
         if path == "/":
             self.path = "/about.html"
         return super().do_GET()
 
+    def do_OPTIONS(self) -> None:
+        # Preflight handler for cross-origin POST requests.
+        path = urlparse(self.path).path
+        if path != "/api/parse":
+            self.send_response(HTTPStatus.NOT_FOUND)
+            self.end_headers()
+            return
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self._add_cors_headers()
+        self.end_headers()
+
     def do_POST(self) -> None:
+        # Parse a PDF statement and return structured JSON.
         path = urlparse(self.path).path
         if path != "/api/parse":
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
@@ -56,6 +77,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
         message = BytesParser(policy=default).parsebytes(
             f"Content-Type: {ctype}\r\n\r\n".encode("utf-8") + raw_body
         )
+        # Extract the uploaded file from multipart/form-data.
         file_part = None
         for part in message.iter_parts():
             if part.get_content_disposition() != "form-data":
@@ -91,8 +113,8 @@ class DemoHandler(SimpleHTTPRequestHandler):
 
 
 def main() -> int:
-    host = "127.0.0.1"
-    port = 8000
+    host = "0.0.0.0"
+    port = int(os.environ.get("PORT", "8000"))
     server = None
     for attempt in range(10):
         try:
