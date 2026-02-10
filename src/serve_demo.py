@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import cgi
 import json
+import socket
 import tempfile
+from email.parser import BytesParser
+from email.policy import default
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -50,31 +52,28 @@ class DemoHandler(SimpleHTTPRequestHandler):
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Empty upload"})
             return
 
-        form = cgi.FieldStorage(
-            fp=self.rfile,
-            headers=self.headers,
-            environ={
-                "REQUEST_METHOD": "POST",
-                "CONTENT_TYPE": ctype,
-                "CONTENT_LENGTH": str(content_len),
-            },
+        raw_body = self.rfile.read(content_len)
+        message = BytesParser(policy=default).parsebytes(
+            f"Content-Type: {ctype}\r\n\r\n".encode("utf-8") + raw_body
         )
-        if "file" not in form:
+        file_part = None
+        for part in message.iter_parts():
+            if part.get_content_disposition() != "form-data":
+                continue
+            if part.get_param("name", header="content-disposition") == "file":
+                file_part = part
+                break
+        if file_part is None:
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Missing 'file' field"})
             return
 
-        uploaded = form["file"]
-        if not getattr(uploaded, "file", None):
-            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "No file uploaded"})
-            return
-
-        file_name = (uploaded.filename or "").strip()
+        file_name = (file_part.get_filename() or "").strip()
         if file_name and not file_name.lower().endswith(".pdf"):
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Please upload a PDF file"})
             return
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(uploaded.file.read())
+            tmp.write(file_part.get_payload(decode=True) or b"")
             tmp_path = Path(tmp.name)
 
         try:
@@ -92,8 +91,20 @@ class DemoHandler(SimpleHTTPRequestHandler):
 
 
 def main() -> int:
-    server = ThreadingHTTPServer(("127.0.0.1", 8000), DemoHandler)
-    print("Serving Finely demo on http://127.0.0.1:8000")
+    host = "127.0.0.1"
+    port = 8000
+    server = None
+    for attempt in range(10):
+        try:
+            server = ThreadingHTTPServer((host, port), DemoHandler)
+            break
+        except OSError as exc:
+            if exc.errno != 48:
+                raise
+            port += 1
+    if server is None:
+        raise OSError("No available port found starting at 8000")
+    print(f"Serving Finely demo on http://{host}:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

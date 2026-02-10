@@ -91,11 +91,23 @@
         const income = summary.deposits_additions || "-";
         const expenses = summary.withdrawals_subtractions || "-";
         const fees = summary.service_fees || "-";
+        const parseMoney = (value) => {
+          if (typeof value !== "string") return NaN;
+          const cleaned = value.replace(/[$,]/g, "").replace(/[()]/g, "");
+          const num = Number.parseFloat(cleaned);
+          if (Number.isNaN(num)) return NaN;
+          return value.includes("(") ? -num : num;
+        };
+        const expensesNum = parseMoney(expenses);
+        const feesNum = parseMoney(fees);
+        const expensesWithFees =
+          Number.isFinite(expensesNum) && Number.isFinite(feesNum)
+            ? `$${(Math.abs(expensesNum) + Math.abs(feesNum)).toFixed(2)}`
+            : expenses;
         const cards = [
           ["Beginning Balance", summary.beginning_balance || "-"],
           ["Income", income],
-          ["Expenses", expenses],
-          ["Fees", fees],
+          ["Expenses", expensesWithFees],
           ["Ending Balance", summary.ending_balance || "-"],
         ];
         resultsSummary.innerHTML = cards
