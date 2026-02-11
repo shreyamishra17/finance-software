@@ -27,6 +27,8 @@ class ParserConfig:
 
     STATE_ABBRS: set[str] = set()
     MARKERS: dict = {}
+    LOCATION_WORDS: set[str] = set()
+    LOCATION_PHRASES: List[str] = []
     STOP_PHRASES: List[str] = []
     FEE_KEYWORDS: List[str] = []
     FEE_LABELS: dict = {}
@@ -74,6 +76,16 @@ class ParserConfig:
         state_abbrs = data.get("state_abbrs", [])
         if isinstance(state_abbrs, list):
             cls.STATE_ABBRS = {str(x).upper() for x in state_abbrs if str(x).strip()}
+
+        locations = data.get("locations", [])
+        if isinstance(locations, list):
+            normalized = [str(x).strip() for x in locations if str(x).strip()]
+            cls.LOCATION_PHRASES = normalized
+            words = set()
+            for phrase in normalized:
+                for part in phrase.lower().split():
+                    words.add(part)
+            cls.LOCATION_WORDS = words
 
         header_hints = data.get("header_hints", [])
         if isinstance(header_hints, list):
@@ -207,6 +219,7 @@ def _stage_b_extract(raw: str) -> str:
         canonical = str(rule.get("canonical", "")).strip()
         max_tokens = int(rule.get("max_tokens", 0) or 0)
         stop_tokens = {str(x).upper() for x in rule.get("stop_tokens", [])}
+        include_marker = bool(rule.get("include_marker", False))
 
         if match == "contains" and value and value in upper:
             if action == "canonical" and canonical:
@@ -222,7 +235,10 @@ def _stage_b_extract(raw: str) -> str:
                     parts.append(token)
                     if max_tokens and len(parts) >= max_tokens:
                         break
-                return " ".join(parts).strip() or text
+                extracted = " ".join(parts).strip() or text
+                if include_marker:
+                    return f"{value} {extracted}".strip()
+                return extracted
 
         if match in {"token", "prefix"} and value:
             for i, token in enumerate(upper_tokens):
@@ -241,7 +257,10 @@ def _stage_b_extract(raw: str) -> str:
                             parts.append(nxt)
                             if max_tokens and len(parts) >= max_tokens:
                                 break
-                        return " ".join([p for p in parts if p]).strip() or text
+                        extracted = " ".join([p for p in parts if p]).strip() or text
+                        if include_marker:
+                            return f"{value} {extracted}".strip()
+                        return extracted
 
     return text
 
@@ -366,21 +385,25 @@ def _strip_location_tail(tokens: List[str]) -> List[str]:
     original = list(tokens)
     lowered = [t.lower() for t in tokens]
 
+    phrases = sorted(
+        ParserConfig.LOCATION_PHRASES,
+        key=lambda p: len(p.split()),
+        reverse=True,
+    )
+    for phrase in phrases:
+        parts = phrase.lower().split()
+        if len(parts) <= len(lowered) and lowered[-len(parts) :] == parts:
+            tokens = tokens[: -len(parts)]
+            lowered = lowered[: -len(parts)]
+            break
+
     # Strip trailing state code if present.
     if tokens and _is_state_abbr(tokens[-1].upper()):
         tokens = tokens[:-1]
         lowered = lowered[:-1]
 
-    # Strip trailing uppercase location-like block at end only.
-    while tokens:
-        last = tokens[-1]
-        if re.fullmatch(r"[A-Z]{3,}", last):
-            tokens = tokens[:-1]
-            continue
-        if re.fullmatch(r"[A-Z][a-z]{2,}", last):
-            tokens = tokens[:-1]
-            continue
-        break
+    if tokens and tokens[-1].lower() in ParserConfig.LOCATION_WORDS:
+        tokens = tokens[:-1]
 
     return tokens if tokens else original
 
@@ -565,6 +588,11 @@ def _parse_amount(value: str) -> Optional[float]:
     return -amount if negative else amount
 
 
+def _has_explicit_sign(value: str) -> bool:
+    stripped = value.strip()
+    return stripped.startswith("-") or (stripped.startswith("(") and stripped.endswith(")"))
+
+
 def _is_ignorable_tail(tail: str) -> bool:
     if not tail.strip():
         return True
@@ -737,6 +765,8 @@ def parse_transactions(lines: Iterable[str]) -> List[Transaction]:
             remainder = remainder[year_match.end() :].strip()
             date = f"{date}/{year_suffix}"
 
+        if row["section"] in {"withdrawals", "fees"} and not _has_explicit_sign(amount):
+            amount = f"-{amount}"
         parsed_amount = _parse_amount(amount)
         if parsed_amount is None:
             failed_rows.append(text)

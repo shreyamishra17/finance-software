@@ -9,7 +9,8 @@
     { "match": "token", "value": "SPOTIFY", "action": "canonical", "canonical": "SPOTIFY" },
     { "match": "contains", "value": "AMZN", "action": "canonical", "canonical": "Amazon" },
     { "match": "contains", "value": "AMAZON", "action": "canonical", "canonical": "Amazon" },
-    { "match": "token", "value": "VENMO", "action": "extract_after", "max_tokens": 2, "stop_tokens": ["VISA", "DIRECT"] },
+    { "match": "token", "value": "VENMO", "action": "extract_after", "include_marker": true, "max_tokens": 2, "stop_tokens": ["VISA", "DIRECT"] },
+    { "match": "contains", "value": "JPMORGAN", "action": "canonical", "canonical": "JPMorgan Chase" },
     { "match": "prefix", "value": "TST*", "action": "extract_after" },
     { "match": "token", "value": "SQ", "action": "extract_after" }
   ],

@@ -94,23 +94,11 @@
         const income = summary.deposits_additions || "-";
         const expenses = summary.withdrawals_subtractions || "-";
         const fees = summary.service_fees || "-";
-        const parseMoney = (value) => {
-          if (typeof value !== "string") return NaN;
-          const cleaned = value.replace(/[$,]/g, "").replace(/[()]/g, "");
-          const num = Number.parseFloat(cleaned);
-          if (Number.isNaN(num)) return NaN;
-          return value.includes("(") ? -num : num;
-        };
-        const expensesNum = parseMoney(expenses);
-        const feesNum = parseMoney(fees);
-        const expensesWithFees =
-          Number.isFinite(expensesNum) && Number.isFinite(feesNum)
-            ? `$${(Math.abs(expensesNum) + Math.abs(feesNum)).toFixed(2)}`
-            : expenses;
         const cards = [
           ["Beginning Balance", summary.beginning_balance || "-"],
           ["Income", income],
-          ["Expenses", expensesWithFees],
+          ["Expenses", expenses],
+          ["Service Fees", fees],
           ["Ending Balance", summary.ending_balance || "-"],
         ];
         resultsSummary.innerHTML = cards
@@ -125,8 +113,16 @@
         const txns = payload.transactions || [];
         resultsBody.innerHTML = txns
           .map(
-            (t) =>
-              `<tr><td>${t.date || ""}</td><td>${t.merchant_clean || t.raw_description || ""}</td><td>${t.amount || ""}</td></tr>`
+            (t) => {
+              let amount = t.amount || "";
+              const type = (t.txn_type || "").toLowerCase();
+              if (amount && (type === "withdrawals" || type === "fee")) {
+                if (!amount.startsWith("-") && !amount.startsWith("(")) {
+                  amount = `-${amount}`;
+                }
+              }
+              return `<tr><td>${t.date || ""}</td><td>${t.merchant_clean || t.raw_description || ""}</td><td>${amount}</td></tr>`;
+            }
           )
           .join("");
       }
