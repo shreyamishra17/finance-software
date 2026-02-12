@@ -45,6 +45,10 @@
               <p id="resultsInfo" class="demo-meta"></p>
             </div>
             <div class="results-summary" id="resultsSummary"></div>
+            <div class="category-block" id="categoryBlock">
+              <div class="category-title">Categories</div>
+              <div class="results-summary category-summary" id="categorySummary"></div>
+            </div>
             <div class="results-table-wrap">
               <table class="results-table">
                 <thead>
@@ -78,6 +82,11 @@
       const resultsInfo = document.getElementById("resultsInfo");
       const resultsSummary = document.getElementById("resultsSummary");
       const resultsBody = document.getElementById("resultsBody");
+      const categorySummary = document.getElementById("categorySummary");
+      const categoryBlock = document.getElementById("categoryBlock");
+
+      let lastPayload = null;
+      let activeCategory = "All";
 
       function setUploadState(state) {
         uploadCta.classList.remove("is-uploaded", "is-loading", "is-error");
@@ -86,8 +95,30 @@
         if (state === "error") uploadCta.classList.add("is-error");
       }
 
-      // Cloud Run backend that parses the PDF and returns JSON.
-      const API_BASE = "https://finance-demo-558632999562.us-central1.run.app";
+      // Backend that parses the PDF and returns JSON.
+      const CLOUD_API_BASE = "https://finance-demo-558632999562.us-central1.run.app";
+
+      async function postParse(formData, baseUrl) {
+        const res = await fetch(`${baseUrl}/api/parse`, { method: "POST", body: formData });
+        if (!res.ok) {
+          let errMsg = "";
+          const contentType = res.headers.get("content-type") || "";
+          if (contentType.includes("application/json")) {
+            const err = await res.json().catch(() => ({}));
+            errMsg = err.error || "";
+          }
+          if (!errMsg && (res.status === 404 || res.status === 405)) {
+            errMsg = "Backend parse API not available.";
+          }
+          if (!errMsg) {
+            errMsg = `Parsing failed (HTTP ${res.status})`;
+          }
+          const error = new Error(errMsg);
+          error.status = res.status;
+          throw error;
+        }
+        return res.json();
+      }
 
       function renderSummary(payload) {
         const summary = payload.account_summary || {};
@@ -109,9 +140,14 @@
           .join("");
       }
 
-      function renderTransactions(payload) {
+      function renderTransactions(payload, categoryFilter = "All") {
         const txns = payload.transactions || [];
-        resultsBody.innerHTML = txns
+        const filteredTxns =
+          categoryFilter && categoryFilter !== "All"
+            ? txns.filter((t) => (t.category || "Uncategorized") === categoryFilter)
+            : txns;
+        const categoryCounts = {};
+        resultsBody.innerHTML = filteredTxns
           .map(
             (t) => {
               let amount = t.amount || "";
@@ -121,10 +157,44 @@
                   amount = `-${amount}`;
                 }
               }
-              return `<tr><td>${t.date || ""}</td><td>${t.merchant_clean || t.raw_description || ""}</td><td>${amount}</td></tr>`;
+              const raw = t.raw_description || "";
+              let merchant = t.merchant_clean || raw || "";
+              const rawUpper = raw.toUpperCase();
+              const merchUpper = merchant.toUpperCase();
+              if (rawUpper.includes("VENMO") && !merchUpper.includes("VENMO")) {
+                merchant = `VENMO ${merchant}`.trim();
+              }
+              if (rawUpper.includes("ZELLE") && !merchUpper.includes("ZELLE")) {
+                merchant = `ZELLE ${merchant}`.trim();
+              }
+              const category = t.category || "Uncategorized";
+              return `<tr><td>${t.date || ""}</td><td>${merchant}</td><td>${amount}</td></tr>`;
             }
           )
           .join("");
+        txns.forEach((t) => {
+          const category = t.category || "Uncategorized";
+          categoryCounts[category] = (categoryCounts[category] || 0) + 1;
+        });
+        const orderedCategories = Object.keys(categoryCounts).sort();
+        if (!orderedCategories.length) {
+          categoryBlock.hidden = true;
+          return;
+        }
+        categoryBlock.hidden = false;
+        const allCard = `<div class="result-card${
+          categoryFilter === "All" ? " is-active" : ""
+        }" data-category="All"><div class="result-label">All</div><div class="result-value">${
+          txns.length
+        }</div></div>`;
+        categorySummary.innerHTML =
+          allCard +
+          orderedCategories
+            .map((category) => {
+              const active = categoryFilter === category ? " is-active" : "";
+              return `<div class="result-card${active}" data-category="${category}"><div class="result-label">${category}</div><div class="result-value">${categoryCounts[category]}</div></div>`;
+            })
+            .join("");
       }
 
       input.addEventListener("change", (event) => {
@@ -154,34 +224,35 @@
         const formData = new FormData();
         formData.append("file", file, file.name);
 
-        // Send PDF to the backend API for parsing.
-        fetch(`${API_BASE}/api/parse`, { method: "POST", body: formData })
-          .then(async (res) => {
-            if (!res.ok) {
-              let errMsg = "";
-              const contentType = res.headers.get("content-type") || "";
-              if (contentType.includes("application/json")) {
-                const err = await res.json().catch(() => ({}));
-                errMsg = err.error || "";
-              }
-              if (!errMsg && (res.status === 404 || res.status === 405)) {
-                errMsg = "Backend parse API not available.";
-              }
-              if (!errMsg) {
-                errMsg = `Parsing failed (HTTP ${res.status})`;
-              }
-              throw new Error(errMsg);
+        const tryLocalFirst = async () => {
+          try {
+            const payload = await postParse(formData, "");
+            return { payload, backend: "local" };
+          } catch (err) {
+            const msg = String(err && err.message ? err.message : "");
+            if (msg.includes("Failed to fetch") || msg.includes("Load failed")) {
+              const payload = await postParse(formData, CLOUD_API_BASE);
+              return { payload, backend: "cloud" };
             }
-            return res.json();
-          })
-          .then((payload) => {
+            throw err;
+          }
+        };
+
+        // Send PDF to the backend API for parsing (local first, then cloud fallback).
+        tryLocalFirst()
+          .then(({ payload, backend }) => {
             setUploadState("uploaded");
-            parseMeta.textContent = "Parsed successfully.";
+            parseMeta.textContent =
+              backend === "cloud"
+                ? "Parsed successfully (cloud backend)."
+                : "Parsed successfully (local backend).";
             results.hidden = false;
             const count = (payload.transactions || []).length;
             resultsInfo.textContent = `${count} transactions extracted`;
+            lastPayload = payload;
+            activeCategory = "All";
             renderSummary(payload);
-            renderTransactions(payload);
+            renderTransactions(payload, activeCategory);
           })
           .catch((err) => {
             setUploadState("error");
@@ -193,6 +264,15 @@
             parseMeta.textContent = friendly;
             results.hidden = true;
           });
+      });
+
+      categorySummary.addEventListener("click", (event) => {
+        const card = event.target.closest("[data-category]");
+        if (!card || !lastPayload) {
+          return;
+        }
+        activeCategory = card.getAttribute("data-category") || "All";
+        renderTransactions(lastPayload, activeCategory);
       });
     </script>
   </body>

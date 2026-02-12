@@ -434,6 +434,32 @@ main {
   gap: 12px;
 }
 
+.category-block {
+  display: grid;
+  gap: 8px;
+}
+
+.category-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.category-summary {
+  margin-top: 12px;
+}
+
+.category-summary .result-card {
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.category-summary .result-card.is-active {
+  border-color: var(--accent);
+  background: #eef7f4;
+}
+
 .result-card {
   background: #f7faf9;
   border: 1px solid #dbe8e4;

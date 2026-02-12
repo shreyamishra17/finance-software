@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import tempfile
+import webbrowser
 from email.parser import BytesParser
 from email.policy import default
 from http import HTTPStatus
@@ -12,6 +12,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+from categorize import categorize_transactions
 from parse_boa_pdf import parse_pdf_to_payload
 
 
@@ -100,6 +101,8 @@ class DemoHandler(SimpleHTTPRequestHandler):
 
         try:
             payload = parse_pdf_to_payload(tmp_path)
+            payload["transactions"] = categorize_transactions(payload.get("transactions", []))
+            self._log_category_summary(payload["transactions"])
         except Exception as exc:  # noqa: BLE001
             self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
             return
@@ -110,6 +113,14 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 pass
 
         self._send_json(HTTPStatus.OK, payload)
+
+    def _log_category_summary(self, transactions: list[dict]) -> None:
+        counts: dict[str, int] = {}
+        for txn in transactions:
+            category = txn.get("category") or "Uncategorized"
+            counts[category] = counts.get(category, 0) + 1
+        summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+        print(f"DEBUG: category counts: {summary}")
 
 
 def main() -> int:
@@ -126,7 +137,13 @@ def main() -> int:
             port += 1
     if server is None:
         raise OSError("No available port found starting at 8000")
-    print(f"Serving Finely demo on http://{host}:{port}")
+    url = f"http://127.0.0.1:{port}/about.html"
+    print(f"Serving Finely demo on {url}")
+    if not os.environ.get("NO_BROWSER"):
+        try:
+            webbrowser.open(url, new=2)
+        except Exception:
+            pass
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -9,6 +9,7 @@
     { "match": "token", "value": "SPOTIFY", "action": "canonical", "canonical": "SPOTIFY" },
     { "match": "contains", "value": "AMZN", "action": "canonical", "canonical": "Amazon" },
     { "match": "contains", "value": "AMAZON", "action": "canonical", "canonical": "Amazon" },
+    { "match": "prefix", "value": "VENMO", "action": "extract_after", "include_marker": true, "max_tokens": 2, "stop_tokens": ["VISA", "DIRECT"] },
     { "match": "token", "value": "VENMO", "action": "extract_after", "include_marker": true, "max_tokens": 2, "stop_tokens": ["VISA", "DIRECT"] },
     { "match": "contains", "value": "JPMORGAN", "action": "canonical", "canonical": "JPMorgan Chase" },
     { "match": "prefix", "value": "TST*", "action": "extract_after" },
@@ -25,7 +26,7 @@
       "min_name_tokens": 1
     },
     {
-      "match_tokens": ["VENMO"],
+      "match_tokens": ["VENMO", "VENMO*"],
       "prefix": "Venmo payment",
       "direction_tokens": ["FROM", "TO"],
       "memo_token": "FOR",

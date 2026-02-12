@@ -1,0 +1,101 @@
+{
+  "default_category": "Uncategorized",
+  "default_confidence": 0.2,
+  "high_confidence": [
+    {
+      "category": "Fees",
+      "keywords": ["SERVICE FEE", "SERVICE FEES", "INTERNATIONAL TRANSACTION FEE"],
+      "confidence": 0.95
+    },
+    {
+      "category": "Transfers",
+      "keywords": ["ZELLE", "VENMO", "PAYPAL", "WIRE", "TRANSFER", "EXT TRNSFR", "ACH TRANSFER"],
+      "confidence": 0.9
+    },
+    {
+      "category": "Income",
+      "keywords": ["DIRECT DEP", "PAYROLL", "REFUND", "TAX REFUND", "CASTTAXRFD", "QUALCOMM"],
+      "confidence": 0.9
+    },
+    {
+      "category": "Rent",
+      "keywords": ["RENT", "LEASE", "CLICKPAY", "PROPRTYPAY"],
+      "confidence": 0.9
+    },
+    {
+      "category": "Utilities",
+      "keywords": [
+        "ELECTRIC",
+        "GAS COMPANY",
+        "WATER",
+        "UTILITY",
+        "INTERNET",
+        "COMCAST",
+        "VERIZON",
+        "AT&T",
+        "SDGE",
+        "CONSERVICE"
+      ],
+      "confidence": 0.85
+    },
+    {
+      "category": "Insurance",
+      "keywords": ["INSURANCE", "GEICO", "PROGRESSIVE", "STATE FARM", "ALLSTATE"],
+      "confidence": 0.9
+    },
+    {
+      "category": "Subscriptions",
+      "keywords": [
+        "SPOTIFY",
+        "NETFLIX",
+        "HULU",
+        "APPLE.COM/BILL",
+        "APPLE SERVICES",
+        "AMAZON PRIME",
+        "GOOGLE",
+        "ICLOUD"
+      ],
+      "confidence": 0.85
+    }
+  ],
+  "merchant_rules": [
+    {
+      "category": "Groceries",
+      "keywords": ["WHOLEFDS", "TRADER JOE", "SAFEWAY", "KROGER", "SPROUTS", "COSTCO", "WALMART"],
+      "confidence": 0.75
+    },
+    {
+      "category": "Dining",
+      "keywords": ["RESTAURANT", "CAFE", "COFFEE", "TST", "STARBUCKS", "CHIPOTLE", "BLUE BOTTLE", "MCDONALD", "SUBWAY"],
+      "confidence": 0.7
+    },
+    {
+      "category": "Transport",
+      "keywords": [
+        "CHEVRON",
+        "SHELL",
+        "ARCO",
+        "EXXON",
+        "MOBIL",
+        "GAS",
+        "FUEL",
+        "PARKMOBILE",
+        "PARKING",
+        "UCSD PARKING",
+        "UBER",
+        "LYFT"
+      ],
+      "confidence": 0.75
+    },
+    {
+      "category": "Shopping",
+      "keywords": ["AMAZON", "TARGET", "BEST BUY", "HOME DEPOT"],
+      "confidence": 0.65
+    },
+    {
+      "category": "Travel",
+      "keywords": ["AIRLINES", "AIRWAYS", "HOTEL", "MARRIOTT", "HILTON"],
+      "confidence": 0.65
+    }
+  ]
+}
