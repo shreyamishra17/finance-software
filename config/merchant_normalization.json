@@ -1,0 +1,19 @@
+{
+  "token_replacements": {
+    "WHOLEFDS": "WHOLE FOODS"
+  },
+  "aliases": {
+    "WHOLE FOODS": "Whole Foods",
+    "WHOLE FOODS LAJ": "Whole Foods",
+    "WHOLE FOODS LAJ 1": "Whole Foods",
+    "DRIVE INS": "Drive Insurance",
+    "DRIVE INS CO": "Drive Insurance"
+  },
+  "contains_aliases": {
+    "WHOLE FOODS": "Whole Foods",
+    "DRIVE INS": "Drive Insurance"
+  },
+  "strip_suffix_tokens": [
+    "LAJ"
+  ]
+}
