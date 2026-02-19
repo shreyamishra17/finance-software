@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 from categorize import categorize_transactions
 from parse_boa_pdf import parse_pdf_to_payload, persist_uploaded_statement
+from auto_config_bootstrap import bootstrap_config_if_unknown
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -104,8 +105,15 @@ class DemoHandler(SimpleHTTPRequestHandler):
             tmp_path = Path(tmp.name)
 
         try:
+            auto_bootstrap = os.environ.get("AUTO_BOOTSTRAP_CONFIG", "1").strip().lower() not in {"0", "false", "no"}
+            bootstrap_result = None
+            if auto_bootstrap:
+                bootstrap_result = bootstrap_config_if_unknown(tmp_path, config_dir=ROOT / "config")
+
             payload = parse_pdf_to_payload(tmp_path)
             payload["transactions"] = categorize_transactions(payload.get("transactions", []))
+            if bootstrap_result:
+                payload["config_bootstrap"] = bootstrap_result
             persist_mode = os.environ.get("PERSIST_MODE", "local").strip().lower()
             if persist_mode in {"firebase", "firebase_storage", "firestore"}:
                 from cloud_persistence import persist_payload_firebase_storage

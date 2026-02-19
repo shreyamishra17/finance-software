@@ -1,0 +1,38 @@
+{
+  "locations": [
+    "San Diego",
+    "Los Angeles",
+    "La Jolla",
+    "New York",
+    "Berlin",
+    "Paris",
+    "Madrid",
+    "Philadelphia",
+    "Carlsbad",
+    "Universal City"
+  ],
+  "state_abbrs": [
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+    "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+    "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+    "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+    "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"
+  ],
+  "token_replacements": {
+    "WHOLEFDS": "WHOLE FOODS"
+  },
+  "aliases": {
+    "WHOLE FOODS": "Whole Foods",
+    "WHOLE FOODS LAJ": "Whole Foods",
+    "WHOLE FOODS LAJ 1": "Whole Foods",
+    "DRIVE INS": "Drive Insurance",
+    "DRIVE INS CO": "Drive Insurance"
+  },
+  "contains_aliases": {
+    "WHOLE FOODS": "Whole Foods",
+    "DRIVE INS": "Drive Insurance"
+  },
+  "strip_suffix_tokens": [
+    "LAJ"
+  ]
+}

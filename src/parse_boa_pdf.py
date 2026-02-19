@@ -23,6 +23,7 @@ PROCESSED_DIR = Path(os.environ.get("FINELY_PROCESSED_DIR", str(DATA_ROOT / "pro
 
 
 class ParserConfig:
+    COMMON_CONFIG_PATH = PROJECT_ROOT / "config" / "common_config.json"
     CONFIG_PATH = PROJECT_ROOT / "config" / "boa_config.json"
 
     BOILERPLATE_PATTERNS: List[str] = []
@@ -51,7 +52,41 @@ class ParserConfig:
     PREFERRED_MERCHANT_LABELS: List[str] = ["DES"]
 
     @classmethod
+    def _load_common_defaults(cls) -> None:
+        path = cls.COMMON_CONFIG_PATH
+        if not path.exists():
+            return
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return
+
+        state_abbrs = data.get("state_abbrs", [])
+        if isinstance(state_abbrs, list):
+            parsed = {str(x).upper() for x in state_abbrs if str(x).strip()}
+            if parsed:
+                cls.STATE_ABBRS = parsed
+
+        locations = data.get("locations", [])
+        if isinstance(locations, list):
+            normalized = [str(x).strip() for x in locations if str(x).strip()]
+            if normalized:
+                cls.LOCATION_PHRASES = normalized
+                words = set()
+                prefix_words = set()
+                for phrase in normalized:
+                    parts = phrase.lower().split()
+                    for part in parts:
+                        words.add(part)
+                    if len(parts) > 1:
+                        prefix_words.update(parts[:-1])
+                cls.LOCATION_WORDS = words
+                cls.LOCATION_PREFIX_WORDS = prefix_words
+
+    @classmethod
     def load_from_json(cls, config_path: Optional[Path] = None) -> None:
+        cls._load_common_defaults()
         if config_path is not None:
             cls.CONFIG_PATH = config_path
         if not cls.CONFIG_PATH.exists():
@@ -156,7 +191,7 @@ class ParserConfig:
 
 
 class MerchantNormalizationConfig:
-    CONFIG_PATH = PROJECT_ROOT / "config" / "merchant_normalization.json"
+    CONFIG_PATH = PROJECT_ROOT / "config" / "common_config.json"
 
     TOKEN_REPLACEMENTS: dict[str, str] = {}
     ALIASES: dict[str, str] = {}
@@ -715,6 +750,10 @@ def _apply_venmo_direction(merchant: str, raw_description: str, txn_type: Option
 def _detect_payment_channel(raw_description: str) -> str:
     text = raw_description.upper()
     channel_rules = [
+        ("EXT TRNSFR", "External Transfer"),
+        ("EXT TRNSF", "External Transfer"),
+        ("EXTERNAL TRANSFER", "External Transfer"),
+        ("E-PAYMENT", "E-Payment"),
         ("ZELLE", "Zelle"),
         ("VENMO", "Venmo"),
         ("DIRECT DEP", "Direct Dep"),
@@ -752,6 +791,41 @@ def _extract_city_state_zip(raw_description: str) -> tuple[str, str, str]:
     if not text:
         return "NA", "NA", "NA"
 
+    def strip_metadata_tail(value: str) -> str:
+        # Location should come from merchant/location tail, not metadata segments
+        # like "DES:...", "INDN:...", "CO ID:...".
+        cut_idx: Optional[int] = None
+        for label in ParserConfig.METADATA_LABELS:
+            token = str(label).strip()
+            if not token:
+                continue
+            pattern = re.compile(rf"\b{re.escape(token)}\s*:", flags=re.IGNORECASE)
+            match = pattern.search(value)
+            if not match:
+                continue
+            cut_idx = match.start() if cut_idx is None else min(cut_idx, match.start())
+        return value[:cut_idx].strip() if cut_idx is not None else value
+
+    original_text = text
+    text = strip_metadata_tail(text)
+
+    def _phrase_regex(phrase: str) -> re.Pattern[str]:
+        # Conservative abbreviation handling only for configured location phrases.
+        # Example: "Universal City" should match "... UNIVERSAL CIT ...".
+        parts = [p for p in re.split(r"\s+", phrase.strip()) if p]
+        pattern_parts: List[str] = []
+        for part in parts:
+            if part.upper() == "CITY":
+                pattern_parts.append(r"(?:CITY|CIT)")
+            else:
+                pattern_parts.append(re.escape(part))
+        pattern = r"(?<!\w)" + r"\s+".join(pattern_parts) + r"(?!\w)"
+        return re.compile(pattern, flags=re.IGNORECASE)
+
+    def _normalize_location_text(value: str) -> str:
+        # Keep this minimal to avoid altering existing parsing behavior.
+        return re.sub(r"\bCIT\b", "CITY", value, flags=re.IGNORECASE)
+
     zip_code = "NA"
     state = "NA"
     city = "NA"
@@ -763,7 +837,7 @@ def _extract_city_state_zip(raw_description: str) -> tuple[str, str, str]:
         p = phrase.strip()
         if not p:
             continue
-        phrase_re = re.compile(rf"\b{re.escape(p)}\b", flags=re.IGNORECASE)
+        phrase_re = _phrase_regex(p)
         for m in phrase_re.finditer(text):
             tail = text[m.end() :].strip()
             tail_match = re.fullmatch(r"(?:(?P<state>[A-Z]{2}))?(?:\s+(?P<zip>\d{5}(?:-\d{4})?))?\s*", tail)
@@ -794,6 +868,8 @@ def _extract_city_state_zip(raw_description: str) -> tuple[str, str, str]:
         tail_state = work[-1].upper()
         work = work[:-1]
     compact_city_tail = re.sub(r"[^A-Za-z0-9]", "", "".join(work[-3:]).upper()) if work else ""
+    if compact_city_tail.endswith("CIT"):
+        compact_city_tail = compact_city_tail[:-3] + "CITY"
     if compact_city_tail:
         for phrase in sorted(ParserConfig.LOCATION_PHRASES, key=len, reverse=True):
             p = phrase.strip()
@@ -817,14 +893,21 @@ def _extract_city_state_zip(raw_description: str) -> tuple[str, str, str]:
             zip_code = zip_group if zip_group else "NA"
             city_tokens = [tok for tok in city.split() if tok]
             city_is_known_single = len(city_tokens) == 1 and city_tokens[0].lower() in ParserConfig.LOCATION_WORDS
+            known_phrase_set = {p.lower() for p in ParserConfig.LOCATION_PHRASES}
+            city_is_known_phrase = city.lower() in known_phrase_set
             if len(city_tokens) < 2 and not city_is_known_single and zip_code == "NA":
+                return "NA", "NA", "NA"
+            # Prevent payer-name tails from being interpreted as city/state, especially
+            # in metadata-heavy rows like "... INDN: FIRST LAST CO".
+            if "INDN:" in original_text.upper() and not city_is_known_single and not city_is_known_phrase:
                 return "NA", "NA", "NA"
             return (city if city else "NA"), state, zip_code
 
     # Fallback: known location phrase at end (no state/zip present).
+    normalized_tail_text = _normalize_location_text(lowered)
     for phrase in sorted(ParserConfig.LOCATION_PHRASES, key=len, reverse=True):
         p = phrase.strip()
-        if p and lowered.endswith(p.lower()):
+        if p and normalized_tail_text.endswith(_normalize_location_text(p.lower())):
             return p, "NA", "NA"
 
     # Last-token merge fallback (e.g. "... LA JOLLA" as separate words at tail).
@@ -834,6 +917,8 @@ def _extract_city_state_zip(raw_description: str) -> tuple[str, str, str]:
         if len(tail_window) < n:
             continue
         merged = "".join(tail_window[-n:])
+        if merged.endswith("CIT"):
+            merged = merged[:-3] + "CITY"
         for phrase in ParserConfig.LOCATION_PHRASES:
             compact_phrase = re.sub(r"[^A-Za-z0-9]", "", phrase).upper()
             if compact_phrase and merged == compact_phrase:
@@ -862,9 +947,10 @@ def _extract_city_state_zip(raw_description: str) -> tuple[str, str, str]:
     return "NA", "NA", "NA"
 
 
-def _extract_reference_id(raw_description: str) -> str:
+def _extract_reference_id(raw_description: str, account_last4: Optional[str] = None) -> str:
     text = raw_description
     phone_re = re.compile(r"^\+?\d{1,3}[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}$")
+    acct_last4 = re.sub(r"\D", "", str(account_last4 or ""))
 
     def is_phone_like(value: str) -> bool:
         token = value.strip()
@@ -873,6 +959,22 @@ def _extract_reference_id(raw_description: str) -> str:
         digits_only = re.sub(r"\D", "", token)
         return len(digits_only) == 10 and token != digits_only
 
+    def valid_candidate(candidate: str) -> bool:
+        token = candidate.strip()
+        if not token:
+            return False
+        if is_phone_like(token):
+            return False
+        digits_only = re.sub(r"\D", "", token)
+        is_numeric = token.isdigit()
+        # Numeric IDs shorter than 6 are typically last4/card fragments.
+        if is_numeric and len(digits_only) < 6:
+            return False
+        # Never use account last4 as transaction reference id.
+        if acct_last4 and token == acct_last4:
+            return False
+        return True
+
     # Prefer first transaction-level ID and ignore company-level "CO ID".
     id_pattern = re.compile(r"\b(?:CO\s+)?ID:?\s*([A-Z0-9-]{4,})\b", flags=re.IGNORECASE)
     for match in id_pattern.finditer(text):
@@ -880,13 +982,20 @@ def _extract_reference_id(raw_description: str) -> str:
         if re.match(r"^\s*CO\s+ID:?", full, flags=re.IGNORECASE):
             continue
         candidate = match.group(1)
-        if not is_phone_like(candidate):
+        if valid_candidate(candidate):
             return candidate
 
     conf_match = re.search(r"\bCONF#?\s*([A-Z0-9-]{4,})\b", text, flags=re.IGNORECASE)
     if conf_match:
         candidate = conf_match.group(1)
-        if not is_phone_like(candidate):
+        if valid_candidate(candidate):
+            return candidate
+
+    # Hash-prefixed numeric refs (e.g. "#00009875"): drop '#' but keep leading zeros.
+    hash_ref = re.search(r"#\s*([0-9]{4,})\b", text)
+    if hash_ref:
+        candidate = hash_ref.group(1)
+        if valid_candidate(candidate):
             return candidate
 
     # Company identifiers are metadata, not transaction-level references.
@@ -896,7 +1005,7 @@ def _extract_reference_id(raw_description: str) -> str:
     tokens = re.findall(r"\b[A-Z0-9-]{8,}\b", text_no_company_ids.upper())
     for token in tokens:
         digit_count = sum(ch.isdigit() for ch in token)
-        if digit_count >= 2 and not is_phone_like(token):
+        if digit_count >= 2 and valid_candidate(token):
             return token
     return "NA"
 
@@ -1001,6 +1110,8 @@ def _first_last_slug(*candidates: Optional[str]) -> str:
 def _build_csv_rows(payload: dict, source_file: str) -> List[dict[str, str]]:
     seen: set[tuple[str, str, str]] = set()
     rows: List[dict[str, str]] = []
+    account_number = payload.get("statement_info", {}).get("account_number")
+    account_last4 = _mask_account_number(str(account_number)) if account_number else ""
     for txn in payload.get("transactions", []):
         date = str(txn.get("date") or "NA")
         raw_description = str(txn.get("raw_description") or "")
@@ -1031,7 +1142,7 @@ def _build_csv_rows(payload: dict, source_file: str) -> List[dict[str, str]]:
                 "zip": zip_code if zip_code else "NA",
                 "amount": amount,
                 "direction": direction,
-                "reference_id": _extract_reference_id(raw_description),
+                "reference_id": _extract_reference_id(raw_description, account_last4=account_last4),
                 "source_file": source_file if source_file.strip() else "NA",
             }
         )
