@@ -119,22 +119,25 @@ class ParserConfig:
 
         state_abbrs = data.get("state_abbrs", [])
         if isinstance(state_abbrs, list):
-            cls.STATE_ABBRS = {str(x).upper() for x in state_abbrs if str(x).strip()}
+            parsed = {str(x).upper() for x in state_abbrs if str(x).strip()}
+            if parsed:
+                cls.STATE_ABBRS = parsed
 
         locations = data.get("locations", [])
         if isinstance(locations, list):
             normalized = [str(x).strip() for x in locations if str(x).strip()]
-            cls.LOCATION_PHRASES = normalized
-            words = set()
-            prefix_words = set()
-            for phrase in normalized:
-                parts = phrase.lower().split()
-                for part in parts:
-                    words.add(part)
-                if len(parts) > 1:
-                    prefix_words.update(parts[:-1])
-            cls.LOCATION_WORDS = words
-            cls.LOCATION_PREFIX_WORDS = prefix_words
+            if normalized:
+                cls.LOCATION_PHRASES = normalized
+                words = set()
+                prefix_words = set()
+                for phrase in normalized:
+                    parts = phrase.lower().split()
+                    for part in parts:
+                        words.add(part)
+                    if len(parts) > 1:
+                        prefix_words.update(parts[:-1])
+                cls.LOCATION_WORDS = words
+                cls.LOCATION_PREFIX_WORDS = prefix_words
 
         header_hints = data.get("header_hints", [])
         if isinstance(header_hints, list):
