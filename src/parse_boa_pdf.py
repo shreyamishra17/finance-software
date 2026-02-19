@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import csv
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -16,6 +17,9 @@ DATE_ANCHOR_RE = re.compile(
 )
 AMOUNT_RE = re.compile(r"(?P<amount>\(?-?\$?\d[\d,]*\.\d{2}\)?)")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_ROOT = Path(os.environ.get("FINELY_DATA_ROOT", str(PROJECT_ROOT / "my_finance")))
+RAW_STATEMENTS_DIR = Path(os.environ.get("FINELY_RAW_DIR", str(DATA_ROOT / "raw")))
+PROCESSED_DIR = Path(os.environ.get("FINELY_PROCESSED_DIR", str(DATA_ROOT / "processed")))
 
 
 class ParserConfig:
@@ -948,32 +952,55 @@ def _statement_range_slug(statement_period: Optional[str], pdf_path: Path) -> st
         return pdf_path.stem
 
 
-def export_transactions_csv(payload: dict, pdf_path: Path) -> Path:
-    processed_dir = PROJECT_ROOT / "my_finance" / "processed"
-    processed_dir.mkdir(parents=True, exist_ok=True)
+CSV_COLUMNS = [
+    "date",
+    "payment_channel",
+    "transaction_code",
+    "merchant_raw",
+    "merchant_clean",
+    "city",
+    "state",
+    "zip",
+    "amount",
+    "direction",
+    "reference_id",
+    "source_file",
+]
 
-    period = payload.get("statement_info", {}).get("statement_period")
-    base_name = _statement_range_slug(period, pdf_path)
-    csv_path = processed_dir / f"{base_name}_transactions.csv"
 
-    columns = [
-        "date",
-        "payment_channel",
-        "transaction_code",
-        "merchant_raw",
-        "merchant_clean",
-        "city",
-        "state",
-        "zip",
-        "amount",
-        "direction",
-        "reference_id",
-        "source_file",
-    ]
+def _sanitize_slug(value: str, fallback: str = "unknown") -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9]+", "_", value.strip()).strip("_").lower()
+    return cleaned or fallback
 
+
+def _mask_account_number(account_number: Optional[str]) -> str:
+    if not account_number:
+        return "unknown"
+    digits = re.sub(r"\D", "", account_number)
+    if not digits:
+        return "unknown"
+    return digits[-4:] if len(digits) >= 4 else digits
+
+
+def _first_last_slug(*candidates: Optional[str]) -> str:
+    for value in candidates:
+        if not value:
+            continue
+        tokens = re.findall(r"[A-Za-z0-9]+", str(value))
+        if len(tokens) >= 2:
+            return _sanitize_slug(f"{tokens[0]}_{tokens[1]}", fallback="unknown_user")
+    for value in candidates:
+        if not value:
+            continue
+        cleaned = _sanitize_slug(str(value), fallback="")
+        if cleaned:
+            return cleaned
+    return "unknown_user"
+
+
+def _build_csv_rows(payload: dict, source_file: str) -> List[dict[str, str]]:
     seen: set[tuple[str, str, str]] = set()
     rows: List[dict[str, str]] = []
-    source_file = pdf_path.name
     for txn in payload.get("transactions", []):
         date = str(txn.get("date") or "NA")
         raw_description = str(txn.get("raw_description") or "")
@@ -1008,14 +1035,98 @@ def export_transactions_csv(payload: dict, pdf_path: Path) -> Path:
                 "source_file": source_file if source_file.strip() else "NA",
             }
         )
+    return rows
 
-    with csv_path.open("w", encoding="utf-8", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=columns)
-        writer.writeheader()
+
+def _write_csv_rows(csv_path: Path, rows: List[dict[str, str]], append: bool) -> None:
+    existing_keys: set[tuple[str, str, str, str]] = set()
+    if append and csv_path.exists():
+        with csv_path.open("r", encoding="utf-8", newline="") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                existing_keys.add(
+                    (
+                        row.get("date", "NA"),
+                        row.get("merchant_raw", "NA"),
+                        row.get("amount", "NA"),
+                        row.get("reference_id", "NA"),
+                    )
+                )
+
+    mode = "a" if append and csv_path.exists() else "w"
+    with csv_path.open(mode, encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
+        if mode == "w":
+            writer.writeheader()
         for row in rows:
-            writer.writerow({k: (v if str(v).strip() else "NA") for k, v in row.items()})
+            row_clean = {k: (v if str(v).strip() else "NA") for k, v in row.items()}
+            key = (
+                row_clean["date"],
+                row_clean["merchant_raw"],
+                row_clean["amount"],
+                row_clean["reference_id"],
+            )
+            if key in existing_keys:
+                continue
+            writer.writerow(row_clean)
+            existing_keys.add(key)
+
+
+def export_transactions_csv(payload: dict, pdf_path: Path) -> Path:
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+
+    period = payload.get("statement_info", {}).get("statement_period")
+    base_name = _statement_range_slug(period, pdf_path)
+    csv_path = PROCESSED_DIR / f"{base_name}_transactions.csv"
+    rows = _build_csv_rows(payload, pdf_path.name)
+    _write_csv_rows(csv_path, rows, append=False)
 
     return csv_path
+
+
+def persist_uploaded_statement(
+    payload: dict,
+    original_filename: str,
+    pdf_bytes: bytes,
+    username: Optional[str] = None,
+) -> dict[str, str]:
+    DATA_ROOT.mkdir(parents=True, exist_ok=True)
+
+    statement = payload.get("statement_info", {})
+    account_number = statement.get("account_number")
+    owner_name = statement.get("owner_name")
+    account_name = statement.get("account_name")
+    user_slug = _first_last_slug(owner_name, account_name, username)
+    account_slug = _mask_account_number(str(account_number) if account_number else None)
+
+    user_root = DATA_ROOT / user_slug
+    user_raw_dir = user_root / "raw"
+    user_processed_dir = user_root / "processed"
+    user_raw_dir.mkdir(parents=True, exist_ok=True)
+    user_processed_dir.mkdir(parents=True, exist_ok=True)
+
+    input_name = Path(original_filename).name if original_filename else "statement.pdf"
+    if not input_name.lower().endswith(".pdf"):
+        input_name = f"{Path(input_name).stem}.pdf"
+
+    period = statement.get("statement_period")
+    period_slug = _statement_range_slug(period, Path(input_name))
+    base_pdf_name = f"{period_slug}_{account_slug}_{_sanitize_slug(Path(input_name).stem, 'statement')}.pdf"
+    saved_pdf_path = user_raw_dir / base_pdf_name
+    if saved_pdf_path.exists():
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        saved_pdf_path = user_raw_dir / f"{period_slug}_{account_slug}_{_sanitize_slug(Path(input_name).stem, 'statement')}_{stamp}.pdf"
+    saved_pdf_path.write_bytes(pdf_bytes)
+
+    account_csv_name = f"acc_{account_slug}.csv"
+    account_csv_path = user_processed_dir / account_csv_name
+    rows = _build_csv_rows(payload, saved_pdf_path.name)
+    _write_csv_rows(account_csv_path, rows, append=True)
+
+    return {
+        "saved_pdf_path": str(saved_pdf_path),
+        "account_csv_path": str(account_csv_path),
+    }
 
 
 @dataclass

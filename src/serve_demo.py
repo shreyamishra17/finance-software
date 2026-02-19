@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from categorize import categorize_transactions
-from parse_boa_pdf import parse_pdf_to_payload
+from parse_boa_pdf import parse_pdf_to_payload, persist_uploaded_statement
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -78,14 +78,17 @@ class DemoHandler(SimpleHTTPRequestHandler):
         message = BytesParser(policy=default).parsebytes(
             f"Content-Type: {ctype}\r\n\r\n".encode("utf-8") + raw_body
         )
-        # Extract the uploaded file from multipart/form-data.
+        # Extract multipart form fields.
         file_part = None
+        username = None
         for part in message.iter_parts():
             if part.get_content_disposition() != "form-data":
                 continue
-            if part.get_param("name", header="content-disposition") == "file":
+            field_name = part.get_param("name", header="content-disposition")
+            if field_name == "file":
                 file_part = part
-                break
+            elif field_name == "username":
+                username = (part.get_content() or "").strip()
         if file_part is None:
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Missing 'file' field"})
             return
@@ -95,13 +98,31 @@ class DemoHandler(SimpleHTTPRequestHandler):
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Please upload a PDF file"})
             return
 
+        file_bytes = file_part.get_payload(decode=True) or b""
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(file_part.get_payload(decode=True) or b"")
+            tmp.write(file_bytes)
             tmp_path = Path(tmp.name)
 
         try:
             payload = parse_pdf_to_payload(tmp_path)
             payload["transactions"] = categorize_transactions(payload.get("transactions", []))
+            persist_mode = os.environ.get("PERSIST_MODE", "local").strip().lower()
+            if persist_mode in {"firebase", "firebase_storage", "firestore"}:
+                from cloud_persistence import persist_payload_firebase_storage
+
+                payload["storage"] = persist_payload_firebase_storage(
+                    payload=payload,
+                    username=username,
+                    source_file=file_name or tmp_path.name,
+                    pdf_bytes=file_bytes,
+                )
+            else:
+                payload["storage"] = persist_uploaded_statement(
+                    payload=payload,
+                    original_filename=file_name or tmp_path.name,
+                    pdf_bytes=file_bytes,
+                    username=username,
+                )
             self._log_category_summary(payload["transactions"])
         except Exception as exc:  # noqa: BLE001
             self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
