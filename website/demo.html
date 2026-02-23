@@ -230,7 +230,14 @@
             return { payload, backend: "local" };
           } catch (err) {
             const msg = String(err && err.message ? err.message : "");
-            if (msg.includes("Failed to fetch") || msg.includes("Load failed")) {
+            const status = Number(err && err.status ? err.status : 0);
+            if (
+              msg.includes("Failed to fetch") ||
+              msg.includes("Load failed") ||
+              msg.includes("Backend parse API not available") ||
+              status === 404 ||
+              status === 405
+            ) {
               const payload = await postParse(formData, CLOUD_API_BASE);
               return { payload, backend: "cloud" };
             }
