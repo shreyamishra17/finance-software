@@ -115,22 +115,26 @@ class DemoHandler(SimpleHTTPRequestHandler):
             if bootstrap_result:
                 payload["config_bootstrap"] = bootstrap_result
             persist_mode = self._resolve_persist_mode()
-            if persist_mode in {"firebase", "firebase_storage", "firestore"}:
-                from cloud_persistence import persist_payload_firebase_storage
+            try:
+                if persist_mode in {"firebase", "firebase_storage", "firestore"}:
+                    from cloud_persistence import persist_payload_firebase_storage
 
-                payload["storage"] = persist_payload_firebase_storage(
-                    payload=payload,
-                    username=username,
-                    source_file=file_name or tmp_path.name,
-                    pdf_bytes=file_bytes,
-                )
-            else:
-                payload["storage"] = persist_uploaded_statement(
-                    payload=payload,
-                    original_filename=file_name or tmp_path.name,
-                    pdf_bytes=file_bytes,
-                    username=username,
-                )
+                    payload["storage"] = persist_payload_firebase_storage(
+                        payload=payload,
+                        username=username,
+                        source_file=file_name or tmp_path.name,
+                        pdf_bytes=file_bytes,
+                    )
+                else:
+                    payload["storage"] = persist_uploaded_statement(
+                        payload=payload,
+                        original_filename=file_name or tmp_path.name,
+                        pdf_bytes=file_bytes,
+                        username=username,
+                    )
+            except Exception as persist_exc:  # noqa: BLE001
+                print(f"WARNING: persistence failed ({persist_mode}): {persist_exc}")
+                payload["storage"] = {"mode": persist_mode, "error": str(persist_exc)}
             self._log_category_summary(payload["transactions"])
         except Exception as exc:  # noqa: BLE001
             self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
