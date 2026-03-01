@@ -5,6 +5,7 @@ import json
 import os
 from dataclasses import dataclass
 import re
+import shutil
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -88,7 +89,14 @@ class CategoryResult:
     layer: str = "default"
 
 
-_BERT_CACHE: dict[str, object] = {"ready": False, "failed": False, "model": None, "tokenizer": None, "device": None}
+_BERT_CACHE: dict[str, object] = {
+    "ready": False,
+    "failed": False,
+    "model": None,
+    "tokenizer": None,
+    "device": None,
+    "model_dir": None,
+}
 
 
 def _load_rules(path: Optional[Path]) -> dict:
@@ -157,6 +165,58 @@ def _select_device(torch_module):
     return torch_module.device("cpu")
 
 
+def _parse_gs_uri(uri: str) -> tuple[str, str]:
+    if not uri.startswith("gs://"):
+        raise ValueError(f"Invalid GCS URI: {uri}")
+    no_scheme = uri[5:]
+    bucket, _, prefix = no_scheme.partition("/")
+    if not bucket or not prefix:
+        raise ValueError(f"GCS URI must include bucket and object prefix: {uri}")
+    return bucket, prefix.rstrip("/") + "/"
+
+
+def _download_model_from_gcs(gcs_uri: str) -> Path:
+    from google.cloud import storage  # type: ignore
+
+    bucket_name, prefix = _parse_gs_uri(gcs_uri)
+    local_root = Path(os.environ.get("CATEGORIZER_MODEL_CACHE_DIR", "/tmp/categorizer_model_cache"))
+    local_dir = local_root / prefix.strip("/").split("/")[-1]
+    config_path = local_dir / "config.json"
+    if config_path.exists():
+        return local_dir
+
+    local_dir.mkdir(parents=True, exist_ok=True)
+    client = storage.Client()
+    blobs = list(client.list_blobs(bucket_name, prefix=prefix))
+    if not blobs:
+        raise RuntimeError(f"No model files found at {gcs_uri}")
+
+    for blob in blobs:
+        name = blob.name
+        if name.endswith("/"):
+            continue
+        rel = name[len(prefix) :] if name.startswith(prefix) else Path(name).name
+        target = local_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        blob.download_to_filename(str(target))
+
+    if not config_path.exists():
+        shutil.rmtree(local_dir, ignore_errors=True)
+        raise RuntimeError(f"Downloaded files from {gcs_uri} but config.json not found")
+    return local_dir
+
+
+def _resolve_model_dir() -> Optional[Path]:
+    explicit_dir = Path(os.environ.get("CATEGORIZER_MODEL_DIR", str(DEFAULT_BERT_MODEL_DIR)))
+    if (explicit_dir / "config.json").exists():
+        return explicit_dir
+
+    gcs_uri = os.environ.get("CATEGORIZER_MODEL_GCS_URI", "").strip()
+    if gcs_uri:
+        return _download_model_from_gcs(gcs_uri)
+    return None
+
+
 def _init_bert() -> bool:
     if _BERT_CACHE["ready"]:
         return True
@@ -166,8 +226,8 @@ def _init_bert() -> bool:
         _BERT_CACHE["failed"] = True
         return False
 
-    model_dir = Path(os.environ.get("CATEGORIZER_MODEL_DIR", str(DEFAULT_BERT_MODEL_DIR)))
-    if not (model_dir / "config.json").exists():
+    model_dir = _resolve_model_dir()
+    if model_dir is None:
         _BERT_CACHE["failed"] = True
         return False
 
@@ -184,6 +244,7 @@ def _init_bert() -> bool:
         _BERT_CACHE["tokenizer"] = tokenizer
         _BERT_CACHE["model"] = model
         _BERT_CACHE["device"] = device
+        _BERT_CACHE["model_dir"] = str(model_dir)
         _BERT_CACHE["ready"] = True
         return True
     except Exception:

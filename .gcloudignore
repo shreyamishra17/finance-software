@@ -7,7 +7,6 @@
 !src/**
 !website/**
 !config/**
-!categorizer/models/bert_distilbert_50k_full/**
 
 # Keep VCS metadata excluded.
 .git
