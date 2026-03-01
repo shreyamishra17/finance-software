@@ -4,22 +4,48 @@
   "high_confidence": [
     {
       "category": "Fees",
-      "keywords": ["SERVICE FEE", "SERVICE FEES", "INTERNATIONAL TRANSACTION FEE"],
+      "keywords": [
+        "SERVICE FEE",
+        "SERVICE FEES",
+        "INTERNATIONAL TRANSACTION FEE"
+      ],
       "confidence": 0.95
     },
     {
-      "category": "Transfers",
-      "keywords": ["ZELLE", "VENMO", "PAYPAL", "WIRE", "TRANSFER", "EXT TRNSFR", "ACH TRANSFER"],
-      "confidence": 0.9
+      "category": "Etransfer",
+      "keywords": [
+        "ZELLE",
+        "VENMO",
+        "PAYPAL",
+        "XFER",
+        "TRANSFER",
+        "EXT TRNSFR",
+        "ACH TRANSFER",
+        "PMNT SENT",
+        "PMNT RCVD",
+        "VISA DIRECT",
+        "P2P"
+      ],
+      "confidence": 0.95
     },
     {
       "category": "Income",
-      "keywords": ["DIRECT DEP", "PAYROLL", "REFUND", "TAX REFUND", "CASTTAXRFD", "QUALCOMM"],
-      "confidence": 0.9
+      "keywords": [
+        "DIRECT DEP",
+        "DES:DIRECT DEP",
+        "PAYROLL",
+        "SALARY"
+      ],
+      "confidence": 0.95
     },
     {
       "category": "Rent",
-      "keywords": ["RENT", "LEASE", "CLICKPAY", "PROPRTYPAY"],
+      "keywords": [
+        "RENT",
+        "LEASE",
+        "CLICKPAY",
+        "PROPRTYPAY"
+      ],
       "confidence": 0.9
     },
     {
@@ -40,7 +66,13 @@
     },
     {
       "category": "Insurance",
-      "keywords": ["INSURANCE", "GEICO", "PROGRESSIVE", "STATE FARM", "ALLSTATE"],
+      "keywords": [
+        "INSURANCE",
+        "GEICO",
+        "PROGRESSIVE",
+        "STATE FARM",
+        "ALLSTATE"
+      ],
       "confidence": 0.9
     },
     {
@@ -63,13 +95,31 @@
   "merchant_rules": [
     {
       "category": "Groceries",
-      "keywords": ["WHOLEFDS", "TRADER JOE", "SAFEWAY", "KROGER", "SPROUTS", "COSTCO", "WALMART"],
+      "keywords": [
+        "WHOLEFDS",
+        "TRADER JOE",
+        "SAFEWAY",
+        "KROGER",
+        "SPROUTS",
+        "COSTCO",
+        "WALMART"
+      ],
       "confidence": 0.75
     },
     {
-      "category": "Dining",
-      "keywords": ["RESTAURANT", "CAFE", "COFFEE", "TST", "STARBUCKS", "CHIPOTLE", "BLUE BOTTLE", "MCDONALD", "SUBWAY"],
-      "confidence": 0.7
+      "category": "Food & Drink",
+      "keywords": [
+        "RESTAURANT",
+        "CAFE",
+        "COFFEE",
+        "TST",
+        "STARBUCKS",
+        "CHIPOTLE",
+        "BLUE BOTTLE",
+        "MCDONALD",
+        "SUBWAY"
+      ],
+      "confidence": 0.8
     },
     {
       "category": "Health",
@@ -145,22 +195,19 @@
         "AMAZON",
         "TARGET",
         "BEST BUY",
-        "HOME DEPOT",
-        "ANTHROPOLOGIE",
-        "URBN",
-        "NORDSTROM",
-        "NORDSTROM RACK",
-        "SEPHORA",
-        "UNIQLO",
-        "RHODE",
-        "BRAZILIA",
-        "FASHION VALLEY"
+        "HOME DEPOT"
       ],
       "confidence": 0.65
     },
     {
       "category": "Travel",
-      "keywords": ["AIRLINES", "AIRWAYS", "HOTEL", "MARRIOTT", "HILTON"],
+      "keywords": [
+        "AIRLINES",
+        "AIRWAYS",
+        "HOTEL",
+        "MARRIOTT",
+        "HILTON"
+      ],
       "confidence": 0.65
     }
   ]
