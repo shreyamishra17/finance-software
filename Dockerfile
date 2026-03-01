@@ -2,6 +2,7 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV CATEGORIZER_MODEL_DIR=/app/categorizer/models/bert_distilbert_50k_full
 
 WORKDIR /app
 

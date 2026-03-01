@@ -1,0 +1,14 @@
+# Ignore everything by default.
+**
+
+# Include only runtime build inputs.
+!Dockerfile
+!requirements.txt
+!src/**
+!website/**
+!config/**
+!categorizer/models/bert_distilbert_50k_full/**
+
+# Keep VCS metadata excluded.
+.git
+.git/**

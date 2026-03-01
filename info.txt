@@ -1,0 +1,19 @@
+GCloud / Firebase Deployment Info
+
+Google Cloud
+- Project Name: Finance-Software
+- Project ID: finance-software-487020
+- Region: us-central1
+- Cloud Run Service: finance-demo
+- Artifact Registry Repo: cloud-run-source-deploy
+
+Firebase
+- Project ID: financesoftware-5c8e4
+- Storage Bucket: financesoftware-5c8e4.firebasestorage.app
+
+Runtime Env Vars (Cloud Run)
+- PERSIST_MODE=firebase_storage
+- FIREBASE_STORAGE_BUCKET=financesoftware-5c8e4.firebasestorage.app
+
+Notes
+- Keep this file updated when project/bucket/service names change.
