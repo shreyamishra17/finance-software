@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import parse_boa_pdf as parser
+import parse_bank as parser
 
 
 def run() -> None:

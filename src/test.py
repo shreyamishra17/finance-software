@@ -3,7 +3,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from categorize import categorize_transactions
-from parse_boa_pdf import parse_pdf_to_payload
+from parse_bank import parse_pdf_to_payload
 
 
 payload = parse_pdf_to_payload(Path("my_finance/raw/Apr10-25.pdf"))

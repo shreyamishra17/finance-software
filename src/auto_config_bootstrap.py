@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Optional
 
 try:
-    from parse_boa_pdf import extract_text
+    from parse_bank import extract_text
 except ModuleNotFoundError:
-    from src.parse_boa_pdf import extract_text
+    from src.parse_bank import extract_text
 
 
 DATE_ANCHOR_RE = re.compile(r"^(0?[1-9]|1[0-2])/(0?[1-9]|[12]\d|3[01])(?:/\d{2})?\b")

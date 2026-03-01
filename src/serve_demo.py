@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from categorize import categorize_transactions
-from parse_boa_pdf import parse_pdf_to_payload, persist_uploaded_statement
+from parse_bank import parse_pdf_to_payload, persist_uploaded_statement
 from auto_config_bootstrap import bootstrap_config_if_unknown
 
 

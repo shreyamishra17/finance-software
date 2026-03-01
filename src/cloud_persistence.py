@@ -12,7 +12,7 @@ from typing import Optional
 import firebase_admin
 from firebase_admin import credentials, storage
 
-from parse_boa_pdf import CSV_COLUMNS, _build_csv_rows, _mask_account_number, _statement_range_slug
+from parse_bank import CSV_COLUMNS, _build_csv_rows, _mask_account_number, _statement_range_slug
 
 
 def _sanitize_slug(value: str, fallback: str = "unknown") -> str:
@@ -53,9 +53,9 @@ def _csv_row_key(row: dict[str, str], account_scope: str = "") -> str:
     ref_norm = str(row.get("reference_id", "NA") or "NA").strip().upper()
     amount_raw = str(row.get("amount", "NA") or "NA").strip()
     try:
-        from parse_boa_pdf import _parse_amount  # lazy import to avoid cycle at module import time
+        from parse_bank import _parse_amount  # lazy import to avoid cycle at module import time
     except ModuleNotFoundError:
-        from src.parse_boa_pdf import _parse_amount
+        from src.parse_bank import _parse_amount
     amount_parsed = _parse_amount(amount_raw)
     amount_norm = f"{amount_parsed:.2f}" if amount_parsed is not None else amount_raw
     key = "|".join([account_scope, date_norm, merchant_norm, amount_norm, ref_norm])

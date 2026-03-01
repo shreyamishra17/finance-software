@@ -1193,6 +1193,7 @@ CSV_COLUMNS = [
     "direction",
     "reference_id",
     "source_file",
+    "category",
 ]
 
 
@@ -1301,6 +1302,7 @@ def _build_csv_rows(payload: dict, source_file: str) -> List[dict[str, str]]:
                 "direction": direction,
                 "reference_id": _extract_reference_id(raw_description, account_last4=account_last4),
                 "source_file": source_file if source_file.strip() else "NA",
+                "category": str(txn.get("category") or "Uncategorized"),
             }
         )
     return rows
@@ -2326,7 +2328,7 @@ def main() -> int:
         pdf_path = Path(sys.argv[1]).expanduser()
     if not pdf_path.exists():
         print(f"File not found: {pdf_path}")
-        print("Pass a path explicitly: python3 parse_boa_pdf.py <statement.pdf>")
+        print("Pass a path explicitly: python3 parse_bank.py <statement.pdf>")
         return 1
 
     payload = parse_pdf_to_payload(pdf_path, config_path)
