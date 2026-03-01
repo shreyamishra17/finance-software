@@ -10,6 +10,9 @@ from typing import Iterable, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_RULES_PATH = PROJECT_ROOT / "config" / "category_rules.json"
+CATEGORY_ALIASES = {
+    "Transport": "Auto & Transport",
+}
 
 
 @dataclass
@@ -40,6 +43,10 @@ def _normalize(text: str) -> str:
     return " ".join(text.upper().split())
 
 
+def _normalize_category_name(name: str) -> str:
+    return CATEGORY_ALIASES.get(name, name)
+
+
 def _keyword_pattern(keyword: str) -> re.Pattern[str]:
     if keyword.lower().startswith("re:"):
         return re.compile(keyword[3:], re.IGNORECASE)
@@ -60,7 +67,7 @@ def _find_keyword_match(haystack: str, keywords: Iterable[str]) -> Optional[str]
 def categorize_transaction(txn: dict, rules_path: Optional[Path] = None) -> CategoryResult:
     rules = _load_rules(rules_path)
 
-    default_category = str(rules.get("default_category", "Uncategorized"))
+    default_category = _normalize_category_name(str(rules.get("default_category", "Uncategorized")))
     default_confidence = float(rules.get("default_confidence", 0.2))
 
     raw = str(txn.get("raw_description", ""))
@@ -72,9 +79,9 @@ def categorize_transaction(txn: dict, rules_path: Optional[Path] = None) -> Cate
         matched = _find_keyword_match(haystack, keywords)
         if matched:
             return CategoryResult(
-                category=str(rule.get("category", default_category)),
+                category=_normalize_category_name(str(rule.get("category", default_category))),
                 confidence=float(rule.get("confidence", 0.9)),
-                matched_rule=str(rule.get("category", default_category)),
+                matched_rule=_normalize_category_name(str(rule.get("category", default_category))),
                 matched_keyword=matched,
                 layer="high_confidence",
             )
@@ -84,9 +91,9 @@ def categorize_transaction(txn: dict, rules_path: Optional[Path] = None) -> Cate
         matched = _find_keyword_match(_normalize(merchant), keywords) or _find_keyword_match(haystack, keywords)
         if matched:
             return CategoryResult(
-                category=str(rule.get("category", default_category)),
+                category=_normalize_category_name(str(rule.get("category", default_category))),
                 confidence=float(rule.get("confidence", 0.6)),
-                matched_rule=str(rule.get("category", default_category)),
+                matched_rule=_normalize_category_name(str(rule.get("category", default_category))),
                 matched_keyword=matched,
                 layer="merchant_rules",
             )

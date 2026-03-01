@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import csv
 import os
+import hashlib
 import re
 import sys
 from dataclasses import dataclass
@@ -50,6 +51,16 @@ class ParserConfig:
     IGNORABLE_TAIL_PATTERNS: List[str] = []
     METADATA_LABELS: List[str] = ["DES", "ID", "INDN", "CO ID", "PPD", "WEB", "INFO", "PMT"]
     PREFERRED_MERCHANT_LABELS: List[str] = ["DES"]
+    SUMMARY_ALIASES: dict[str, list[str]] = {
+        "beginning_balance": ["beginning balance", "opening balance", "previous balance", "starting balance"],
+        "deposits_additions": ["deposits", "credits", "payments and credits", "money in", "total credits"],
+        "withdrawals_subtractions": ["withdrawals", "debits", "purchases", "money out", "total debits"],
+        "checks": ["checks", "check payments"],
+        "service_fees": ["service fees", "fees charged", "finance charges", "charges and fees"],
+        "ending_balance": ["ending balance", "new balance", "closing balance", "current balance"],
+    }
+    TRAILING_MERCHANT_DESCRIPTORS: List[str] = []
+    NON_TRANSACTION_PATTERNS: List[str] = []
 
     @classmethod
     def _load_common_defaults(cls) -> None:
@@ -83,6 +94,30 @@ class ParserConfig:
                         prefix_words.update(parts[:-1])
                 cls.LOCATION_WORDS = words
                 cls.LOCATION_PREFIX_WORDS = prefix_words
+
+        summary_aliases = data.get("summary_aliases", {})
+        if isinstance(summary_aliases, dict):
+            parsed: dict[str, list[str]] = {}
+            for key, values in summary_aliases.items():
+                if not isinstance(values, list):
+                    continue
+                vals = [str(v).lower().strip() for v in values if str(v).strip()]
+                if vals:
+                    parsed[str(key)] = vals
+            if parsed:
+                cls.SUMMARY_ALIASES = parsed
+
+        trailing_desc = data.get("trailing_merchant_descriptors", [])
+        if isinstance(trailing_desc, list):
+            parsed = [str(x).strip().upper() for x in trailing_desc if str(x).strip()]
+            if parsed:
+                cls.TRAILING_MERCHANT_DESCRIPTORS = parsed
+
+        non_txn = data.get("non_transaction_patterns", [])
+        if isinstance(non_txn, list):
+            parsed = [str(x).strip() for x in non_txn if str(x).strip()]
+            if parsed:
+                cls.NON_TRANSACTION_PATTERNS = parsed
 
     @classmethod
     def load_from_json(cls, config_path: Optional[Path] = None) -> None:
@@ -191,6 +226,30 @@ class ParserConfig:
             parsed = [str(x).strip() for x in preferred_labels if str(x).strip()]
             if parsed:
                 cls.PREFERRED_MERCHANT_LABELS = parsed
+
+        summary_aliases = data.get("summary_aliases", {})
+        if isinstance(summary_aliases, dict):
+            parsed: dict[str, list[str]] = {}
+            for key, values in summary_aliases.items():
+                if not isinstance(values, list):
+                    continue
+                vals = [str(v).lower().strip() for v in values if str(v).strip()]
+                if vals:
+                    parsed[str(key)] = vals
+            if parsed:
+                cls.SUMMARY_ALIASES = parsed
+
+        trailing_desc = data.get("trailing_merchant_descriptors", [])
+        if isinstance(trailing_desc, list):
+            parsed = [str(x).strip().upper() for x in trailing_desc if str(x).strip()]
+            if parsed:
+                cls.TRAILING_MERCHANT_DESCRIPTORS = parsed
+
+        non_txn = data.get("non_transaction_patterns", [])
+        if isinstance(non_txn, list):
+            parsed = [str(x).strip() for x in non_txn if str(x).strip()]
+            if parsed:
+                cls.NON_TRANSACTION_PATTERNS = parsed
 
 
 class MerchantNormalizationConfig:
@@ -811,6 +870,7 @@ def _extract_city_state_zip(raw_description: str) -> tuple[str, str, str]:
 
     original_text = text
     text = strip_metadata_tail(text)
+    text = _strip_trailing_descriptors(text)
 
     def _phrase_regex(phrase: str) -> re.Pattern[str]:
         # Conservative abbreviation handling only for configured location phrases.
@@ -881,6 +941,17 @@ def _extract_city_state_zip(raw_description: str) -> tuple[str, str, str]:
             compact_phrase = re.sub(r"[^A-Za-z0-9]", "", p).upper()
             if compact_phrase and compact_city_tail.endswith(compact_phrase):
                 return p, tail_state, tail_zip
+        if tail_state == "NA":
+            for st in ParserConfig.STATE_ABBRS:
+                if not compact_city_tail.endswith(st):
+                    continue
+                city_compact = compact_city_tail[: -len(st)]
+                if not city_compact:
+                    continue
+                for phrase in sorted(ParserConfig.LOCATION_PHRASES, key=len, reverse=True):
+                    compact_phrase = re.sub(r"[^A-Za-z0-9]", "", phrase).upper()
+                    if compact_phrase and city_compact.endswith(compact_phrase):
+                        return phrase, st, tail_zip
 
     # Tail match only: CITY STATE [ZIP] at end of description.
     tail_match = re.search(
@@ -998,7 +1069,9 @@ def _extract_reference_id(raw_description: str, account_last4: Optional[str] = N
     hash_ref = re.search(r"#\s*([0-9]{4,})\b", text)
     if hash_ref:
         candidate = hash_ref.group(1)
-        if valid_candidate(candidate):
+        # Hash-prefixed numeric refs are often merchant/store transaction IDs.
+        # Allow 5+ digits here (keeping leading zeros), while still rejecting account last4.
+        if len(candidate) >= 5 and (not acct_last4 or candidate != acct_last4):
             return candidate
 
     # Company identifiers are metadata, not transaction-level references.
@@ -1024,10 +1097,20 @@ def _strip_city_overlap_from_merchant(merchant: str, city: str) -> str:
     def norm(token: str) -> str:
         return re.sub(r"[^A-Za-z0-9]", "", token).upper()
 
-    city_last = norm(city_tokens[-1])
-    if not city_last:
+    city_norm_tokens = [norm(t) for t in city_tokens if norm(t)]
+    if not city_norm_tokens:
         return merchant
+    city_prefixes = set(city_norm_tokens[:-1])
 
+    # Exact city-suffix removal first (e.g., "... SAN DIEGO" -> "...").
+    if len(merchant_tokens) >= len(city_norm_tokens):
+        tail = [norm(t) for t in merchant_tokens[-len(city_norm_tokens) :]]
+        if tail == city_norm_tokens:
+            trimmed = " ".join(merchant_tokens[: -len(city_norm_tokens)]).strip()
+            if trimmed:
+                return trimmed
+
+    city_last = city_norm_tokens[-1]
     changed = False
     while merchant_tokens:
         tail = norm(merchant_tokens[-1])
@@ -1036,6 +1119,10 @@ def _strip_city_overlap_from_merchant(merchant: str, city: str) -> str:
             changed = True
             continue
         if tail == city_last:
+            merchant_tokens.pop()
+            changed = True
+            continue
+        if tail in city_prefixes:
             merchant_tokens.pop()
             changed = True
             continue
@@ -1048,6 +1135,35 @@ def _strip_city_overlap_from_merchant(merchant: str, city: str) -> str:
 
     cleaned = " ".join(merchant_tokens).strip()
     return cleaned if (changed and cleaned) else merchant
+
+
+def _strip_trailing_descriptors(text: str) -> str:
+    if not text.strip() or not ParserConfig.TRAILING_MERCHANT_DESCRIPTORS:
+        return text
+    out = text.strip()
+    changed = True
+    while changed and out:
+        changed = False
+        upper = out.upper().strip()
+        for desc in sorted(ParserConfig.TRAILING_MERCHANT_DESCRIPTORS, key=len, reverse=True):
+            if upper.endswith(desc):
+                out = out[: len(out) - len(desc)].strip(" ,.-/")
+                changed = True
+                break
+    return out.strip() or text
+
+
+def _is_non_transaction_row(text: str) -> bool:
+    if not text.strip() or not ParserConfig.NON_TRANSACTION_PATTERNS:
+        return False
+    for pattern in ParserConfig.NON_TRANSACTION_PATTERNS:
+        try:
+            if re.search(pattern, text, flags=re.IGNORECASE):
+                return True
+        except re.error:
+            if pattern.lower() in text.lower():
+                return True
+    return False
 
 
 def _statement_range_slug(statement_period: Optional[str], pdf_path: Path) -> str:
@@ -1110,6 +1226,39 @@ def _first_last_slug(*candidates: Optional[str]) -> str:
     return "unknown_user"
 
 
+def _bank_short_slug(bank_name: Optional[str], original_name: Optional[str] = None) -> str:
+    candidates: List[str] = []
+    if isinstance(bank_name, str) and bank_name.strip():
+        candidates.append(bank_name)
+    candidates.extend(ParserConfig.BANK_ALIASES or [])
+
+    normalized: List[str] = []
+    for c in candidates:
+        token = re.sub(r"[^a-z0-9]+", "", str(c).lower())
+        if token:
+            normalized.append(token)
+
+    preferred = [
+        c
+        for c in normalized
+        if 3 <= len(c) <= 8 and c not in {"bank", "unknown", "unknownbank", "unknownb"}
+    ]
+    if preferred:
+        return sorted(preferred, key=lambda x: (len(x), x))[0]
+
+    if original_name:
+        stem = Path(original_name).stem.lower()
+        tokens = re.findall(r"[a-z]+", stem)
+        for token in tokens:
+            if len(token) >= 3:
+                return token[:8]
+
+    if normalized:
+        value = sorted(normalized, key=lambda x: (len(x), x))[0]
+        return value[:8] if len(value) > 8 else value
+    return "bank"
+
+
 def _build_csv_rows(payload: dict, source_file: str) -> List[dict[str, str]]:
     seen: set[tuple[str, str, str]] = set()
     rows: List[dict[str, str]] = []
@@ -1120,6 +1269,10 @@ def _build_csv_rows(payload: dict, source_file: str) -> List[dict[str, str]]:
         raw_description = str(txn.get("raw_description") or "")
         merchant = str(txn.get("merchant_clean") or "NA")
         amount = str(txn.get("amount") or "NA")
+        if amount.upper() == "UNPARSED":
+            continue
+        if _parse_amount(amount) is None:
+            continue
 
         dedupe_key = (date, raw_description, amount)
         if dedupe_key in seen:
@@ -1127,6 +1280,7 @@ def _build_csv_rows(payload: dict, source_file: str) -> List[dict[str, str]]:
         seen.add(dedupe_key)
 
         city, state, zip_code = _extract_city_state_zip(raw_description)
+        merchant = _strip_trailing_descriptors(merchant)
         merchant = _strip_city_overlap_from_merchant(merchant, city)
         parsed_amount = _parse_amount(amount)
         direction = "NA"
@@ -1152,38 +1306,65 @@ def _build_csv_rows(payload: dict, source_file: str) -> List[dict[str, str]]:
     return rows
 
 
-def _write_csv_rows(csv_path: Path, rows: List[dict[str, str]], append: bool) -> None:
-    existing_keys: set[tuple[str, str, str, str]] = set()
-    if append and csv_path.exists():
-        with csv_path.open("r", encoding="utf-8", newline="") as fh:
-            reader = csv.DictReader(fh)
-            for row in reader:
-                existing_keys.add(
-                    (
-                        row.get("date", "NA"),
-                        row.get("merchant_raw", "NA"),
-                        row.get("amount", "NA"),
-                        row.get("reference_id", "NA"),
-                    )
-                )
+def _dedupe_hash_key(row: dict[str, str], account_scope: str = "") -> str:
+    merchant_raw = str(row.get("merchant_raw", "NA") or "NA")
+    merchant_norm = re.sub(r"[^a-z0-9]+", " ", merchant_raw.lower()).strip()
+    date_norm = str(row.get("date", "NA") or "NA").strip()
+    ref_norm = str(row.get("reference_id", "NA") or "NA").strip().upper()
 
-    mode = "a" if append and csv_path.exists() else "w"
-    with csv_path.open(mode, encoding="utf-8", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
-        if mode == "w":
+    amount_raw = str(row.get("amount", "NA") or "NA").strip()
+    amount_parsed = _parse_amount(amount_raw)
+    amount_norm = f"{amount_parsed:.2f}" if amount_parsed is not None else amount_raw
+
+    key = "|".join([account_scope, date_norm, merchant_norm, amount_norm, ref_norm])
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()
+
+
+def _write_csv_rows(csv_path: Path, rows: List[dict[str, str]], append: bool, account_scope: str = "") -> None:
+    normalized_rows = [{k: (v if str(v).strip() else "NA") for k, v in row.items()} for row in rows]
+
+    if not append or not csv_path.exists():
+        with csv_path.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
             writer.writeheader()
-        for row in rows:
-            row_clean = {k: (v if str(v).strip() else "NA") for k, v in row.items()}
-            key = (
-                row_clean["date"],
-                row_clean["merchant_raw"],
-                row_clean["amount"],
-                row_clean["reference_id"],
-            )
-            if key in existing_keys:
-                continue
-            writer.writerow(row_clean)
-            existing_keys.add(key)
+            for row in normalized_rows:
+                writer.writerow(row)
+        return
+
+    # Append mode with strong dedupe + overwrite semantics (incoming rows win).
+    merged: dict[str, dict[str, str]] = {}
+    order: list[str] = []
+    with csv_path.open("r", encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            row_clean = {k: (row.get(k, "NA") or "NA") for k in CSV_COLUMNS}
+            key = _dedupe_hash_key(row_clean, account_scope=account_scope)
+            if key not in merged:
+                order.append(key)
+            merged[key] = row_clean
+
+    for row in normalized_rows:
+        key = _dedupe_hash_key(row, account_scope=account_scope)
+        if key not in merged:
+            order.append(key)
+        merged[key] = row
+
+    with csv_path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
+        writer.writeheader()
+        for key in order:
+            writer.writerow(merged[key])
+
+
+def _file_sha256(path: Path) -> Optional[str]:
+    try:
+        h = hashlib.sha256()
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
 
 
 def export_transactions_csv(payload: dict, pdf_path: Path) -> Path:
@@ -1225,21 +1406,47 @@ def persist_uploaded_statement(
 
     period = statement.get("statement_period")
     period_slug = _statement_range_slug(period, Path(input_name))
-    base_pdf_name = f"{period_slug}_{account_slug}_{_sanitize_slug(Path(input_name).stem, 'statement')}.pdf"
+    original_slug = _sanitize_slug(Path(input_name).stem, "statement")
+    bank_short = _bank_short_slug(statement.get("bank_name"), input_name)
+    base_pdf_name = f"{original_slug}_{bank_short}{account_slug}.pdf"
     saved_pdf_path = user_raw_dir / base_pdf_name
-    if saved_pdf_path.exists():
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        saved_pdf_path = user_raw_dir / f"{period_slug}_{account_slug}_{_sanitize_slug(Path(input_name).stem, 'statement')}_{stamp}.pdf"
-    saved_pdf_path.write_bytes(pdf_bytes)
+    incoming_hash = hashlib.sha256(pdf_bytes).hexdigest()
+    reused_existing = False
+
+    # Reuse existing identical PDF instead of creating duplicate copies.
+    candidates = sorted(user_raw_dir.glob("*.pdf"))
+    for candidate in candidates:
+        existing_hash = _file_sha256(candidate)
+        if existing_hash and existing_hash == incoming_hash:
+            saved_pdf_path = candidate
+            reused_existing = True
+            break
+
+    # If identical content exists under an old naming pattern, normalize filename now.
+    if reused_existing and saved_pdf_path.name != base_pdf_name:
+        normalized_target = user_raw_dir / base_pdf_name
+        if not normalized_target.exists():
+            try:
+                saved_pdf_path.rename(normalized_target)
+                saved_pdf_path = normalized_target
+            except OSError:
+                pass
+
+    if not reused_existing:
+        if saved_pdf_path.exists():
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            saved_pdf_path = user_raw_dir / f"{original_slug}_{bank_short}{account_slug}_{stamp}.pdf"
+        saved_pdf_path.write_bytes(pdf_bytes)
 
     account_csv_name = f"acc_{account_slug}.csv"
     account_csv_path = user_processed_dir / account_csv_name
     rows = _build_csv_rows(payload, saved_pdf_path.name)
-    _write_csv_rows(account_csv_path, rows, append=True)
+    _write_csv_rows(account_csv_path, rows, append=True, account_scope=account_slug)
 
     return {
         "saved_pdf_path": str(saved_pdf_path),
         "account_csv_path": str(account_csv_path),
+        "pdf_reused": "1" if reused_existing else "0",
     }
 
 
@@ -1304,8 +1511,17 @@ def extract_text(pdf_path: Path) -> List[str]:
 
 
 def _detect_config_path(lines: List[str], config_dir: Path) -> Optional[Path]:
-    # Match bank aliases from any config JSON in the same directory.
+    # Match bank aliases from any config JSON in the same directory
+    # using token boundaries to avoid false positives (e.g., "boa" in "bonus").
     text = " ".join(lines).lower()
+    best_path: Optional[Path] = None
+    best_score = -1
+
+    def alias_matches(alias: str) -> bool:
+        escaped = re.escape(alias)
+        pattern = rf"(?<![a-z0-9]){escaped}(?![a-z0-9])"
+        return re.search(pattern, text) is not None
+
     for cfg_path in sorted(config_dir.glob("*.json")):
         try:
             with cfg_path.open("r", encoding="utf-8") as fh:
@@ -1317,9 +1533,14 @@ def _detect_config_path(lines: List[str], config_dir: Path) -> Optional[Path]:
             continue
         for alias in aliases:
             alias_str = str(alias).lower().strip()
-            if alias_str and alias_str in text:
-                return cfg_path
-    return None
+            if not alias_str:
+                continue
+            if alias_matches(alias_str):
+                score = len(alias_str)
+                if score > best_score:
+                    best_score = score
+                    best_path = cfg_path
+    return best_path
 
 
 def _parse_amount(value: str) -> Optional[float]:
@@ -1359,11 +1580,50 @@ def _is_ignorable_tail(tail: str) -> bool:
         return True
     tokens = stripped.split()
     for token in tokens:
+        if re.fullmatch(r"\+?\d{1,3}[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}", token):
+            continue
+        if re.fullmatch(r"[0-9.,-]+", token):
+            continue
+        if re.fullmatch(r"#?[0-9]{6,}", token):
+            continue
         ok = any(re.fullmatch(p, token, flags=re.IGNORECASE) for p in ParserConfig.IGNORABLE_TAIL_PATTERNS)
         if not ok and _is_state_abbr(token.upper()):
             ok = True
         if not ok:
             return False
+    return True
+
+
+def _is_redundant_tail(remainder: str, amount_match: re.Match[str]) -> bool:
+    tail = remainder[amount_match.end() :].strip()
+    if not tail:
+        return True
+    if _is_ignorable_tail(tail):
+        return True
+
+    head = remainder[: amount_match.start()].upper()
+    head_tokens = set(re.findall(r"[A-Z0-9*'/.-]+", head))
+    descriptor_tokens: set[str] = set()
+    for desc in ParserConfig.TRAILING_MERCHANT_DESCRIPTORS:
+        descriptor_tokens.update(re.findall(r"[A-Z0-9*'/.-]+", desc.upper()))
+
+    for token in re.findall(r"[A-Z0-9*'/.-]+", tail.upper()):
+        if _is_state_abbr(token):
+            continue
+        if re.fullmatch(r"\+?\d{1,3}[-.]?\d{3}[-.]?\d{3}[-.]?\d{4}", token):
+            continue
+        if re.fullmatch(r"[0-9.,-]+", token):
+            continue
+        if re.fullmatch(r"#?[0-9]{6,}", token):
+            continue
+        if token in descriptor_tokens:
+            continue
+        if token in head_tokens:
+            continue
+        # Frequently OCR-concatenated "R" suffix on phone-like tokens.
+        if token.endswith("R") and token[:-1] in head_tokens:
+            continue
+        return False
     return True
 
 
@@ -1374,7 +1634,7 @@ def _choose_amount_candidate(remainder: str) -> Optional[re.Match[str]]:
     valid: List[tuple[int, int, int, re.Match[str]]] = []
     for m in candidates:
         tail = remainder[m.end() :].strip()
-        if not _is_ignorable_tail(tail):
+        if not _is_redundant_tail(remainder, m):
             continue
         amount_val = _parse_amount(m.group("amount"))
         if amount_val is None:
@@ -1394,6 +1654,10 @@ def parse_statement_info(lines: Iterable[str]) -> StatementInfo:
     info = StatementInfo()
     period_re = re.compile(r"([A-Z][a-z]+ \d{1,2}, \d{4} to [A-Z][a-z]+ \d{1,2}, \d{4})")
     acct_re = re.compile(r"(?:account number:|account #)\s*([0-9 ]{6,})", re.IGNORECASE)
+    acct_last4_re = re.compile(
+        r"(?:account|card)?\s*(?:ending|ends?)\s*(?:in)?\s*[:#-]?\s*(\d{4,})\b",
+        re.IGNORECASE,
+    )
     owner_re = re.compile(r"^[A-Z][A-Z .'-]+$")
 
     if ParserConfig.BANK_NAME:
@@ -1417,6 +1681,17 @@ def parse_statement_info(lines: Iterable[str]) -> StatementInfo:
             match = acct_re.search(line)
             if match:
                 info.account_number = re.sub(r"\s+", " ", match.group(1)).strip()
+            else:
+                # Fallback for masked statements that expose only trailing digits
+                # (e.g., "Card ending in 3384", including OCR-joined variants).
+                fallback = acct_last4_re.search(line)
+                if fallback:
+                    info.account_number = fallback.group(1)
+                else:
+                    compact = re.sub(r"[^a-z0-9]", "", lower)
+                    compact_match = re.search(r"(?:account|card)?(?:ending|ends?)(?:in)?(\d{4,})\b", compact)
+                    if compact_match:
+                        info.account_number = compact_match.group(1)
 
         if info.owner_name is None:
             if "account holder" in lower or "primary account" in lower:
@@ -1494,6 +1769,8 @@ def parse_transactions(lines: Iterable[str]) -> List[Transaction]:
         date = anchor.group("date")
         remainder = text[anchor.end() :].strip()
         remainder = _stage_a_truncate(remainder)
+        if _is_non_transaction_row(remainder):
+            continue
 
         amount_match = _choose_amount_candidate(remainder)
         if not amount_match:
@@ -1576,41 +1853,295 @@ def parse_transactions(lines: Iterable[str]) -> List[Transaction]:
 
 def parse_account_summary(lines: Iterable[str]) -> AccountSummary:
     summary = AccountSummary()
-    in_summary = False
+
+    aliases = ParserConfig.SUMMARY_ALIASES
+
+    def normalized(text: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+    def alias_hit(line_lower: str, key: str) -> bool:
+        line_norm = normalized(line_lower)
+        for alias in aliases.get(key, []):
+            if normalized(alias) and normalized(alias) in line_norm:
+                return True
+        return False
+
+    def normalize_summary_amount(field: str, raw_amount: str) -> str:
+        parsed = _parse_amount(raw_amount)
+        if parsed is None:
+            return raw_amount
+        if field == "deposits_additions":
+            return _format_money(abs(parsed))
+        if field in {"withdrawals_subtractions", "service_fees", "checks"}:
+            amt = abs(parsed)
+            return f"-{_format_money(amt)}" if amt > 0 else _format_money(amt)
+        return raw_amount
+
+    def extract_amount(line: str) -> Optional[str]:
+        matches = list(AMOUNT_RE.finditer(line))
+        if not matches:
+            return None
+        return matches[-1].group("amount").strip()
 
     for line in lines:
         lower = line.lower()
-
-        if lower.startswith("account summary"):
-            in_summary = True
+        amount = extract_amount(line)
+        if not amount:
             continue
 
-        if in_summary and ("important information" in lower or "date description amount" in lower):
-            break
-
-        if not in_summary:
+        if summary.beginning_balance is None and alias_hit(lower, "beginning_balance"):
+            summary.beginning_balance = normalize_summary_amount("beginning_balance", amount)
+            date_match = re.search(r"\bon\b\s+(.+?)\s+\(?-?\$?\d[\d,]*\.\d{2}\)?", line, re.IGNORECASE)
+            if date_match:
+                summary.beginning_balance_date = date_match.group(1).strip()
             continue
 
-        if "beginning balance on" in lower:
-            summary.beginning_balance = line.split()[-1]
-            match = re.search(r"beginning balance on (.+?)\s+\$?[-0-9,]+\.\d{2}", line, re.IGNORECASE)
-            if match:
-                summary.beginning_balance_date = match.group(1).strip()
-        elif "deposits and other additions" in lower:
-            summary.deposits_additions = line.split()[-1]
-        elif "withdrawals and other subtractions" in lower:
-            summary.withdrawals_subtractions = line.split()[-1]
-        elif lower.startswith("checks"):
-            summary.checks = line.split()[-1]
-        elif lower.startswith("service fees"):
-            summary.service_fees = line.split()[-1]
-        elif "ending balance on" in lower:
-            summary.ending_balance = line.split()[-1]
-            match = re.search(r"ending balance on (.+?)\s+\$?[-0-9,]+\.\d{2}", line, re.IGNORECASE)
-            if match:
-                summary.ending_balance_date = match.group(1).strip()
+        if summary.ending_balance is None and alias_hit(lower, "ending_balance"):
+            summary.ending_balance = normalize_summary_amount("ending_balance", amount)
+            date_match = re.search(r"\bon\b\s+(.+?)\s+\(?-?\$?\d[\d,]*\.\d{2}\)?", line, re.IGNORECASE)
+            if date_match:
+                summary.ending_balance_date = date_match.group(1).strip()
+            continue
+
+        if summary.deposits_additions is None and alias_hit(lower, "deposits_additions"):
+            summary.deposits_additions = normalize_summary_amount("deposits_additions", amount)
+            continue
+
+        if summary.withdrawals_subtractions is None and alias_hit(lower, "withdrawals_subtractions"):
+            summary.withdrawals_subtractions = normalize_summary_amount("withdrawals_subtractions", amount)
+            continue
+
+        if summary.service_fees is None and alias_hit(lower, "service_fees"):
+            summary.service_fees = normalize_summary_amount("service_fees", amount)
+            continue
+
+        if summary.checks is None and alias_hit(lower, "checks"):
+            summary.checks = normalize_summary_amount("checks", amount)
 
     return summary
+
+
+def _format_money(value: float) -> str:
+    return f"{value:,.2f}"
+
+
+def apply_summary_fallback(summary: AccountSummary, transactions: List[Transaction]) -> AccountSummary:
+    deposits = 0.0
+    withdrawals = 0.0
+    fees = 0.0
+    for txn in transactions:
+        amount = _parse_amount(txn.amount)
+        if amount is None:
+            continue
+        txn_type = (txn.txn_type or "").lower()
+        if txn_type == "fees":
+            fees += abs(amount)
+            continue
+        if txn_type == "deposits" or amount > 0:
+            deposits += abs(amount)
+        elif txn_type == "withdrawals" or amount < 0:
+            withdrawals += abs(amount)
+
+    if summary.deposits_additions is None and deposits > 0:
+        summary.deposits_additions = _format_money(deposits)
+    if summary.withdrawals_subtractions is None and withdrawals > 0:
+        summary.withdrawals_subtractions = f"-{_format_money(withdrawals)}"
+    if summary.service_fees is None and fees > 0:
+        summary.service_fees = f"-{_format_money(fees)}"
+    return summary
+
+
+def _normalize_label(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text.lower())).strip()
+
+
+def _compact_label(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def _canonical_summary_key(label: str) -> Optional[str]:
+    norm = _normalize_label(label)
+    compact_norm = _compact_label(label)
+    if not norm:
+        return None
+    for key, aliases in ParserConfig.SUMMARY_ALIASES.items():
+        for alias in aliases:
+            alias_norm = _normalize_label(alias)
+            alias_compact = _compact_label(alias)
+            if (alias_norm and alias_norm in norm) or (alias_compact and alias_compact in compact_norm):
+                return key
+    return None
+
+
+def extract_dynamic_summary(lines: Iterable[str]) -> List[dict[str, str]]:
+    ignore_markers = [
+        "trans date",
+        "merchantcategory",
+        "importantinformation",
+        "cashback bonus",
+        "redeemedthisperiod",
+        "warning",
+        "minimum payment warning",
+        "midnight eastern",
+        "account made after",
+        "cardmember agreement",
+        "directpayautomaticpayment",
+        "your next directpay automatic payment",
+        "willbeon",
+    ]
+    summary_signal_terms = {
+        "balance",
+        "payment",
+        "payments",
+        "credit",
+        "credits",
+        "purchase",
+        "purchases",
+        "debit",
+        "debits",
+        "fee",
+        "fees",
+        "interest",
+        "checks",
+        "deposit",
+        "deposits",
+        "withdrawal",
+        "withdrawals",
+        "due",
+        "minimum",
+        "total",
+    }
+    known_credit_labels = [
+        ("minimum payment due", "minimum_payment_due", "Minimum Payment Due"),
+    ]
+    canonical_labels = {
+        "beginning_balance": "Previous Balance",
+        "deposits_additions": "Payments and Credits",
+        "withdrawals_subtractions": "Purchases",
+        "checks": "Checks",
+        "service_fees": "Fees Charged",
+        "ending_balance": "New Balance",
+    }
+    entries: dict[str, dict[str, str]] = {}
+
+    def extract_amount(line: str) -> Optional[str]:
+        matches = list(AMOUNT_RE.finditer(line))
+        if not matches:
+            return None
+        signed = [m for m in matches if m.group("amount").startswith(("+", "-", "("))]
+        if signed:
+            return signed[0].group("amount").strip()
+        return matches[0].group("amount").strip()
+
+    for raw in lines:
+        line = re.sub(r"\s+", " ", raw).strip()
+        if not line:
+            continue
+        lower = line.lower()
+        if any(marker in lower for marker in ignore_markers):
+            continue
+        if DATE_ANCHOR_RE.match(line):
+            continue
+        amount = extract_amount(line)
+        if not amount:
+            continue
+        amount_idx = line.find(amount)
+        if amount_idx <= 0:
+            continue
+        label = line[:amount_idx].strip(" :-|")
+        if not label:
+            continue
+        if len(re.findall(r"[A-Za-z]", label)) < 3:
+            continue
+        if len(label) > 80:
+            continue
+        compact_label = _compact_label(label)
+        if not any(term in compact_label for term in summary_signal_terms):
+            continue
+        matched_known = None
+        for alias, known_key, known_display in known_credit_labels:
+            if _compact_label(alias) in compact_label:
+                matched_known = (known_key, known_display)
+                break
+        if matched_known:
+            key, display = matched_known
+        else:
+            canon = _canonical_summary_key(label)
+            if canon:
+                key = canon
+                display = canonical_labels.get(canon, " ".join(c.capitalize() for c in canon.split("_")))
+            else:
+                key = _normalize_label(label)[:64]
+                display = re.sub(r"\s+", " ", label).strip()
+        if key and key not in entries:
+            entries[key] = {"key": key, "label": display, "amount": amount}
+
+        norm_line = _normalize_label(line)
+        for alias, k, display_label in known_credit_labels:
+            if alias in norm_line and k not in entries:
+                entries[k] = {"key": k, "label": display_label, "amount": amount}
+    return list(entries.values())
+
+
+def infer_statement_type(dynamic_summary: List[dict[str, str]], lines: Iterable[str]) -> str:
+    label_text = " ".join(item.get("label", "").lower() for item in dynamic_summary)
+    page_text = " ".join(str(x).lower() for x in lines)
+    text = f"{label_text} {page_text}"
+    credit_signals = [
+        "minimum payment due",
+        "credit limit",
+        "available credit",
+        "new balance",
+        "payments and credits",
+        "purchases",
+        "cash advance",
+        "balance transfer",
+    ]
+    debit_signals = [
+        "beginning balance",
+        "ending balance",
+        "deposits",
+        "withdrawals",
+        "checks",
+        "service fees",
+    ]
+    credit_score = sum(1 for s in credit_signals if s in text)
+    debit_score = sum(1 for s in debit_signals if s in text)
+    if credit_score > debit_score:
+        return "credit"
+    if debit_score > credit_score:
+        return "debit"
+    return "unknown"
+
+
+def build_summary_cards(
+    summary: AccountSummary,
+    dynamic_summary: List[dict[str, str]],
+    statement_type: str,
+) -> List[dict[str, str]]:
+    if statement_type == "credit" and dynamic_summary:
+        priority = {
+            "beginning_balance": 0,
+            "deposits_additions": 1,
+            "withdrawals_subtractions": 2,
+            "service_fees": 3,
+            "ending_balance": 4,
+            "minimum_payment_due": 5,
+        }
+        ranked = sorted(dynamic_summary, key=lambda x: priority.get(str(x.get("key")), 99))
+        return ranked[:8]
+    fixed_cards = [
+        {"key": "beginning_balance", "label": "Beginning Balance", "amount": summary.beginning_balance or "-"},
+        {"key": "deposits_additions", "label": "Income", "amount": summary.deposits_additions or "-"},
+        {"key": "withdrawals_subtractions", "label": "Expenses", "amount": summary.withdrawals_subtractions or "-"},
+        {"key": "service_fees", "label": "Service Fees", "amount": summary.service_fees or "-"},
+        {"key": "ending_balance", "label": "Ending Balance", "amount": summary.ending_balance or "-"},
+    ]
+    if statement_type == "debit":
+        return fixed_cards
+    if dynamic_summary:
+        return dynamic_summary[:8]
+    return fixed_cards
 
 
 def print_statement(info: StatementInfo, summary: AccountSummary, transactions: List[Transaction]) -> None:
@@ -1720,12 +2251,19 @@ def parse_pdf_to_payload(pdf_path: Path, config_path: Optional[Path] = None) -> 
         auto_path = _detect_config_path(lines, PROJECT_ROOT / "config")
         if auto_path is not None:
             config_path = auto_path
+        else:
+            fallback_unknown = PROJECT_ROOT / "config" / "unknown_config.json"
+            if fallback_unknown.exists():
+                config_path = fallback_unknown
     ParserConfig.load_from_json(config_path)
     MerchantNormalizationConfig.load_from_json()
 
     info = parse_statement_info(lines)
-    summary = parse_account_summary(lines)
     transactions = parse_transactions(lines)
+    summary = apply_summary_fallback(parse_account_summary(lines), transactions)
+    dynamic_summary = extract_dynamic_summary(lines)
+    statement_type = infer_statement_type(dynamic_summary, lines)
+    summary_cards = build_summary_cards(summary, dynamic_summary, statement_type)
 
     tx_payload = []
     for txn in transactions:
@@ -1749,6 +2287,7 @@ def parse_pdf_to_payload(pdf_path: Path, config_path: Optional[Path] = None) -> 
     }
 
     return {
+        "statement_type": statement_type,
         "statement_info": {
             "bank_name": info.bank_name,
             "account_name": info.account_name,
@@ -1766,6 +2305,8 @@ def parse_pdf_to_payload(pdf_path: Path, config_path: Optional[Path] = None) -> 
             "ending_balance": summary.ending_balance,
             "ending_balance_date": summary.ending_balance_date,
         },
+        "account_summary_dynamic": dynamic_summary,
+        "summary_cards": summary_cards,
         "transactions": tx_payload,
         "parse_stats": parse_stats,
     }

@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import os
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -44,13 +45,21 @@ def _csv_bytes(rows: list[dict[str, str]]) -> bytes:
     return buff.getvalue().encode("utf-8")
 
 
-def _csv_row_key(row: dict[str, str]) -> tuple[str, str, str, str]:
-    return (
-        row.get("date", "NA"),
-        row.get("merchant_raw", "NA"),
-        row.get("amount", "NA"),
-        row.get("reference_id", "NA"),
-    )
+def _csv_row_key(row: dict[str, str], account_scope: str = "") -> str:
+    merchant_raw = str(row.get("merchant_raw", "NA") or "NA")
+    merchant_norm = "".join(ch.lower() if ch.isalnum() else " " for ch in merchant_raw)
+    merchant_norm = " ".join(merchant_norm.split())
+    date_norm = str(row.get("date", "NA") or "NA").strip()
+    ref_norm = str(row.get("reference_id", "NA") or "NA").strip().upper()
+    amount_raw = str(row.get("amount", "NA") or "NA").strip()
+    try:
+        from parse_boa_pdf import _parse_amount  # lazy import to avoid cycle at module import time
+    except ModuleNotFoundError:
+        from src.parse_boa_pdf import _parse_amount
+    amount_parsed = _parse_amount(amount_raw)
+    amount_norm = f"{amount_parsed:.2f}" if amount_parsed is not None else amount_raw
+    key = "|".join([account_scope, date_norm, merchant_norm, amount_norm, ref_norm])
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()
 
 
 def _read_csv_rows(csv_data: bytes) -> list[dict[str, str]]:
@@ -62,16 +71,24 @@ def _read_csv_rows(csv_data: bytes) -> list[dict[str, str]]:
     return out
 
 
-def _merge_rows(existing: list[dict[str, str]], incoming: list[dict[str, str]]) -> list[dict[str, str]]:
-    merged = list(existing)
-    seen = {_csv_row_key(r) for r in existing}
+def _merge_rows(
+    existing: list[dict[str, str]],
+    incoming: list[dict[str, str]],
+    account_scope: str,
+) -> list[dict[str, str]]:
+    merged_map: dict[str, dict[str, str]] = {}
+    order: list[str] = []
+    for row in existing:
+        key = _csv_row_key(row, account_scope=account_scope)
+        if key not in merged_map:
+            order.append(key)
+        merged_map[key] = row
     for row in incoming:
-        key = _csv_row_key(row)
-        if key in seen:
-            continue
-        merged.append(row)
-        seen.add(key)
-    return merged
+        key = _csv_row_key(row, account_scope=account_scope)
+        if key not in merged_map:
+            order.append(key)
+        merged_map[key] = row
+    return [merged_map[k] for k in order]
 
 
 def _init_bucket() -> storage.Bucket:
@@ -112,7 +129,7 @@ def persist_payload_firebase_storage(
     csv_blob = bucket.blob(csv_blob_path)
     if csv_blob.exists():
         existing = _read_csv_rows(csv_blob.download_as_bytes())
-        rows = _merge_rows(existing, rows)
+        rows = _merge_rows(existing, rows, account_scope=account_id)
     csv_blob.upload_from_string(_csv_bytes(rows), content_type="text/csv; charset=utf-8")
 
     return {

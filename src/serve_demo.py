@@ -114,7 +114,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
             payload["transactions"] = categorize_transactions(payload.get("transactions", []))
             if bootstrap_result:
                 payload["config_bootstrap"] = bootstrap_result
-            persist_mode = os.environ.get("PERSIST_MODE", "local").strip().lower()
+            persist_mode = self._resolve_persist_mode()
             if persist_mode in {"firebase", "firebase_storage", "firestore"}:
                 from cloud_persistence import persist_payload_firebase_storage
 
@@ -142,6 +142,17 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 pass
 
         self._send_json(HTTPStatus.OK, payload)
+
+    def _resolve_persist_mode(self) -> str:
+        configured = os.environ.get("PERSIST_MODE", "").strip().lower()
+        if configured:
+            return configured
+        # Auto mode:
+        # - Cloud deployments default to Firebase Storage
+        # - Local runs default to local filesystem persistence
+        if os.environ.get("K_SERVICE") or os.environ.get("GAE_ENV"):
+            return "firebase_storage"
+        return "local"
 
     def _log_category_summary(self, transactions: list[dict]) -> None:
         counts: dict[str, int] = {}

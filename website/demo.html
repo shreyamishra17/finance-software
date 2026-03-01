@@ -121,6 +121,17 @@
       }
 
       function renderSummary(payload) {
+        const dynamicCards = Array.isArray(payload.summary_cards) ? payload.summary_cards : [];
+        if (dynamicCards.length) {
+          resultsSummary.innerHTML = dynamicCards
+            .map((card) => {
+              const label = card.label || card.key || "Summary";
+              const value = card.amount || "-";
+              return `<div class="result-card"><div class="result-label">${label}</div><div class="result-value">${value}</div></div>`;
+            })
+            .join("");
+          return;
+        }
         const summary = payload.account_summary || {};
         const income = summary.deposits_additions || "-";
         const expenses = summary.withdrawals_subtractions || "-";

@@ -9,7 +9,8 @@
     "Madrid",
     "Philadelphia",
     "Carlsbad",
-    "Universal City"
+    "Universal City",
+    "San Francisco"
   ],
   "state_abbrs": [
     "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
@@ -34,5 +35,62 @@
   },
   "strip_suffix_tokens": [
     "LAJ"
-  ]
+  ],
+  "trailing_merchant_descriptors": [
+    "MERCHANDISE",
+    "SERVICES",
+    "DEPARTMENT STORE",
+    "TRAVEL/ENTERTAINMENT",
+    "TRAVEL ENTERTAINMENT",
+    "TRAVEL-ENTERTAINMENT",
+    "AUTOMOTIVE",
+    "GROCERY",
+    "RESTAURANT"
+  ],
+  "non_transaction_patterns": [
+    "cashback\\s+bonus",
+    "redeemed\\s*this\\s*period",
+    "important\\s*information",
+    "credit\\s*scorecard",
+    "see\\s+details\\s+of\\s+your\\s+next\\s+directpay",
+    "trans\\.?\\s*date\\s+purchases\\s+merchant"
+  ],
+  "summary_aliases": {
+    "beginning_balance": [
+      "beginning balance",
+      "opening balance",
+      "previous balance",
+      "starting balance"
+    ],
+    "deposits_additions": [
+      "deposits",
+      "credits",
+      "payments and credits",
+      "money in",
+      "total credits"
+    ],
+    "withdrawals_subtractions": [
+      "withdrawals",
+      "debits",
+      "purchases",
+      "money out",
+      "total debits"
+    ],
+    "checks": [
+      "checks",
+      "check payments"
+    ],
+    "service_fees": [
+      "service fees",
+      "fees charged",
+      "finance charges",
+      "charges and fees"
+    ],
+    "ending_balance": [
+      "ending balance",
+      "new balance",
+      "closing balance",
+      "current balance"
+    ]
+  }
 }
