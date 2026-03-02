@@ -93,13 +93,7 @@ def _merge_rows(
 
 def _init_bucket() -> storage.Bucket:
     if not firebase_admin._apps:
-        creds_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON", "").strip()
-        if creds_json:
-            import json as _json
-            cred = credentials.Certificate(_json.loads(creds_json))
-        else:
-            cred = credentials.ApplicationDefault()
-        firebase_admin.initialize_app(cred)
+        firebase_admin.initialize_app(credentials.ApplicationDefault())
     bucket_name = os.environ.get("FIREBASE_STORAGE_BUCKET", "").strip()
     if not bucket_name:
         raise RuntimeError("FIREBASE_STORAGE_BUCKET is required for firebase persistence mode")
