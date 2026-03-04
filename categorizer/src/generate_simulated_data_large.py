@@ -220,13 +220,13 @@ def main() -> None:
     parser.add_argument(
         "--input",
         type=Path,
-        default=Path("categorizer/datasets/dataset_large.csv"),
+        required=True,
         help="Input CSV containing transaction_description and category columns.",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("categorizer/simulated_data_large.csv"),
+        default=Path("categorizer/datasets/simulated_data_large.csv"),
         help="Output CSV path.",
     )
     parser.add_argument(
