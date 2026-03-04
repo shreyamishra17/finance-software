@@ -13,69 +13,25 @@ from typing import Iterable, Optional
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_RULES_PATH = PROJECT_ROOT / "config" / "category_rules.json"
 DEFAULT_BERT_MODEL_DIR = PROJECT_ROOT / "categorizer" / "models" / "bert_distilbert_50k_full"
-CATEGORY_ALIASES: dict[str, str] = {}
 
-# Hardcoded fat-head merchants (layer 1)
-FAT_HEAD_MERCHANTS: dict[str, list[str]] = {
-    "Amazon": [
-        "AMZN",
-        "AMZN MKTP",
-        "AMAZON.COM",
-        "AMZN.COM/BILL",
-        "PRIME VDO",
-        "AMZN PRIME",
-        "AMAZON WEB SERVICES",
-        "AWS",
-    ],
-    "Walmart": ["WM SUPERCENTER", "WAL-MART", "WALMART.COM", "WMT", "WALMART STORE", "WM EZPAY"],
-    "Target": ["TARGET T-", "TGT", "TARGET.COM", "TARGET STORE"],
-    "Apple": ["APPLE.COM/BILL", "APL* ITUNES", "AAPL", "APPL", "APPLE STORE", "APPLE ONLINE"],
-    "Costco": ["COSTCO WHSE", "COSTCO.COM", "COSTCO GAS", "COSTCO AUTO"],
-    "Kroger": ["KROGER", "KROGER FUEL", "KROGER #", "PAY AT THE PUMP KROGER"],
-    "Whole Foods": ["WHOLEFDS", "WHOLE FOODS", "WFM", "WHOLE FOODS MKT"],
-    "Trader Joe's": ["TRADER JOE", "TRADER JOES", "TRADER JOE'S"],
-    "Uber": ["UBER *TRIP", "UBER* TRIP", "UBR", "UBER PENDING", "UBER FEE"],
-    "Lyft": ["LYFT *RIDE", "LYFT RIDE", "LYFT INC"],
-    "Shell": ["SHELL OIL", "SHELL SERVICE", "SHELL PUMP"],
-    "Chevron": ["CHEVRON", "CHEVRON/MACONS", "CHEVRON PUMP"],
-    "DoorDash": ["DOORDASH", "DD *DOORDASH", "DOORDASH*DASHPASS"],
-    "UberEats": ["UBER EATS", "UBER*EATS", "UBEREATS"],
-    "Starbucks": ["STARBUCKS", "STARBUCKS STORE", "SBUX", "STARBUCKS APP"],
-    "McDonald's": ["MCDONALDS", "MCDONALD'S", "MCD", "MCDONALDS F"],
-    "Chick-fil-A": ["CHICK-FIL-A", "CHICKFILA", "CFA"],
-    "Netflix": ["NETFLIX.COM", "NETFLIX", "NFLX"],
-    "Spotify": ["SPOTIFY USA", "SPOTIFY", "SPTFY"],
-    "Hulu": ["HULU", "HULU.COM", "HULU *SUB"],
-    "Disney+": ["DISNEY PLUS", "DISNEY+", "DISNEY MOBILE"],
-    "CVS": ["CVS/PHARMACY", "CVS PHARMACY", "CVS STORE"],
-    "Walgreens": ["WALGREENS", "WALGREENS STORE", "WLGREENS", "WALGRNS"],
+DEFAULT_CATEGORY_ALIASES: dict[str, str] = {
+    "CASH & ATM": "Finance",
+    "ENTERTAINMENT & RECREATION": "Entertainment",
+    "FINANCIAL SERVICES": "Finance",
+    "FOOD & DINING": "Food & Drink",
+    "FOOD & DRINK/GROCERIES": "Groceries",
+    "HEALTH/SHOPPING": "Health",
+    "HEALTHCARE & MEDICAL": "Health",
+    "OTHER/MISC": "Miscellaneous",
+    "SHOPPING & RETAIL": "Shopping",
+    "TRANSPORTATION": "Transport",
+    "TRANSFER": "Finance",
+    "UTILITIES & SERVICES": "Utilities & Bills",
 }
 
-MERCHANT_CATEGORY: dict[str, str] = {
-    "Amazon": "Shopping",
-    "Walmart": "Shopping",
-    "Target": "Shopping",
-    "Apple": "Shopping",
-    "Costco": "Groceries",
-    "Kroger": "Groceries",
-    "Whole Foods": "Groceries",
-    "Trader Joe's": "Groceries",
-    "Uber": "Transport",
-    "Lyft": "Transport",
-    "Shell": "Transport",
-    "Chevron": "Transport",
-    "DoorDash": "Food & Drink",
-    "UberEats": "Food & Drink",
-    "Starbucks": "Food & Drink",
-    "McDonald's": "Food & Drink",
-    "Chick-fil-A": "Food & Drink",
-    "Netflix": "Entertainment",
-    "Spotify": "Entertainment",
-    "Hulu": "Entertainment",
-    "Disney+": "Entertainment",
-    "CVS": "Health",
-    "Walgreens": "Health",
-}
+# Cache for loaded rules — avoids re-reading the file for every transaction in a batch
+_RULES_DATA: Optional[dict] = None
+_RULES_PATH_LOADED: Optional[Path] = None
 
 
 @dataclass
@@ -98,10 +54,14 @@ _BERT_CACHE: dict[str, object] = {
 
 
 def _load_rules(path: Optional[Path]) -> dict:
+    global _RULES_DATA, _RULES_PATH_LOADED
     rules_path = path or DEFAULT_RULES_PATH
+    if _RULES_DATA is not None and _RULES_PATH_LOADED == rules_path:
+        return _RULES_DATA
     try:
         with rules_path.open("r", encoding="utf-8") as fh:
-            data = json.load(fh)
+            _RULES_DATA = json.load(fh)
+            _RULES_PATH_LOADED = rules_path
     except (OSError, json.JSONDecodeError):
         return {
             "default_category": "Uncategorized",
@@ -109,15 +69,66 @@ def _load_rules(path: Optional[Path]) -> dict:
             "high_confidence": [],
             "merchant_rules": [],
         }
-    return data
+    return _RULES_DATA
 
 
 def _normalize(text: str) -> str:
     return " ".join(text.upper().split())
 
 
-def _normalize_category_name(name: str) -> str:
-    return CATEGORY_ALIASES.get(name, name)
+def _canonical_categories(rules: dict) -> dict[str, str]:
+    categories: dict[str, str] = {}
+    default_category = str(rules.get("default_category", "Uncategorized")).strip()
+    if default_category:
+        categories[_normalize(default_category)] = default_category
+    for rule in rules.get("high_confidence", []):
+        cat = str(rule.get("category", "")).strip()
+        if cat:
+            categories[_normalize(cat)] = cat
+    for rule in rules.get("merchant_rules", []):
+        cat = str(rule.get("category", "")).strip()
+        if cat:
+            categories[_normalize(cat)] = cat
+    return categories
+
+
+def _canonicalize_category_name(name: str, rules: dict) -> str:
+    raw = str(name or "").strip()
+    if not raw:
+        return str(rules.get("default_category", "Uncategorized"))
+
+    canon = _canonical_categories(rules)
+    raw_norm = _normalize(raw)
+    if raw_norm in canon:
+        return canon[raw_norm]
+
+    aliases: dict[str, str] = {}
+    aliases.update({k.upper(): v for k, v in DEFAULT_CATEGORY_ALIASES.items()})
+    cfg_aliases = rules.get("category_aliases", {})
+    if isinstance(cfg_aliases, dict):
+        aliases.update(
+            {
+                _normalize(str(k)): str(v).strip()
+                for k, v in cfg_aliases.items()
+                if str(k).strip() and str(v).strip()
+            }
+        )
+
+    # Some model labels include extra metadata: "Transfer (ID : Chewy)"
+    base = re.sub(r"\s*\([^)]*\)\s*$", "", raw).strip()
+    base_norm = _normalize(base)
+
+    candidate = aliases.get(raw_norm) or aliases.get(base_norm)
+    if not candidate and base_norm.startswith("TRANSFER"):
+        candidate = "Finance"
+
+    if candidate:
+        cand_norm = _normalize(candidate)
+        if cand_norm in canon:
+            return canon[cand_norm]
+        return candidate
+
+    return raw
 
 
 def _keyword_pattern(keyword: str) -> re.Pattern[str]:
@@ -137,22 +148,6 @@ def _find_keyword_match(haystack: str, keywords: Iterable[str]) -> Optional[str]
     return None
 
 
-def _transaction_text(txn: dict) -> str:
-    raw = str(txn.get("raw_description") or txn.get("merchant_raw") or "")
-    merchant = str(txn.get("merchant_clean") or "")
-    return _normalize(" ".join([merchant, raw]))
-
-
-def _match_fat_head(txn: dict) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    haystack = _transaction_text(txn)
-    if not haystack:
-        return None, None, None
-    for merchant, patterns in FAT_HEAD_MERCHANTS.items():
-        for pattern in patterns:
-            if _normalize(pattern) in haystack:
-                category = _normalize_category_name(MERCHANT_CATEGORY.get(merchant, "Shopping"))
-                return category, merchant, pattern
-    return None, None, None
 
 
 def _select_device(torch_module):
@@ -251,21 +246,19 @@ def _init_bert() -> bool:
 
 
 # Layer 3 fallback: existing keyword rules engine.
-def _categorize_by_rules(txn: dict, rules_path: Optional[Path] = None) -> CategoryResult:
-    rules = _load_rules(rules_path)
-
-    default_category = _normalize_category_name(str(rules.get("default_category", "Uncategorized")))
+def _categorize_by_rules(txn: dict, rules: dict) -> CategoryResult:
+    default_category = _canonicalize_category_name(str(rules.get("default_category", "Uncategorized")), rules)
     default_confidence = float(rules.get("default_confidence", 0.2))
 
-    raw = str(txn.get("raw_description", ""))
-    merchant = str(txn.get("merchant_clean", ""))
+    raw = str(txn.get("raw_description") or txn.get("merchant_raw") or "")
+    merchant = str(txn.get("merchant_clean") or "")
     haystack = _normalize(" ".join([merchant, raw]))
 
     for rule in rules.get("high_confidence", []):
         keywords = rule.get("keywords", [])
         matched = _find_keyword_match(haystack, keywords)
         if matched:
-            category = _normalize_category_name(str(rule.get("category", default_category)))
+            category = _canonicalize_category_name(str(rule.get("category", default_category)), rules)
             return CategoryResult(
                 category=category,
                 confidence=float(rule.get("confidence", 0.9)),
@@ -278,7 +271,7 @@ def _categorize_by_rules(txn: dict, rules_path: Optional[Path] = None) -> Catego
         keywords = rule.get("keywords", [])
         matched = _find_keyword_match(_normalize(merchant), keywords) or _find_keyword_match(haystack, keywords)
         if matched:
-            category = _normalize_category_name(str(rule.get("category", default_category)))
+            category = _canonicalize_category_name(str(rule.get("category", default_category)), rules)
             return CategoryResult(
                 category=category,
                 confidence=float(rule.get("confidence", 0.6)),
@@ -335,23 +328,18 @@ def _bert_predict_batch(texts: list[str], batch_size: int = 64, max_length: int 
         idx_np = _as_numpy(idx)
         conf_np = _as_numpy(conf)
 
-        labels.extend([_normalize_category_name(id2label[int(i)]) for i in idx_np])
+        labels.extend([id2label[int(i)] for i in idx_np])
         scores.extend([float(x) for x in conf_np])
 
     return labels, scores
 
 
 def categorize_transaction(txn: dict, rules_path: Optional[Path] = None) -> CategoryResult:
-    # Layer 1: hardcoded fat-head merchants
-    category, merchant, pattern = _match_fat_head(txn)
-    if category:
-        return CategoryResult(
-            category=category,
-            confidence=1.0,
-            matched_rule=merchant,
-            matched_keyword=pattern,
-            layer="hardcoded",
-        )
+    rules = _load_rules(rules_path)
+    # Layer 1: keyword rules from category_rules.json
+    rules_result = _categorize_by_rules(txn, rules)
+    if rules_result.layer != "rules_default":
+        return rules_result
 
     # Layer 2: BERT model fallback
     text = str(txn.get("raw_description") or txn.get("merchant_raw") or "")
@@ -359,7 +347,7 @@ def categorize_transaction(txn: dict, rules_path: Optional[Path] = None) -> Cate
         try:
             labels, scores = _bert_predict_batch([text], batch_size=1)
             return CategoryResult(
-                category=labels[0],
+                category=_canonicalize_category_name(labels[0], rules),
                 confidence=float(scores[0]),
                 matched_rule="bert_model",
                 matched_keyword=None,
@@ -382,26 +370,16 @@ def categorize_transactions(
     transactions: Iterable[dict],
     rules_path: Optional[Path] = None,
 ) -> list[dict]:
+    rules = _load_rules(rules_path)
     txns = [dict(txn) for txn in transactions]
     categorized = []
 
-    # Layer 1: hardcoded fat-head merchants.
+    # Layer 1: keyword rules from category_rules.json.
     bert_idx: list[int] = []
     bert_texts: list[str] = []
 
     for i, txn in enumerate(txns):
-        category, merchant, pattern = _match_fat_head(txn)
-        if category:
-            txn["category"] = category
-            txn["confidence"] = 1.0
-            txn["matched_rule"] = merchant
-            txn["matched_keyword"] = pattern
-            txn["category_layer"] = "hardcoded"
-            categorized.append(txn)
-            continue
-
-        # Layer 2: keyword rules from category_rules.json.
-        rules_result = _categorize_by_rules(txn, rules_path)
+        rules_result = _categorize_by_rules(txn, rules)
         if rules_result.layer != "rules_default":
             txn["category"] = rules_result.category
             txn["confidence"] = rules_result.confidence
@@ -417,13 +395,13 @@ def categorize_transactions(
             bert_texts.append(text)
         categorized.append(txn)
 
-    # Layer 3: BERT for unresolved rows.
+    # Layer 2: BERT for unresolved rows.
     bert_success = False
     if bert_texts and _init_bert():
         try:
             labels, scores = _bert_predict_batch(bert_texts)
             for idx, label, score in zip(bert_idx, labels, scores):
-                categorized[idx]["category"] = label
+                categorized[idx]["category"] = _canonicalize_category_name(label, rules)
                 categorized[idx]["confidence"] = float(score)
                 categorized[idx]["matched_rule"] = "bert_model"
                 categorized[idx]["matched_keyword"] = None
