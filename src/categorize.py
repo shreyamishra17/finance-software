@@ -13,9 +13,7 @@ from typing import Iterable, Optional
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_RULES_PATH = PROJECT_ROOT / "config" / "category_rules.json"
 DEFAULT_BERT_MODEL_DIR = PROJECT_ROOT / "categorizer" / "models" / "bert_distilbert_50k_full"
-CATEGORY_ALIASES = {
-    "Transport": "Auto & Transport",
-}
+CATEGORY_ALIASES: dict[str, str] = {}
 
 # Hardcoded fat-head merchants (layer 1)
 FAT_HEAD_MERCHANTS: dict[str, list[str]] = {
@@ -58,19 +56,19 @@ MERCHANT_CATEGORY: dict[str, str] = {
     "Walmart": "Shopping",
     "Target": "Shopping",
     "Apple": "Shopping",
-    "Costco": "Food & Drink",
-    "Kroger": "Food & Drink",
-    "Whole Foods": "Food & Drink",
-    "Trader Joe's": "Food & Drink",
-    "Uber": "Transportation",
-    "Lyft": "Transportation",
-    "Shell": "Transportation",
-    "Chevron": "Transportation",
-    "DoorDash": "Food & Dining",
-    "UberEats": "Food & Dining",
-    "Starbucks": "Food & Dining",
-    "McDonald's": "Food & Dining",
-    "Chick-fil-A": "Food & Dining",
+    "Costco": "Groceries",
+    "Kroger": "Groceries",
+    "Whole Foods": "Groceries",
+    "Trader Joe's": "Groceries",
+    "Uber": "Transport",
+    "Lyft": "Transport",
+    "Shell": "Transport",
+    "Chevron": "Transport",
+    "DoorDash": "Food & Drink",
+    "UberEats": "Food & Drink",
+    "Starbucks": "Food & Drink",
+    "McDonald's": "Food & Drink",
+    "Chick-fil-A": "Food & Drink",
     "Netflix": "Entertainment",
     "Spotify": "Entertainment",
     "Hulu": "Entertainment",
@@ -387,7 +385,7 @@ def categorize_transactions(
     txns = [dict(txn) for txn in transactions]
     categorized = []
 
-    # First pass: hardcoded matches; collect BERT fallbacks.
+    # Layer 1: hardcoded fat-head merchants.
     bert_idx: list[int] = []
     bert_texts: list[str] = []
 
@@ -402,13 +400,24 @@ def categorize_transactions(
             categorized.append(txn)
             continue
 
+        # Layer 2: keyword rules from category_rules.json.
+        rules_result = _categorize_by_rules(txn, rules_path)
+        if rules_result.layer != "rules_default":
+            txn["category"] = rules_result.category
+            txn["confidence"] = rules_result.confidence
+            txn["matched_rule"] = rules_result.matched_rule
+            txn["matched_keyword"] = rules_result.matched_keyword
+            txn["category_layer"] = rules_result.layer
+            categorized.append(txn)
+            continue
+
         text = str(txn.get("raw_description") or txn.get("merchant_raw") or "")
         if text:
             bert_idx.append(i)
             bert_texts.append(text)
         categorized.append(txn)
 
-    # Second pass: BERT for unresolved rows.
+    # Layer 3: BERT for unresolved rows.
     bert_success = False
     if bert_texts and _init_bert():
         try:

@@ -220,7 +220,7 @@ def main() -> None:
     parser.add_argument(
         "--input",
         type=Path,
-        default=Path("categorizer/dataset_large.csv"),
+        default=Path("categorizer/datasets/dataset_large.csv"),
         help="Input CSV containing transaction_description and category columns.",
     )
     parser.add_argument(

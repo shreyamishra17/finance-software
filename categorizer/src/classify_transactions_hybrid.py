@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -11,80 +13,26 @@ from torch.utils.data import DataLoader, Dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 
-FAT_HEAD_MERCHANTS: dict[str, list[str]] = {
-    # --- E-COMMERCE & RETAIL ---
-    "Amazon": [
-        "AMZN",
-        "AMZN MKTP",
-        "AMAZON.COM",
-        "AMZN.COM/BILL",
-        "PRIME VDO",
-        "AMZN PRIME",
-        "AMAZON WEB SERVICES",
-        "AWS",
-    ],
-    "Walmart": [
-        "WM SUPERCENTER",
-        "WAL-MART",
-        "WALMART.COM",
-        "WMT",
-        "WALMART STORE",
-        "WM EZPAY",
-    ],
-    "Target": ["TARGET T-", "TGT", "TARGET.COM", "TARGET STORE"],
-    "Apple": ["APPLE.COM/BILL", "APL* ITUNES", "AAPL", "APPL", "APPLE STORE", "APPLE ONLINE"],
-    # --- GROCERIES & WHOLESALE ---
-    "Costco": ["COSTCO WHSE", "COSTCO.COM", "COSTCO GAS", "COSTCO AUTO"],
-    "Kroger": ["KROGER", "KROGER FUEL", "KROGER #", "PAY AT THE PUMP KROGER"],
-    "Whole Foods": ["WHOLEFDS", "WHOLE FOODS", "WFM", "WHOLE FOODS MKT"],
-    "Trader Joe's": ["TRADER JOE", "TRADER JOES", "TRADER JOE'S"],
-    # --- TRANSPORTATION & RIDESHARE ---
-    "Uber": ["UBER *TRIP", "UBER* TRIP", "UBR", "UBER PENDING", "UBER FEE"],
-    "Lyft": ["LYFT *RIDE", "LYFT RIDE", "LYFT INC"],
-    "Shell": ["SHELL OIL", "SHELL SERVICE", "SHELL PUMP"],
-    "Chevron": ["CHEVRON", "CHEVRON/MACONS", "CHEVRON PUMP"],
-    # --- FOOD DELIVERY & DINING ---
-    "DoorDash": ["DOORDASH", "DD *DOORDASH", "DOORDASH*DASHPASS"],
-    "UberEats": ["UBER EATS", "UBER*EATS", "UBEREATS"],
-    "Starbucks": ["STARBUCKS", "STARBUCKS STORE", "SBUX", "STARBUCKS APP"],
-    "McDonald's": ["MCDONALDS", "MCDONALD'S", "MCD", "MCDONALDS F"],
-    "Chick-fil-A": ["CHICK-FIL-A", "CHICKFILA", "CFA"],
-    # --- SUBSCRIPTIONS & ENTERTAINMENT ---
-    "Netflix": ["NETFLIX.COM", "NETFLIX", "NFLX"],
-    "Spotify": ["SPOTIFY USA", "SPOTIFY", "SPTFY"],
-    "Hulu": ["HULU", "HULU.COM", "HULU *SUB"],
-    "Disney+": ["DISNEY PLUS", "DISNEY+", "DISNEY MOBILE"],
-    # --- PHARMACIES & CONVENIENCE ---
-    "CVS": ["CVS/PHARMACY", "CVS PHARMACY", "CVS STORE"],
-    "Walgreens": ["WALGREENS", "WALGREENS STORE", "WLGREENS", "WALGRNS"],
-}
+CATEGORY_RULES_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "category_rules.json"
+
+_RULES: Optional[list] = None
 
 
-MERCHANT_CATEGORY: dict[str, str] = {
-    "Amazon": "Shopping",
-    "Walmart": "Shopping",
-    "Target": "Shopping",
-    "Apple": "Shopping",
-    "Costco": "Food & Drink",
-    "Kroger": "Food & Drink",
-    "Whole Foods": "Food & Drink",
-    "Trader Joe's": "Food & Drink",
-    "Uber": "Transportation",
-    "Lyft": "Transportation",
-    "Shell": "Transportation",
-    "Chevron": "Transportation",
-    "DoorDash": "Food & Dining",
-    "UberEats": "Food & Dining",
-    "Starbucks": "Food & Dining",
-    "McDonald's": "Food & Dining",
-    "Chick-fil-A": "Food & Dining",
-    "Netflix": "Entertainment",
-    "Spotify": "Entertainment",
-    "Hulu": "Entertainment",
-    "Disney+": "Entertainment",
-    "CVS": "Health",
-    "Walgreens": "Health",
-}
+def _load_rules() -> list:
+    with CATEGORY_RULES_PATH.open(encoding="utf-8") as f:
+        data = json.load(f)
+    rules = []
+    for block in data.get("high_confidence", []) + data.get("merchant_rules", []):
+        cat = block["category"]
+        conf = block.get("confidence", 0.8)
+        for kw in block.get("keywords", []):
+            if kw.startswith("re:"):
+                pattern = re.compile(kw[3:], re.IGNORECASE)
+            else:
+                escaped = re.escape(kw.upper())
+                pattern = re.compile(rf"(?<!\w){escaped}(?!\w)")
+            rules.append((pattern, cat, kw, conf))
+    return rules
 
 
 class InferenceDataset(Dataset):
@@ -119,12 +67,15 @@ def find_text_col(df: pd.DataFrame, preferred: Optional[str]) -> str:
     raise ValueError("No text column found. Provide --text-col explicitly.")
 
 
-def hardcoded_match(text: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+def rule_match(text: str) -> tuple[Optional[str], Optional[str], Optional[float]]:
+    """Returns (category, matched_keyword, confidence) or (None, None, None)."""
+    global _RULES
+    if _RULES is None:
+        _RULES = _load_rules()
     txt = text.upper()
-    for merchant, patterns in FAT_HEAD_MERCHANTS.items():
-        for pat in patterns:
-            if pat.upper() in txt:
-                return merchant, pat, MERCHANT_CATEGORY[merchant]
+    for pattern, cat, kw, conf in _RULES:
+        if pattern.search(txt):
+            return cat, kw, conf
     return None, None, None
 
 
@@ -169,7 +120,7 @@ def bert_predict(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Hybrid transaction classifier: hardcoded fat-head + BERT fallback."
+        description="Hybrid transaction classifier: category_rules.json + BERT fallback."
     )
     parser.add_argument(
         "--input-csv",
@@ -179,7 +130,7 @@ def main() -> None:
     parser.add_argument(
         "--output-csv",
         type=Path,
-        default=Path("categorizer/hybrid_predictions.csv"),
+        default=Path("categorizer/datasets/hybrid_predictions.csv"),
     )
     parser.add_argument(
         "--model-dir",
@@ -200,16 +151,15 @@ def main() -> None:
     fallback_idx: list[int] = []
 
     for i, text in enumerate(texts):
-        merchant, pattern, category = hardcoded_match(text)
+        category, keyword, conf = rule_match(text)
         if category is not None:
             rows.append(
                 {
                     "raw_string": text,
                     "category": category,
-                    "score": 1.0,
-                    "layer": "hardcoded",
-                    "matched_merchant": merchant,
-                    "matched_pattern": pattern,
+                    "score": conf,
+                    "layer": "rules",
+                    "matched_keyword": keyword,
                 }
             )
         else:
@@ -219,8 +169,7 @@ def main() -> None:
                     "category": None,
                     "score": None,
                     "layer": "bert",
-                    "matched_merchant": None,
-                    "matched_pattern": None,
+                    "matched_keyword": None,
                 }
             )
             fallback_texts.append(text)
@@ -242,7 +191,7 @@ def main() -> None:
     out_df.to_csv(args.output_csv, index=False)
     print(f"Saved: {args.output_csv}")
     print(f"Rows: {len(out_df)}")
-    print(f"Hardcoded matches: {sum(out_df['layer'] == 'hardcoded')}")
+    print(f"Rules matches: {sum(out_df['layer'] == 'rules')}")
     print(f"BERT fallbacks: {sum(out_df['layer'] == 'bert')}")
 
 

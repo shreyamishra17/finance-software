@@ -217,7 +217,7 @@ def bootstrap_config_if_unknown(
     config_dir: Optional[Path] = None,
     force: bool = False,
 ) -> dict:
-    config_dir = (config_dir or (Path(__file__).resolve().parent.parent / "config")).expanduser()
+    config_dir = (config_dir or (Path(__file__).resolve().parent.parent / "config" / "banks")).expanduser()
     config_dir.mkdir(parents=True, exist_ok=True)
 
     lines = extract_text(pdf_path)

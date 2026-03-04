@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 *-adminsdk-*.json
 *.serviceaccount.json
+config/banks/unknown_config.json
+config/banks/*_bootstrap_report.json

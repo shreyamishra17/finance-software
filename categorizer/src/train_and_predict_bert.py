@@ -131,8 +131,8 @@ def select_device() -> torch.device:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train a BERT classifier and predict categories.")
-    parser.add_argument("--simulated-csv", type=Path, default=Path("categorizer/simulated_data_large.csv"))
-    parser.add_argument("--cred-csv", type=Path, default=Path("categorizer/cred_cat_filled.csv"))
+    parser.add_argument("--simulated-csv", type=Path, default=Path("categorizer/datasets/simulated_data_large.csv"))
+    parser.add_argument("--cred-csv", type=Path, default=Path("categorizer/datasets/cred_cat_filled.csv"))
     parser.add_argument(
         "--input-transactions",
         type=Path,

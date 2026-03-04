@@ -25,7 +25,7 @@ PROCESSED_DIR = Path(os.environ.get("FINELY_PROCESSED_DIR", str(DATA_ROOT / "pro
 
 class ParserConfig:
     COMMON_CONFIG_PATH = PROJECT_ROOT / "config" / "common_config.json"
-    CONFIG_PATH = PROJECT_ROOT / "config" / "boa_config.json"
+    CONFIG_PATH = PROJECT_ROOT / "config" / "banks" / "boa_config.json"
 
     BOILERPLATE_PATTERNS: List[str] = []
     PHONE_RE = re.compile(r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b")
@@ -2250,11 +2250,11 @@ DEFAULT_PDF_PATH = PROJECT_ROOT / "my_finance" / "raw" / "Apr10-25.pdf"
 def parse_pdf_to_payload(pdf_path: Path, config_path: Optional[Path] = None) -> dict:
     lines = extract_text(pdf_path)
     if config_path is None:
-        auto_path = _detect_config_path(lines, PROJECT_ROOT / "config")
+        auto_path = _detect_config_path(lines, PROJECT_ROOT / "config" / "banks")
         if auto_path is not None:
             config_path = auto_path
         else:
-            fallback_unknown = PROJECT_ROOT / "config" / "unknown_config.json"
+            fallback_unknown = PROJECT_ROOT / "config" / "banks" / "unknown_config.json"
             if fallback_unknown.exists():
                 config_path = fallback_unknown
     ParserConfig.load_from_json(config_path)
