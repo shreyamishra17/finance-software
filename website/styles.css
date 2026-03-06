@@ -475,6 +475,9 @@ main {
   letter-spacing: 1px;
   color: var(--muted);
   margin-bottom: 4px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .result-value {

@@ -296,6 +296,47 @@ def _as_numpy(array_like):
         return array_like
 
 
+def _parse_amount_value(raw_amount: object) -> Optional[float]:
+    text = str(raw_amount or "").strip()
+    if not text or text.upper() == "UNPARSED":
+        return None
+    negative = text.startswith("(") and text.endswith(")")
+    text = text.strip("()")
+    if text.startswith("-"):
+        negative = True
+        text = text[1:]
+    if text.startswith("+"):
+        text = text[1:]
+    text = text.replace("$", "").replace(",", "")
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    return -value if negative else value
+
+
+def _income_allowed(txn: dict) -> bool:
+    txn_type = str(txn.get("txn_type") or "").lower()
+    if txn_type == "deposits":
+        return True
+    if txn_type == "withdrawals":
+        return False
+    amount_val = _parse_amount_value(txn.get("amount"))
+    return amount_val is not None and amount_val > 0
+
+
+def _post_validate_category(txn: dict, result: CategoryResult, rules: dict) -> CategoryResult:
+    if result.category == "Income" and not _income_allowed(txn):
+        return CategoryResult(
+            category=_canonicalize_category_name(str(rules.get("default_category", "Uncategorized")), rules),
+            confidence=0.0,
+            matched_rule="income_sign_guard",
+            matched_keyword=result.matched_keyword,
+            layer="post_validation",
+        )
+    return result
+
+
 def _bert_predict_batch(texts: list[str], batch_size: int = 64, max_length: int = 64) -> tuple[list[str], list[float]]:
     import torch  # type: ignore
 
@@ -337,7 +378,7 @@ def _bert_predict_batch(texts: list[str], batch_size: int = 64, max_length: int 
 def categorize_transaction(txn: dict, rules_path: Optional[Path] = None) -> CategoryResult:
     rules = _load_rules(rules_path)
     # Layer 1: keyword rules from category_rules.json
-    rules_result = _categorize_by_rules(txn, rules)
+    rules_result = _post_validate_category(txn, _categorize_by_rules(txn, rules), rules)
     if rules_result.layer != "rules_default":
         return rules_result
 
@@ -346,12 +387,16 @@ def categorize_transaction(txn: dict, rules_path: Optional[Path] = None) -> Cate
     if text and _init_bert():
         try:
             labels, scores = _bert_predict_batch([text], batch_size=1)
-            return CategoryResult(
+            return _post_validate_category(
+                txn,
+                CategoryResult(
                 category=_canonicalize_category_name(labels[0], rules),
                 confidence=float(scores[0]),
                 matched_rule="bert_model",
                 matched_keyword=None,
                 layer="bert_model",
+                ),
+                rules,
             )
         except Exception:
             pass
@@ -379,7 +424,7 @@ def categorize_transactions(
     bert_texts: list[str] = []
 
     for i, txn in enumerate(txns):
-        rules_result = _categorize_by_rules(txn, rules)
+        rules_result = _post_validate_category(txn, _categorize_by_rules(txn, rules), rules)
         if rules_result.layer != "rules_default":
             txn["category"] = rules_result.category
             txn["confidence"] = rules_result.confidence
@@ -401,11 +446,19 @@ def categorize_transactions(
         try:
             labels, scores = _bert_predict_batch(bert_texts)
             for idx, label, score in zip(bert_idx, labels, scores):
-                categorized[idx]["category"] = _canonicalize_category_name(label, rules)
-                categorized[idx]["confidence"] = float(score)
-                categorized[idx]["matched_rule"] = "bert_model"
-                categorized[idx]["matched_keyword"] = None
-                categorized[idx]["category_layer"] = "bert_model"
+                candidate = CategoryResult(
+                    category=_canonicalize_category_name(label, rules),
+                    confidence=float(score),
+                    matched_rule="bert_model",
+                    matched_keyword=None,
+                    layer="bert_model",
+                )
+                final_result = _post_validate_category(categorized[idx], candidate, rules)
+                categorized[idx]["category"] = final_result.category
+                categorized[idx]["confidence"] = final_result.confidence
+                categorized[idx]["matched_rule"] = final_result.matched_rule
+                categorized[idx]["matched_keyword"] = final_result.matched_keyword
+                categorized[idx]["category_layer"] = final_result.layer
             bert_success = True
         except Exception:
             bert_success = False

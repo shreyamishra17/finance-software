@@ -1,6 +1,9 @@
 __pycache__/
 *.pyc
+.DS_Store
 *-adminsdk-*.json
 *.serviceaccount.json
 config/banks/unknown_config.json
 config/banks/*_bootstrap_report.json
+config/unknown_config.json
+config/*_bootstrap_report.json

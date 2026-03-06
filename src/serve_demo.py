@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 from categorize import categorize_transactions
 from parse_bank import parse_pdf_to_payload, persist_uploaded_statement
-from auto_config_bootstrap import bootstrap_config_if_unknown
+from new_bank_setup import bootstrap_config_if_unknown
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -108,7 +108,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
             auto_bootstrap = os.environ.get("AUTO_BOOTSTRAP_CONFIG", "1").strip().lower() not in {"0", "false", "no"}
             bootstrap_result = None
             if auto_bootstrap:
-                bootstrap_result = bootstrap_config_if_unknown(tmp_path, config_dir=ROOT / "config")
+                bootstrap_result = bootstrap_config_if_unknown(tmp_path, config_dir=ROOT / "config" / "banks")
 
             payload = parse_pdf_to_payload(tmp_path)
             payload["transactions"] = categorize_transactions(payload.get("transactions", []))

@@ -89,6 +89,14 @@
       "confidence": 0.9
     },
     {
+      "category": "Subscriptions",
+      "keywords": [
+        "CVSEXTRACARE",
+        "EXTRACARE"
+      ],
+      "confidence": 0.9
+    },
+    {
       "category": "Entertainment",
       "keywords": [
         "SPOTIFY",
@@ -101,9 +109,7 @@
         "APPLE SERVICES",
         "AMAZON PRIME",
         "GOOGLE",
-        "ICLOUD",
-        "CVSEXTRACARE",
-        "EXTRACARE"
+        "ICLOUD"
       ],
       "confidence": 0.85
     }
@@ -138,6 +144,8 @@
         "GROCERY",
         "SUPERMARKET",
         "MARKET",
+        "CASH & CARRY",
+        "CASH AND CARRY",
         "TESCO",
         "CARREFOUR",
         "WHOLE FOODS"
@@ -159,6 +167,7 @@
         "STARBUCKS",
         "SBUX",
         "CHIPOTLE",
+        "BREAD",
         "BLUE BOTTLE",
         "MCDONALD",
         "MCDONALDS",
@@ -227,7 +236,10 @@
         "QUIZNOS",
         "WHITE CASTLE",
         "CHECKERS",
-        "CARL'S JR"
+        "CARL'S JR",
+        "BENCOTTO",
+        "MONELLO",
+        "ITALI"
       ],
       "confidence": 0.78
     },
@@ -326,6 +338,7 @@
         "SOULCYCLE",
         "CROSSFIT",
         "PURE BARRE",
+        "YOGA STUDIOS",
         "PELOTON",
         "PILATES",
         "YOGA STUDIO",
@@ -333,7 +346,9 @@
         "SWIMMING POOL",
         "TENNIS COURT",
         "GOLF COURSE",
-        "GYM"
+        "GYM",
+        "RIFF STUDIOS",
+        "RIFFS STUDIOS"
       ],
       "confidence": 0.75
     },
@@ -407,7 +422,6 @@
         "CONCERT",
         "EVENT",
         "SHOW",
-        "STUDIOS",
         "UNIVERSAL",
         "MUSEUM",
         "AMC THEATRE",
@@ -500,12 +514,21 @@
         "FAMILY DOLLAR",
         "FIVE BELOW",
         "TUESDAY MORNING",
+        "FASHION",
+        "URBN",
+        "RHODE",
         "SEPHORA",
+        "JEWELRY",
+        "MANGO",
+        "ANTHROPOLOGIE",
+        "THREAD SEED",
+        "GORJANA",
         "BARNEYS NEW YORK",
         "VON MAUR",
         "SAKS OFF 5TH",
         "BERGDORF GOODMAN",
-        "LORD & TAYLOR"
+        "LORD & TAYLOR",
+        "DSW"
       ],
       "confidence": 0.68
     },

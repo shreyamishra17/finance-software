@@ -63,6 +63,41 @@ class ParserConfig:
     NON_TRANSACTION_PATTERNS: List[str] = []
 
     @classmethod
+    def _reset_runtime_defaults(cls) -> None:
+        cls.BOILERPLATE_PATTERNS = []
+        cls.STATE_ABBRS = set()
+        cls.MARKERS = {}
+        cls.LOCATION_WORDS = set()
+        cls.LOCATION_PREFIX_WORDS = set()
+        cls.LOCATION_PHRASES = []
+        cls.STOP_PHRASES = []
+        cls.FEE_KEYWORDS = []
+        cls.FEE_LABELS = {}
+        cls.SECTION_HEADERS = {}
+        cls.SECTION_END_MARKERS = []
+        cls.TABLE_HEADER_MARKERS = []
+        cls.MERCHANT_MARKERS = []
+        cls.P2P_RULES = []
+        cls.BANK_NAME = None
+        cls.BANK_ALIASES = []
+        cls.IGNORABLE_TAIL_PATTERNS = []
+        cls.METADATA_LABELS = ["DES", "ID", "INDN", "CO ID", "PPD", "WEB", "INFO", "PMT"]
+        cls.PREFERRED_MERCHANT_LABELS = ["DES"]
+        cls.SUMMARY_ALIASES = {
+            "beginning_balance": ["beginning balance", "opening balance", "previous balance", "starting balance"],
+            "deposits_additions": ["deposits", "credits", "payments and credits", "money in", "total credits"],
+            "withdrawals_subtractions": ["withdrawals", "debits", "purchases", "money out", "total debits"],
+            "checks": ["checks", "check payments"],
+            "service_fees": ["service fees", "fees charged", "finance charges", "charges and fees"],
+            "ending_balance": ["ending balance", "new balance", "closing balance", "current balance"],
+        }
+        cls.TRAILING_MERCHANT_DESCRIPTORS = []
+        cls.NON_TRANSACTION_PATTERNS = []
+
+        global HEADER_HINTS
+        HEADER_HINTS = []
+
+    @classmethod
     def _load_common_defaults(cls) -> None:
         path = cls.COMMON_CONFIG_PATH
         if not path.exists():
@@ -121,6 +156,7 @@ class ParserConfig:
 
     @classmethod
     def load_from_json(cls, config_path: Optional[Path] = None) -> None:
+        cls._reset_runtime_defaults()
         cls._load_common_defaults()
         if config_path is not None:
             cls.CONFIG_PATH = config_path
@@ -1545,6 +1581,64 @@ def _detect_config_path(lines: List[str], config_dir: Path) -> Optional[Path]:
     return best_path
 
 
+def _guess_bank_name_from_lines(lines: List[str]) -> Optional[str]:
+    patterns = [
+        re.compile(r"\b([A-Z][A-Za-z&.\- ]{2,40}\bBANK(?: OF [A-Z][A-Za-z]+)?)\b"),
+        re.compile(r"\b([A-Z][A-Za-z&.\- ]{2,40}\bCREDIT UNION)\b"),
+        re.compile(r"\b([A-Z][A-Za-z&.\- ]{2,40}\bFINANCIAL)\b"),
+        re.compile(r"\bDISCOVER\b", re.IGNORECASE),
+        re.compile(r"\bCHASE\b", re.IGNORECASE),
+        re.compile(r"\bCITI(?:BANK)?\b", re.IGNORECASE),
+        re.compile(r"\bWELLS FARGO\b", re.IGNORECASE),
+        re.compile(r"\bAMERICAN EXPRESS\b", re.IGNORECASE),
+        re.compile(r"\bCAPITAL ONE\b", re.IGNORECASE),
+        re.compile(r"\bBANK OF AMERICA\b|\bBOFA\b|\bBOA\b", re.IGNORECASE),
+    ]
+    for line in lines[:160]:
+        for pat in patterns:
+            m = pat.search(line)
+            if not m:
+                continue
+            if m.groups():
+                return re.sub(r"\s+", " ", m.group(1)).strip(" -:")
+            return m.group(0).strip()
+    return None
+
+
+def _config_basename_from_bank_name(bank_name: str) -> str:
+    tokens = [t for t in re.findall(r"[A-Za-z0-9]+", bank_name.lower()) if t]
+    preferred = {
+        "discover": "discover",
+        "chase": "chase",
+        "citi": "citi",
+        "citibank": "citi",
+        "wells": "wells_fargo",
+        "fargo": "wells_fargo",
+        "amex": "amex",
+        "american": "amex",
+        "capital": "capital_one",
+        "boa": "boa",
+        "america": "boa",
+    }
+    for token in tokens:
+        if token in preferred:
+            return preferred[token]
+    stop = {"bank", "of", "the", "financial", "services", "service", "credit", "union"}
+    core = [t for t in tokens if t not in stop]
+    if core:
+        return core[0]
+    return tokens[0] if tokens else "unknown_bank"
+
+
+def _infer_config_path_by_bank_name(lines: List[str], config_dir: Path) -> Optional[Path]:
+    bank_name = _guess_bank_name_from_lines(lines)
+    if not bank_name:
+        return None
+    base = _config_basename_from_bank_name(bank_name)
+    candidate = config_dir / f"{base}_config.json"
+    return candidate if candidate.exists() else None
+
+
 def _parse_amount(value: str) -> Optional[float]:
     if not value:
         return None
@@ -1588,6 +1682,11 @@ def _is_ignorable_tail(tail: str) -> bool:
             continue
         if re.fullmatch(r"#?[0-9]{6,}", token):
             continue
+        if re.fullmatch(r"[A-Z0-9]{5,}", token.upper()) and any(ch.isdigit() for ch in token):
+            continue
+        # OCR often merges CITY+STATE (e.g., VALLEYCA, LAGUNABEACHCA).
+        if re.fullmatch(r"[A-Z]{5,}", token.upper()) and _is_state_abbr(token.upper()[-2:]):
+            continue
         ok = any(re.fullmatch(p, token, flags=re.IGNORECASE) for p in ParserConfig.IGNORABLE_TAIL_PATTERNS)
         if not ok and _is_state_abbr(token.upper()):
             ok = True
@@ -1617,6 +1716,10 @@ def _is_redundant_tail(remainder: str, amount_match: re.Match[str]) -> bool:
         if re.fullmatch(r"[0-9.,-]+", token):
             continue
         if re.fullmatch(r"#?[0-9]{6,}", token):
+            continue
+        if re.fullmatch(r"[A-Z0-9]{5,}", token) and any(ch.isdigit() for ch in token):
+            continue
+        if re.fullmatch(r"[A-Z]{5,}", token) and _is_state_abbr(token[-2:]):
             continue
         if token in descriptor_tokens:
             continue
@@ -1961,6 +2064,60 @@ def _compact_label(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", text.lower())
 
 
+def _prettify_summary_label(label: str) -> str:
+    text = re.sub(r"\s+", " ", str(label or "")).strip(" :-|")
+    if not text:
+        return text
+    if " " in text:
+        return text
+
+    # Some PDFs emit compact labels like TOTALFEESFORTHISPERIOD.
+    upper = text.upper()
+    tokens = [
+        "MINIMUM",
+        "PAYMENTS",
+        "PAYMENT",
+        "PURCHASES",
+        "PURCHASE",
+        "PREVIOUS",
+        "BALANCE",
+        "CREDITS",
+        "CREDIT",
+        "CHARGED",
+        "INTEREST",
+        "TOTAL",
+        "FEES",
+        "FEE",
+        "THIS",
+        "PERIOD",
+        "AND",
+        "FOR",
+        "NEW",
+        "DUE",
+    ]
+    token_hits = 0
+    parts: List[str] = []
+    i = 0
+    sorted_tokens = sorted(tokens, key=len, reverse=True)
+    while i < len(upper):
+        match = next((tok for tok in sorted_tokens if upper.startswith(tok, i)), None)
+        if match:
+            parts.append(match)
+            i += len(match)
+            token_hits += 1
+        else:
+            parts.append(upper[i])
+            i += 1
+
+    rebuilt = re.sub(r"\s+", " ", " ".join(parts)).strip()
+    rebuilt = re.sub(r"\b([A-Z])\s+([A-Z])\b", r"\1\2", rebuilt)
+    if token_hits < 2:
+        return text
+    if " " in rebuilt:
+        return rebuilt.title()
+    return text
+
+
 def _canonical_summary_key(label: str) -> Optional[str]:
     norm = _normalize_label(label)
     compact_norm = _compact_label(label)
@@ -2074,7 +2231,7 @@ def extract_dynamic_summary(lines: Iterable[str]) -> List[dict[str, str]]:
                 display = canonical_labels.get(canon, " ".join(c.capitalize() for c in canon.split("_")))
             else:
                 key = _normalize_label(label)[:64]
-                display = re.sub(r"\s+", " ", label).strip()
+                display = _prettify_summary_label(label)
         if key and key not in entries:
             entries[key] = {"key": key, "label": display, "amount": amount}
 
@@ -2244,19 +2401,23 @@ def print_statement(info: StatementInfo, summary: AccountSummary, transactions: 
             print(f"WARNING: {warning}")
 
 
-DEFAULT_PDF_PATH = PROJECT_ROOT / "my_finance" / "raw" / "Apr10-25.pdf"
+DEFAULT_PDF_PATH = PROJECT_ROOT / "my_finance" / "raw" / "apr10_25_boa7238.pdf"
 
 
 def parse_pdf_to_payload(pdf_path: Path, config_path: Optional[Path] = None) -> dict:
     lines = extract_text(pdf_path)
     if config_path is None:
-        auto_path = _detect_config_path(lines, PROJECT_ROOT / "config" / "banks")
+        config_dir = PROJECT_ROOT / "config" / "banks"
+        auto_path = _detect_config_path(lines, config_dir)
         if auto_path is not None:
             config_path = auto_path
         else:
-            fallback_unknown = PROJECT_ROOT / "config" / "banks" / "unknown_config.json"
-            if fallback_unknown.exists():
-                config_path = fallback_unknown
+            inferred_path = _infer_config_path_by_bank_name(lines, config_dir)
+            if inferred_path is not None:
+                config_path = inferred_path
+            else:
+                # Very last resort only when no known bank config can be resolved.
+                config_path = config_dir / "unknown_config.json"
     ParserConfig.load_from_json(config_path)
     MerchantNormalizationConfig.load_from_json()
 
@@ -2267,17 +2428,48 @@ def parse_pdf_to_payload(pdf_path: Path, config_path: Optional[Path] = None) -> 
     statement_type = infer_statement_type(dynamic_summary, lines)
     summary_cards = build_summary_cards(summary, dynamic_summary, statement_type)
 
+    def _normalize_txn_type_for_statement(
+        txn_type: Optional[str], amount: str, stmt_type: str, raw_description: str
+    ) -> Optional[str]:
+        base = (txn_type or "").lower().strip()
+        if stmt_type != "credit":
+            return txn_type
+        if base in {"fee", "unparsed"}:
+            return txn_type
+
+        # For credit-card statements, purchases are usually positive amounts and
+        # credits/payments/refunds are negative amounts.
+        parsed = _parse_amount(amount)
+        if parsed is None:
+            return txn_type
+        desc_upper = raw_description.upper()
+        credit_hints = (
+            "PAYMENT",
+            "PAYMENTS",
+            "CREDIT",
+            "REFUND",
+            "REVERSAL",
+            "REWARD",
+            "CASHBACK",
+        )
+        if any(hint in desc_upper for hint in credit_hints):
+            return "deposits"
+        return "withdrawals" if parsed > 0 else "deposits"
+
     tx_payload = []
     for txn in transactions:
         merchant = merchant_clean(txn.description)
         merchant = _apply_venmo_direction(merchant, txn.description, txn.txn_type)
+        normalized_txn_type = _normalize_txn_type_for_statement(
+            txn.txn_type, txn.amount, statement_type, txn.description
+        )
         tx_payload.append(
             {
                 "date": txn.date,
                 "raw_description": txn.description,
                 "merchant_clean": merchant,
                 "amount": txn.amount,
-                "txn_type": txn.txn_type,
+                "txn_type": normalized_txn_type,
             }
         )
 

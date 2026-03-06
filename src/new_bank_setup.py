@@ -270,8 +270,8 @@ def main() -> int:
     parser.add_argument(
         "--config-dir",
         type=Path,
-        default=Path(__file__).resolve().parent.parent / "config",
-        help="Config directory (default: ./config)",
+        default=Path(__file__).resolve().parent.parent / "config" / "banks",
+        help="Config directory (default: ./config/banks)",
     )
     parser.add_argument("--force", action="store_true", help="Overwrite existing target config if present")
     args = parser.parse_args()
