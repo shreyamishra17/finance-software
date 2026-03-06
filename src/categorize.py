@@ -267,6 +267,24 @@ def _categorize_by_rules(txn: dict, rules: dict) -> CategoryResult:
                 layer="rules_high_confidence",
             )
 
+    # Amount-based rules: override category when charge is below a threshold (e.g. small Amazon = subscription)
+    amount_val = _parse_amount_value(txn.get("amount"))
+    if amount_val is not None:
+        abs_amount = abs(amount_val)
+        for rule in rules.get("amount_rules", []):
+            max_amt = rule.get("max_amount_abs")
+            if max_amt is not None and abs_amount < float(max_amt):
+                matched = _find_keyword_match(haystack, rule.get("keywords", []))
+                if matched:
+                    category = _canonicalize_category_name(str(rule.get("category", default_category)), rules)
+                    return CategoryResult(
+                        category=category,
+                        confidence=float(rule.get("confidence", 0.75)),
+                        matched_rule=category,
+                        matched_keyword=matched,
+                        layer="rules_amount",
+                    )
+
     for rule in rules.get("merchant_rules", []):
         keywords = rule.get("keywords", [])
         matched = _find_keyword_match(_normalize(merchant), keywords) or _find_keyword_match(haystack, keywords)

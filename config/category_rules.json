@@ -92,21 +92,22 @@
       "category": "Subscriptions",
       "keywords": [
         "CVSEXTRACARE",
-        "EXTRACARE"
+        "EXTRACARE",
+        "SPOTIFY",
+        "SPTFY",
+        "APPLE ONE",
+        "APPLE.COM/BILL",
+        "APPLE SERVICES"
       ],
       "confidence": 0.9
     },
     {
       "category": "Entertainment",
       "keywords": [
-        "SPOTIFY",
-        "SPTFY",
         "NETFLIX",
         "NFLX",
         "HULU",
         "DISNEY",
-        "APPLE.COM/BILL",
-        "APPLE SERVICES",
         "AMAZON PRIME",
         "GOOGLE",
         "ICLOUD"
@@ -239,7 +240,10 @@
         "CARL'S JR",
         "BENCOTTO",
         "MONELLO",
-        "ITALI"
+        "ITALI",
+        "CHARMINAR",
+        "EVERBOWL",
+        "DOSA"
       ],
       "confidence": 0.78
     },
@@ -310,6 +314,8 @@
         "SKINCARE",
         "BEAUTY",
         "NAIL",
+        "NAILS",
+        "RADIANCE NAILS",
         "BARBER",
         "COSMETIC",
         "HAIR",
@@ -576,6 +582,7 @@
     {
       "category": "Finance",
       "keywords": [
+        "DISCOVER",
         "CAPITAL ONE",
         "WELLS FARGO",
         "TD BANK",
@@ -804,6 +811,20 @@
         "UPS"
       ],
       "confidence": 0.65
+    }
+  ],
+  "amount_rules": [
+    {
+      "keywords": ["AMAZON", "AMZN", "AMZN MKTP"],
+      "category": "Subscriptions",
+      "max_amount_abs": 100,
+      "confidence": 0.75
+    },
+    {
+      "keywords": ["APPLE", "APPLE ONE", "APPLE.COM"],
+      "category": "Subscriptions",
+      "max_amount_abs": 100,
+      "confidence": 0.75
     }
   ]
 }
