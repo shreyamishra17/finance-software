@@ -75,7 +75,9 @@
         "AT&T",
         "SDGE",
         "CONSERVICE",
-        "LIBERTY MUTUAL"
+        "LIBERTY MUTUAL",
+        "T-MOBILE",
+        "TMOBILE"
       ],
       "confidence": 0.85
     },
@@ -107,18 +109,20 @@
         "EXTRACARE",
         "SPOTIFY",
         "SPTFY",
+        "NETFLIX",
+        "NFLX",
         "APPLE ONE",
         "APPLE.COM/BILL",
         "APPLE SERVICES",
-        "AMAZON PRIME"
+        "AMAZON PRIME",
+        "DASHPASS",
+        "DOORDASHDASHPASS"
       ],
       "confidence": 0.9
     },
     {
       "category": "Entertainment",
       "keywords": [
-        "NETFLIX",
-        "NFLX",
         "HULU",
         "DISNEY",
         "GOOGLE",
@@ -165,6 +169,7 @@
         "GROCERY",
         "SUPERMARKET",
         "MARKET",
+        "MIRAMAR CASH",
         "CASH & CARRY",
         "CASH AND CARRY",
         "TESCO",
@@ -266,7 +271,10 @@
         "DOSA",
         "EINSTEIN BROS",
         "BAGEL",
-        "BAGELS"
+        "BAGELS",
+        "SOUTH SWELL",
+        "HERMOSA SURF SHOP",
+        "VENCHI"
       ],
       "confidence": 0.78
     },
@@ -445,6 +453,7 @@
     {
       "category": "Entertainment",
       "keywords": [
+        "LA JOLLA KAYAK",
         "THEME PARK",
         "MOVIE",
         "CINEMA",
@@ -544,6 +553,7 @@
         "FIVE BELOW",
         "TUESDAY MORNING",
         "WH SMITH",
+        "VUORI",
         "FASHION",
         "URBN",
         "RHODE",
