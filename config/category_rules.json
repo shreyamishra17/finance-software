@@ -55,6 +55,7 @@
       "category": "Housing",
       "keywords": [
         "RENT",
+        "RENTERS",
         "LEASE",
         "CLICKPAY",
         "PROPRTYPAY"
@@ -73,7 +74,8 @@
         "VERIZON",
         "AT&T",
         "SDGE",
-        "CONSERVICE"
+        "CONSERVICE",
+        "LIBERTY MUTUAL"
       ],
       "confidence": 0.85
     },
@@ -84,7 +86,9 @@
         "GEICO",
         "PROGRESSIVE",
         "STATE FARM",
-        "ALLSTATE"
+        "ALLSTATE",
+        "INTUIT",
+        "TURBOTAX"
       ],
       "confidence": 0.9
     },
@@ -111,6 +115,14 @@
         "DISNEY",
         "GOOGLE",
         "ICLOUD"
+      ],
+      "confidence": 0.85
+    },
+    {
+      "category": "Travel",
+      "keywords": [
+        "AIRPORT",
+        "AEROPUERTO"
       ],
       "confidence": 0.85
     }
@@ -243,7 +255,10 @@
         "ITALI",
         "CHARMINAR",
         "EVERBOWL",
-        "DOSA"
+        "DOSA",
+        "EINSTEIN BROS",
+        "BAGEL",
+        "BAGELS"
       ],
       "confidence": 0.78
     },
@@ -520,6 +535,7 @@
         "FAMILY DOLLAR",
         "FIVE BELOW",
         "TUESDAY MORNING",
+        "WH SMITH",
         "FASHION",
         "URBN",
         "RHODE",
@@ -575,7 +591,8 @@
         "TRIPADVISOR",
         "TRAVEL",
         "CRUISE",
-        "RESORT"
+        "RESORT",
+        "HEADOUT"
       ],
       "confidence": 0.72
     },
