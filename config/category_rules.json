@@ -10,7 +10,7 @@
     "HEALTHCARE & MEDICAL": "Health",
     "OTHER/MISC": "Miscellaneous",
     "SHOPPING & RETAIL": "Shopping",
-    "TRANSPORTATION": "Transport",
+    "TRANSPORTATION": "Auto & Transport",
     "TRANSFER": "Finance",
     "UTILITIES & SERVICES": "Utilities & Bills"
   },
@@ -78,6 +78,14 @@
         "LIBERTY MUTUAL"
       ],
       "confidence": 0.85
+    },
+    {
+      "category": "Auto & Transport",
+      "keywords": [
+        "DRIVE INSURANCE",
+        "DRIVEINSURANCE"
+      ],
+      "confidence": 0.9
     },
     {
       "category": "Finance",
@@ -374,7 +382,7 @@
       "confidence": 0.75
     },
     {
-      "category": "Transport",
+      "category": "Auto & Transport",
       "keywords": [
         "CHEVRON",
         "SHELL",

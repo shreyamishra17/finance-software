@@ -24,7 +24,7 @@ DEFAULT_CATEGORY_ALIASES: dict[str, str] = {
     "HEALTHCARE & MEDICAL": "Health",
     "OTHER/MISC": "Miscellaneous",
     "SHOPPING & RETAIL": "Shopping",
-    "TRANSPORTATION": "Transport",
+    "TRANSPORTATION": "Auto & Transport",
     "TRANSFER": "Finance",
     "UTILITIES & SERVICES": "Utilities & Bills",
 }
