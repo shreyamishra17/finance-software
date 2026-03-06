@@ -97,7 +97,8 @@
         "SPTFY",
         "APPLE ONE",
         "APPLE.COM/BILL",
-        "APPLE SERVICES"
+        "APPLE SERVICES",
+        "AMAZON PRIME"
       ],
       "confidence": 0.9
     },
@@ -108,7 +109,6 @@
         "NFLX",
         "HULU",
         "DISNEY",
-        "AMAZON PRIME",
         "GOOGLE",
         "ICLOUD"
       ],
@@ -814,12 +814,6 @@
     }
   ],
   "amount_rules": [
-    {
-      "keywords": ["AMAZON", "AMZN", "AMZN MKTP"],
-      "category": "Subscriptions",
-      "max_amount_abs": 100,
-      "confidence": 0.75
-    },
     {
       "keywords": ["APPLE", "APPLE ONE", "APPLE.COM"],
       "category": "Subscriptions",
