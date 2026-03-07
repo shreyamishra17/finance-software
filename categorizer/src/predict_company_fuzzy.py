@@ -80,7 +80,7 @@ def main() -> None:
     parser.add_argument(
         "--reference-csv",
         type=Path,
-        default=Path("categorizer/datasets/companies.csv"),
+        default=Path("categorizer/datasets/hardcoded_companies_for_classification.csv"),
         help="CSV containing known merchants with columns Company and Category.",
     )
     parser.add_argument(

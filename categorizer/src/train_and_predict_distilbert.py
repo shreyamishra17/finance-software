@@ -119,7 +119,7 @@ def main() -> None:
     parser.add_argument(
         "--train-csv",
         type=Path,
-        default=Path("categorizer/datasets/companies_for_training.csv"),
+        default=Path("categorizer/datasets/training_companies_for_bert.csv"),
     )
     parser.add_argument("--train-text-col", default="Merchant")
     parser.add_argument("--train-label-col", default="Category")

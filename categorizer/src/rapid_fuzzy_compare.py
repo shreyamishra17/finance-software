@@ -98,12 +98,12 @@ def find_top_matches(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Fast fuzzy comparison of a merchant string against companies.csv."
+        description="Fast fuzzy comparison of a merchant string against the hardcoded companies CSV."
     )
     parser.add_argument(
         "--companies-csv",
         type=Path,
-        default=Path("categorizer/datasets/companies.csv"),
+        default=Path("categorizer/datasets/hardcoded_companies_for_classification.csv"),
         help="Reference CSV with Company and Category columns.",
     )
     parser.add_argument(
