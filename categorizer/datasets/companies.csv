@@ -1,0 +1,374 @@
+Category,Company
+Charity & Donations,Red Cross
+Charity & Donations,UNICEF
+Charity & Donations,Doctors Without Borders
+Charity & Donations,Save the Children
+Charity & Donations,World Wildlife Fund
+Charity & Donations,Feeding America
+Charity & Donations,St Jude Children's Research Hospital
+Charity & Donations,Habitat for Humanity
+Charity & Donations,United Way
+Charity & Donations,Salvation Army
+Charity & Donations,Charity Water
+Charity & Donations,Direct Relief
+Charity & Donations,CARE International
+Charity & Donations,Oxfam
+Charity & Donations,Make A Wish Foundation
+Charity & Donations,ACLU
+Charity & Donations,Greenpeace
+Charity & Donations,Human Rights Watch
+Charity & Donations,Kiva
+Charity & Donations,GlobalGiving
+
+Education & Work,Udemy
+Education & Work,Coursera
+Education & Work,LinkedIn Learning
+Education & Work,Skillshare
+Education & Work,Pluralsight
+Education & Work,Chegg
+Education & Work,Quizlet
+Education & Work,Khan Academy
+Education & Work,Duolingo
+Education & Work,Udacity
+Education & Work,Workday
+Education & Work,Indeed
+Education & Work,Glassdoor
+Education & Work,Upwork
+Education & Work,Fiverr
+Education & Work,Slack
+Education & Work,Zoom
+Education & Work,Microsoft Teams
+Education & Work,Notion
+Education & Work,Google Workspace
+
+Entertainment,Disney
+Entertainment,AMC Theatres
+Entertainment,Cinemark
+Entertainment,Ticketmaster
+Entertainment,Live Nation
+Entertainment,Apple TV
+Entertainment,Hulu
+Entertainment,Paramount+
+Entertainment,HBO
+Entertainment,PlayStation
+Entertainment,Xbox
+Entertainment,Nintendo
+Entertainment,Steam
+Entertainment,Twitch
+Entertainment,SoundCloud
+Entertainment,Pandora
+Entertainment,Crunchyroll
+Entertainment,Audible
+Entertainment,Netflix
+Entertainment,Spotify
+Entertainment,Amazon Prime
+Entertainment,Apple Music
+Entertainment,Hulu
+Entertainment,Disney+
+Entertainment,HBO Max
+Entertainment,YouTube Premium
+
+Finance,PayPal
+Finance,Venmo
+Finance,Zelle
+Finance,Cash App
+Finance,Stripe
+Finance,Robinhood
+Finance,ETrade
+Finance,Charles Schwab
+Finance,Fidelity
+Finance,SoFi
+Finance,American Express
+Finance,Chase
+Finance,Bank of America
+Finance,Wells Fargo
+Finance,Citi
+Finance,Capital One
+Finance,Square
+Finance,Coinbase
+Finance,Kraken
+Finance,Wise
+Finance,Revolut
+
+Fitness,Peloton
+Fitness,Equinox
+Fitness,Planet Fitness
+Fitness,LA Fitness
+Fitness,24 Hour Fitness
+Fitness,Orangetheory
+Fitness,SoulCycle
+Fitness,ClassPass
+Fitness,CrossFit
+Fitness,F45 Training
+Fitness,Gold's Gym
+Fitness,Anytime Fitness
+Fitness,Burn Boot Camp
+Fitness,Beachbody
+Fitness,Strava
+Fitness,MyFitnessPal
+Fitness,Alo Moves
+Fitness,Fitbit
+Fitness,Nike Training Club
+Fitness,Tonal
+
+Food & Drink,McDonald's
+Food & Drink,Starbucks
+Food & Drink,Chipotle
+Food & Drink,Domino's
+Food & Drink,Subway
+Food & Drink,Panera Bread
+Food & Drink,Dunkin
+Food & Drink,KFC
+Food & Drink,Burger King
+Food & Drink,Taco Bell
+Food & Drink,DoorDash
+Food & Drink,Uber Eats
+Food & Drink,Grubhub
+Food & Drink,Postmates
+Food & Drink,Olive Garden
+Food & Drink,Chili's
+Food & Drink,IHOP
+Food & Drink,Shake Shack
+Food & Drink,Five Guys
+Food & Drink,Tim Hortons
+
+Government & Legal,IRS
+Government & Legal,USCIS
+Government & Legal,DMV
+Government & Legal,US Courts
+Government & Legal,LegalZoom
+Government & Legal,Rocket Lawyer
+Government & Legal,Avvo
+Government & Legal,Nolo
+Government & Legal,Thomson Reuters
+Government & Legal,Westlaw
+Government & Legal,LexisNexis
+Government & Legal,Clio
+Government & Legal,MyCase
+Government & Legal,DocuSign
+Government & Legal,TurboTax
+Government & Legal,H&R Block
+Government & Legal,State Bar Association
+Government & Legal,County Clerk Office
+Government & Legal,City Tax Office
+Government & Legal,Small Claims Court
+
+Groceries,Walmart
+Groceries,Costco
+Groceries,Target
+Groceries,Kroger
+Groceries,Whole Foods
+Groceries,Trader Joe's
+Groceries,Aldi
+Groceries,Safeway
+Groceries,Publix
+Groceries,Wegmans
+Groceries,H-E-B
+Groceries,Instacart
+Groceries,FreshDirect
+Groceries,Amazon Fresh
+Groceries,Meijer
+Groceries,Giant
+Groceries,Food Lion
+Groceries,Stop & Shop
+Groceries,Sprouts Farmers Market
+Groceries,Ralphs
+Groceries,H Mart
+Groceries,99 Ranch Market
+
+Health,Walgreens
+Health,CVS Pharmacy
+Health,Rite Aid
+Health,Kaiser Permanente
+Health,UnitedHealthcare
+Health,Aetna
+Health,Cigna
+Health,Humana
+Health,Mayo Clinic
+Health,Cleveland Clinic
+Health,Teladoc
+Health,Zocdoc
+Health,GoodRx
+Health,Labcorp
+Health,Quest Diagnostics
+Health,Planned Parenthood
+Health,One Medical
+Health,Carbon Health
+Health,Hims
+Health,Hers
+
+Housing,Zillow
+Housing,Redfin
+Housing,Airbnb
+Housing,Trulia
+Housing,Apartments.com
+Housing,Opendoor
+Housing,Compass
+Housing,WeWork
+Housing,Common
+Housing,Blueground
+Housing,Sonder
+Housing,CBRE
+Housing,Greystar
+Housing,Equity Residential
+Housing,Invitation Homes
+Housing,Progress Residential
+Housing,RentCafe
+Housing,Rent.com
+Housing,Realtor.com
+Housing,HomeAdvisor
+
+Income,ADP
+Income,Paychex
+Income,Gusto
+Income,Square Payroll
+Income,Intuit Payroll
+Income,Rippling
+Income,Deel
+Income,Remote
+Income,Payoneer
+Income,Upwork
+Income,Fiverr
+Income,Etsy
+Income,Shopify
+Income,Stripe
+Income,Amazon Seller Central
+
+Personal Care,Sephora
+Personal Care,Ulta Beauty
+Personal Care,Great Clips
+Personal Care,Supercuts
+Personal Care,Sally Beauty
+Personal Care,Massage Envy
+Personal Care,European Wax Center
+Personal Care,Drybar
+Personal Care,Floyd's Barbershop
+Personal Care,Hand & Stone
+Personal Care,Aveda
+Personal Care,The Body Shop
+Personal Care,Lush
+Personal Care,Bath & Body Works
+Personal Care,Glossier
+Personal Care,Birchbox
+Personal Care,IPSY
+Personal Care,Dollar Shave Club
+Personal Care,Harry's
+Personal Care,Curology
+
+Shopping,Amazon
+Shopping,Amzn
+Shopping,Apple
+Shopping,Walmart
+Shopping,Target
+Shopping,eBay
+Shopping,Etsy
+Shopping,Best Buy
+Shopping,Macy's
+Shopping,Nordstrom
+Shopping,Kohl's
+Shopping,Shein
+Shopping,Temu
+Shopping,AliExpress
+Shopping,Wayfair
+Shopping,IKEA
+Shopping,Home Depot
+Shopping,Lowe's
+Shopping,Costco
+Shopping,Overstock
+Shopping,Zara
+Shopping,H&M
+Shopping,Abercrombie
+Shopping,Alo
+Shopping,Lululemon
+Shopping,Nike
+Shopping,Adidas
+Shopping,Prada
+
+Transport,Uber
+Transport,Lyft
+Transport,Bolt
+Transport,Via
+Transport,Gett
+Transport,Grab
+Transport,Ola
+Transport,BlaBlaCar
+Transport,Zipcar
+Transport,Turo
+Transport,Hertz
+Transport,Avis
+Transport,Budget
+Transport,Enterprise
+Transport,National Car Rental
+Transport,Sixt
+Transport,Bird
+Transport,Lime
+Transport,Spin
+Transport,Scoot
+Transport,Shell
+Transport,Exxon
+Transport,Chevron
+Transport,Mobil
+Transport,BP
+
+Travel,Expedia
+Travel,Booking.com
+Travel,Airbnb
+Travel,TripAdvisor
+Travel,Hotels.com
+Travel,Agoda
+Travel,Kayak
+Travel,Priceline
+Travel,Travelocity
+Travel,Skyscanner
+Travel,Delta Air Lines
+Travel,United Airlines
+Travel,American Airlines
+Travel,Southwest Airlines
+Travel,JetBlue
+Travel,Air Canada
+Travel,British Airways
+Travel,Lufthansa
+Travel,Marriott
+Travel,Hilton
+Travel,Hotel
+
+Utilities & Bills,Comcast
+Utilities & Bills,AT&T
+Utilities & Bills,Verizon
+Utilities & Bills,T-Mobile
+Utilities & Bills,Spectrum
+Utilities & Bills,Xfinity
+Utilities & Bills,PG&E
+Utilities & Bills,Con Edison
+Utilities & Bills,National Grid
+Utilities & Bills,Duke Energy
+Utilities & Bills,Florida Power & Light
+Utilities & Bills,SoCalGas
+Utilities & Bills,American Water
+Utilities & Bills,Liberty Utilities
+Utilities & Bills,CenturyLink
+Utilities & Bills,Frontier Communications
+Utilities & Bills,Dish Network
+Utilities & Bills,DirecTV
+Utilities & Bills,SiriusXM
+Utilities & Bills,Cox Communications
+Utilities & Bills,State Farm 
+Utilities & Bills,Geico 
+Utilities & Bills,Progressive 
+Utilities & Bills,Allstate
+Utilities & Bills,USAA 
+Utilities & Bills,Liberty Mutual 
+Utilities & Bills,Farmers Insurance
+Utilities & Bills,Nationwide Insurance
+Utilities & Bills,Travelers Insurance
+Utilities & Bills,American Family Ins
+Utilities & Bills,UnitedHealthcare
+Utilities & Bills,Blue Cross Blue Shield
+Utilities & Bills,Anthem BCBS
+Utilities & Bills,Aetna Health
+Utilities & Bills,Cigna Healthcare
+Utilities & Bills,Humana Medical
+Utilities & Bills,Kaiser Permanente
+Utilities & Bills,MetLife Insurance
+Utilities & Bills,New York Life
+Utilities & Bills,Prudential Financial

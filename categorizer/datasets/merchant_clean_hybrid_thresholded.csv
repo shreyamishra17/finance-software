@@ -1,0 +1,258 @@
+merchant_clean,final_category,confidence,predicted_by,distilbert_category
+QUALCOMM TECHNOL,Income,1.0,step_1,Health
+Zelle payment from SMIRTHI MEENAKSHISUNDARAM,Money Transfer,1.0,step_1,Groceries
+QUALCOMM TECHNOL,Income,1.0,step_1,Health
+Zelle payment from SARVESH PATIL for Universal,Money Transfer,1.0,step_1,Transport
+Zelle payment from SMIRTHI MEENAKSHISUNDARAM,Money Transfer,1.0,step_1,Groceries
+Zelle payment from KSHITIJ GUPTA for universal,Money Transfer,1.0,step_1,Transport
+Zelle payment from Xavier Evans for Universal Ticket,Money Transfer,1.0,step_1,Entertainment
+FRANCHISE TAX BD,Uncategorized,0.351567,none,Utilities & Bills
+Zelle payment from KSHITIJ GUPTA,Money Transfer,1.0,step_1,Groceries
+THE YASAI,Food & Dining,1.0,step_1,Food & Drink
+CHEVRON,Transport,1.0,rapidfuzz,Transport
+Whole Foods,Groceries,1.0,rapidfuzz,Groceries
+SEPHORA,Personal Care,1.0,rapidfuzz,Shopping
+JOE THE JUICE,Food & Drink,0.978101,distilbert,Food & Drink
+CHARMINAR,Uncategorized,0.375067,none,Shopping
+CVS/PHARMACY,Health,1.0,rapidfuzz,Health
+Whole Foods,Groceries,1.0,rapidfuzz,Groceries
+Venmo to,Money Transfer,1.0,step_1,Transport
+Zelle payment to KSHITIJ GUPTA for skiing,Money Transfer,1.0,step_1,Transport
+RADIANCE NAILS STUDIO,Personal Care,0.934105,distilbert,Personal Care
+PEET'S,Uncategorized,0.505544,none,Food & Drink
+QC CAFE,Food & Drink,0.975801,distilbert,Food & Drink
+KOLET,Uncategorized,0.638281,none,Food & Drink
+www.headout.com,Uncategorized,0.349982,none,Food & Drink
+CASA,Food & Drink,0.715734,distilbert,Food & Drink
+WH SMITH AEROPUERTO,Uncategorized,0.498211,none,Transport
+SABRINAS CAFE,Food & Drink,0.97758,distilbert,Food & Drink
+Everbowl,Uncategorized,0.55257,none,Entertainment
+DOSA STUDIO,Personal Care,0.779068,distilbert,Personal Care
+BLUE BOTTLE COFFEE,Food & Drink,0.978033,distilbert,Food & Drink
+CHIPOTLE,Food & Drink,1.0,rapidfuzz,Food & Drink
+MIRAMAR CASH CARRY,Groceries,0.782821,distilbert,Groceries
+CHEVRON,Transport,1.0,rapidfuzz,Transport
+BLUE BOTTLE COFFEE,Food & Drink,0.978033,distilbert,Food & Drink
+VEGAN MIRAI LLC,Uncategorized,0.522839,none,Groceries
+GOURMET TAMALES,Food & Drink,0.97141,distilbert,Food & Drink
+PORT OF SD NORTH EMB PR,Transport,0.803669,distilbert,Transport
+MARIONS FISH MARKET,Food & Dining,1.0,step_1,Groceries
+INTUIT TURBOTAX CL.INTUIT.COMCA,Government & Legal,1.0,rapidfuzz,Transport
+Apple,Shopping,1.0,rapidfuzz,Shopping
+Drive Insurance,Transport,0.908661,distilbert,Transport
+MIGUELS PORTSIDE P,Food & Dining,1.0,step_1,Transport
+Everbowl,Uncategorized,0.55257,none,Entertainment
+ClickPay,Uncategorized,0.260115,none,Transport
+CONSERVICE,Uncategorized,0.383481,none,Health
+Whole Foods,Groceries,1.0,rapidfuzz,Groceries
+LIBERTY MUTUAL,Utilities & Bills,1.0,rapidfuzz,Utilities & Bills
+THE YASAI,Food & Dining,1.0,step_1,Food & Drink
+85C BAKERY CAFE USA,Food & Drink,0.978352,distilbert,Food & Drink
+Nyx*Smarte Carte Inc. White Bear LaMN,Uncategorized,0.520716,none,Groceries
+JURASSIC COVE,Entertainment,0.828341,distilbert,Entertainment
+USH UNIVERSL S,Uncategorized,0.45297,none,Shopping
+ROOTS INDIAN BISTRO,Food & Drink,0.978118,distilbert,Food & Drink
+Amazon,Shopping,1.0,rapidfuzz,Entertainment
+REPUBLIQUE,Food & Dining,1.0,step_1,Shopping
+Amazon,Shopping,1.0,rapidfuzz,Entertainment
+Amazon,Shopping,1.0,rapidfuzz,Entertainment
+JPMorgan Chase,Finance,1.0,rapidfuzz,Travel
+SPOTIFY,Entertainment,1.0,rapidfuzz,Entertainment
+QC CAFE,Food & Drink,0.975801,distilbert,Food & Drink
+DISCOVER,Shopping,0.712121,distilbert,Shopping
+UTC MARKET,Groceries,0.907254,distilbert,Groceries
+EINSTEIN BROS BAGELS,Food & Drink,0.899434,distilbert,Food & Drink
+Whole Foods,Groceries,1.0,rapidfuzz,Groceries
+CHIPOTLE,Food & Drink,1.0,rapidfuzz,Food & Drink
+Zelle payment to SARVESH PATIL,Money Transfer,1.0,step_1,Groceries
+www.headout.com,Uncategorized,0.349982,none,Food & Drink
+CASA,Food & Drink,0.715734,distilbert,Food & Drink
+WH SMITH AEROPUERTO,Uncategorized,0.498211,none,Transport
+Whole Foods,Groceries,1.0,rapidfuzz,Groceries
+QUALCOMM TECHNOL,Income,1.0,step_1,Health
+Zelle payment from KSHITIJ GUPTA,Money Transfer,1.0,step_1,Groceries
+Zelle payment from SMIRTHI MEENAKSHISUNDARAM,Money Transfer,1.0,step_1,Groceries
+Zelle payment from SMIRTHI MEENAKSHISUNDARAM,Money Transfer,1.0,step_1,Groceries
+QUALCOMM TECHNOL,Health,0.755513,distilbert,Health
+SEPHORA LA JOLLA VILLA,Personal Care,1.0,rapidfuzz,Food & Drink
+SEPHORA LA JOLLA VILLA,Personal Care,1.0,rapidfuzz,Food & Drink
+NETFLIX.COM,Entertainment,1.0,rapidfuzz,Entertainment
+SOUTH SWELL HAND DIPPED LAGUNA BEACH,Uncategorized,0.479022,none,Food & Drink
+TMOBILE AUTO P BELLEVUE,Transport,0.933165,distilbert,Transport
+WAYFARER BREAD,Food & Drink,0.959288,distilbert,Food & Drink
+II GIARDINO DI LILL,Food & Dining,1.0,step_1,Food & Drink
+TRADER JOE S,Groceries,1.0,rapidfuzz,Groceries
+UCSD PARKING MOBILE EBI www.parkmobilCA,Transport,0.802686,distilbert,Transport
+UCSD PARKING MOBILE EBI www.parkmobilCA,Transport,0.802686,distilbert,Transport
+TRADER JOE S,Groceries,1.0,rapidfuzz,Groceries
+Whole Foods,Groceries,1.0,rapidfuzz,Groceries
+QC CAFE,Food & Drink,0.975801,distilbert,Food & Drink
+QC CAFE,Food & Drink,0.975801,distilbert,Food & Drink
+Whole Foods,Groceries,1.0,rapidfuzz,Groceries
+MENDOCINO FARMS,Food & Dining,1.0,step_1,Groceries
+Apple,Shopping,1.0,rapidfuzz,Shopping
+CHEVRON,Transport,1.0,rapidfuzz,Transport
+FIG TREE,Food & Dining,1.0,step_1,Entertainment
+SP VUORI CLOTHING 176-,Shopping,0.789446,distilbert,Shopping
+MIRAMAR CASH,Groceries,0.766518,distilbert,Groceries
+CVS/PHARM,Health,0.934324,distilbert,Health
+WAYFARER BREAD,Food & Drink,0.959288,distilbert,Food & Drink
+HERMOSA SURF SHOP,Personal Care,0.779985,distilbert,Personal Care
+BIRD ROCK COFFEE RO,Transport,1.0,rapidfuzz,Food & Drink
+SP VUORI CLOTHING 176-,Shopping,0.789446,distilbert,Shopping
+PTI*LA JOLLA KAYAK WWW.LAJOLLAKACA,Travel,1.0,rapidfuzz,Travel
+TRADER JOE S,Groceries,1.0,rapidfuzz,Groceries
+SD GAS & ELEC,Uncategorized,0.578687,none,Utilities & Bills
+QC CAFE,Food & Drink,0.975801,distilbert,Food & Drink
+Venchi UTC LLC,Uncategorized,0.49019,none,Transport
+MIRAMAR CASH,Groceries,0.766518,distilbert,Groceries
+Drive Insurance,Transport,0.908661,distilbert,Transport
+THE YASAI,Food & Dining,1.0,step_1,Food & Drink
+Apple,Shopping,1.0,rapidfuzz,Shopping
+QC CAFE,Food & Drink,0.975801,distilbert,Food & Drink
+SEPHORA,Personal Care,1.0,rapidfuzz,Shopping
+TRADER JOE S,Groceries,1.0,rapidfuzz,Groceries
+Zelle payment to Smirthi,Money Transfer,1.0,step_1,Groceries
+Zelle payment to KSHITIJ GUPTA,Money Transfer,1.0,step_1,Groceries
+ClickPay,Uncategorized,0.260115,none,Transport
+LIBERTY MUTUAL,Utilities & Bills,1.0,rapidfuzz,Utilities & Bills
+QC CAFE,Food & Drink,0.975801,distilbert,Food & Drink
+CVS/PHARMACY,Health,1.0,rapidfuzz,Health
+MUZITA ABBYSSINIANBISTR,Food & Drink,0.840852,distilbert,Food & Drink
+PHILZ COFFEE,Food & Drink,0.977469,distilbert,Food & Drink
+Amazon,Shopping,1.0,rapidfuzz,Entertainment
+UCSD PARKING MOBILE EBI www.parkmobilCA,Transport,0.802686,distilbert,Transport
+JPMorgan Chase,Finance,1.0,rapidfuzz,Travel
+HERMOSA SURF SHOP,Personal Care,0.779985,distilbert,Personal Care
+PHILZ COFFEE,Food & Drink,0.977469,distilbert,Food & Drink
+Apple,Shopping,1.0,rapidfuzz,Shopping
+Quickie Pickie,Uncategorized,0.523278,none,Food & Drink
+Amazon,Shopping,1.0,rapidfuzz,Entertainment
+SPOTIFY,Entertainment,1.0,rapidfuzz,Entertainment
+DD,Uncategorized,0.482419,none,Health
+TMOBILE AUTO P BELLEVUE,Transport,0.933165,distilbert,Transport
+DISCOVER,Shopping,0.712121,distilbert,Shopping
+QUALCOMM TECHNOL,Income,1.0,step_1,Health
+QUALCOMM TECHNOL,Income,1.0,step_1,Health
+Apple,Shopping,1.0,rapidfuzz,Shopping
+Amazon,Shopping,1.0,rapidfuzz,Entertainment
+DD DOORDASHDASHPASS WWW.DOORDASH.CA,Food & Drink,1.0,rapidfuzz,Transport
+TRADER JOE S,Groceries,1.0,rapidfuzz,Groceries
+NETFLIX LOS GATOS,Entertainment,1.0,rapidfuzz,Entertainment
+TMOBILE AUTO P BELLEVUE,Transport,0.933165,distilbert,Transport
+Zelle payment to SARVESH PATIL,Money Transfer,1.0,step_1,Groceries
+Apple,Shopping,1.0,rapidfuzz,Shopping
+CAFE WESTFIE,Food & Drink,0.977244,distilbert,Food & Drink
+TRADER JOE S,Groceries,1.0,rapidfuzz,Groceries
+QC CAFE,Food & Drink,0.975801,distilbert,Food & Drink
+DISCOVER,Shopping,0.712121,distilbert,Shopping
+QC CAFE,Food & Drink,0.975801,distilbert,Food & Drink
+CHEVRON,Transport,1.0,rapidfuzz,Transport
+UNIQLO UTC,Uncategorized,0.580729,none,Travel
+STARBUCKS STORE,Food & Drink,1.0,rapidfuzz,Shopping
+MADI,Food & Dining,1.0,step_1,Shopping
+85C BAKERY CAFE USA,Food & Drink,0.978352,distilbert,Food & Drink
+MIRAMAR CASH,Groceries,0.766518,distilbert,Groceries
+Zelle payment to PADMANABHA KAVASSERI,Money Transfer,1.0,step_1,Food & Drink
+MYSCRIPPS EPP ONLINE HO,Health,0.873082,distilbert,Health
+HONEY PET CAFE AND STOR,Food & Drink,0.978121,distilbert,Food & Drink
+HATS,Shopping,0.879716,distilbert,Shopping
+MARSHALLS,Shopping,0.85429,distilbert,Shopping
+TRADER JOE S,Groceries,1.0,rapidfuzz,Groceries
+CHEVRON,Transport,1.0,rapidfuzz,Transport
+TRADER JOE S,Groceries,1.0,rapidfuzz,Groceries
+RALPHS #0,Groceries,1.0,rapidfuzz,Shopping
+QC CAFE,Food & Drink,0.975801,distilbert,Food & Drink
+Drive Insurance,Transport,0.908661,distilbert,Transport
+Apple,Shopping,1.0,rapidfuzz,Shopping
+Zelle payment to Shefali,Money Transfer,1.0,step_1,Groceries
+IKEA,Shopping,1.0,rapidfuzz,Shopping
+CONSERVICE,Uncategorized,0.383481,none,Health
+ClickPay,Uncategorized,0.260115,none,Transport
+QC CAFE,Food & Drink,0.975801,distilbert,Food & Drink
+Zelle payment to KSHITIJ GUPTA,Money Transfer,1.0,step_1,Groceries
+CVS/PHARMACY,Health,1.0,rapidfuzz,Health
+LIBERTY MUTUAL,Utilities & Bills,1.0,rapidfuzz,Utilities & Bills
+QC CAFE,Food & Drink,0.975801,distilbert,Food & Drink
+SEPHORA,Personal Care,1.0,rapidfuzz,Shopping
+USPS PO,Uncategorized,0.386724,none,Transport
+CVS/PHARMACY,Health,1.0,rapidfuzz,Health
+Dyson Direct Inc Chicago,Utilities & Bills,0.714068,distilbert,Utilities & Bills
+PAPERSOURCE,Uncategorized,0.24591,none,Transport
+EUROP ASSISTANCE,Uncategorized,0.488607,none,Transport
+CHEVRON,Transport,1.0,rapidfuzz,Transport
+RUBIO'S,Uncategorized,0.643613,none,Food & Drink
+QC CAFE,Food & Drink,0.975801,distilbert,Food & Drink
+Amazon,Shopping,1.0,rapidfuzz,Entertainment
+MIRAMAR CASH,Groceries,0.766518,distilbert,Groceries
+USPS PO,Uncategorized,0.386724,none,Transport
+EUROP ASSISTANCE,Uncategorized,0.488607,none,Transport
+REFUND ZARA USA,Shopping,1.0,rapidfuzz,Groceries
+REFUND ABERCROMBIE FITCH,Uncategorized,0.678814,none,Groceries
+REFUND URBN.COM,Uncategorized,0.360043,none,Groceries
+Zelle payment from KSHITIJ GUPTA,Money Transfer,1.0,step_1,Groceries
+QUALCOMM TECHNOL,Health,0.755513,distilbert,Health
+REFUND TARGET,Groceries,1.0,rapidfuzz,Groceries
+QUALCOMM TECHNOL,Health,0.755513,distilbert,Health
+Amazon,Shopping,1.0,rapidfuzz,Entertainment
+RASRAJ,Uncategorized,0.537504,none,Food & Drink
+PHILZ COFFEE,Food & Drink,0.977469,distilbert,Food & Drink
+MED*MYSCRIPPS PAYMENT,Health,0.721427,distilbert,Health
+LAZ PARKING M,Transport,0.782566,distilbert,Transport
+CHIPOTLE,Food & Drink,1.0,rapidfuzz,Food & Drink
+CVS/PHARMACY,Health,1.0,rapidfuzz,Health
+JPMorgan Chase,Finance,1.0,rapidfuzz,Travel
+Apple,Shopping,1.0,rapidfuzz,Shopping
+STARBUCKS STORE,Food & Drink,1.0,rapidfuzz,Shopping
+Amazon,Shopping,1.0,rapidfuzz,Entertainment
+SPOTIFY,Entertainment,1.0,rapidfuzz,Entertainment
+NETFLIX.COM,Entertainment,1.0,rapidfuzz,Entertainment
+TMOBILE AUTO P BELLEVUE,Transport,0.933165,distilbert,Transport
+LAZ PARKING M,Transport,0.782566,distilbert,Transport
+FOODA CHICAGO,Food & Drink,0.884543,distilbert,Food & Drink
+BRAZUCA BITES CHULA VISTA,Food & Drink,0.965155,distilbert,Food & Drink
+FOODA CHICAGO,Food & Drink,0.884543,distilbert,Food & Drink
+CHIPOTLE,Food & Drink,1.0,rapidfuzz,Food & Drink
+APPLE COM BILL CUPERTINO,Shopping,1.0,rapidfuzz,Entertainment
+Zelle payment to KSHITIJ GUPTA,Money Transfer,1.0,step_1,Groceries
+Apple,Shopping,1.0,rapidfuzz,Shopping
+FOODA CHICAGO,Food & Drink,0.884543,distilbert,Food & Drink
+FOODA CHICAGO,Food & Drink,0.884543,distilbert,Food & Drink
+SP ALO-YOGA 132-,Uncategorized,0.524086,none,Food & Drink
+CHOCOLATE BASH,Food & Dining,1.0,step_1,Food & Drink
+COMMUNAL COFFEE,Food & Dining,1.0,step_1,Food & Drink
+WAYFARER BREAD,Food & Drink,0.959288,distilbert,Food & Drink
+Venmo to Tam Vo,Money Transfer,1.0,step_1,Food & Drink
+RADIANCE NAILS STUDIO,Personal Care,0.934105,distilbert,Personal Care
+SENECA READING CLUB,Food & Dining,1.0,step_1,Entertainment
+FOODA CHICAGO,Food & Drink,0.884543,distilbert,Food & Drink
+TARGET T-,Groceries,1.0,rapidfuzz,Health
+DISCOVER,Shopping,0.712121,distilbert,Shopping
+CHIPOTLE,Food & Drink,1.0,rapidfuzz,Food & Drink
+TOUS LES JOURS,Food & Drink,0.946716,distilbert,Food & Drink
+SHELL,Transport,1.0,rapidfuzz,Transport
+DD,Uncategorized,0.482419,none,Health
+CHIPOTLE,Food & Drink,1.0,rapidfuzz,Food & Drink
+CVS/PHARMACY,Health,1.0,rapidfuzz,Health
+STARBUCKS STORE,Food & Drink,1.0,rapidfuzz,Shopping
+SP VUORI CLOTHING 176-,Shopping,0.789446,distilbert,Shopping
+PHILZ COFFEE,Food & Drink,0.977469,distilbert,Food & Drink
+ANTHROPOLOGIE 180-,Uncategorized,0.689515,none,Shopping
+Laderach US Inc,Uncategorized,0.380998,none,Groceries
+Laderach US Inc,Uncategorized,0.380998,none,Groceries
+BARNES NOBLE,Shopping,0.88508,distilbert,Shopping
+MARSHALLS,Shopping,0.85429,distilbert,Shopping
+TRADER JOE S,Groceries,1.0,rapidfuzz,Groceries
+PARFAIT,Uncategorized,0.606397,none,Shopping
+POP UP BAGELS,Food & Dining,1.0,step_1,Food & Drink
+STARBUCKS,Food & Drink,1.0,rapidfuzz,Food & Drink
+EINSTEIN BROS BAGELS,Food & Drink,0.899434,distilbert,Food & Drink
+Lyft Ride F SAN FRANCISCOCA,Transport,1.0,rapidfuzz,Entertainment
+BORDER GRILL T LAX CNP,Food & Drink,0.946204,distilbert,Food & Drink
+GARDENHOMESMANAG,Uncategorized,0.467298,none,Entertainment
+Apple,Shopping,1.0,rapidfuzz,Shopping
+STANFORD GRAD APP APPLYGRAD.STACA,Health,0.794905,distilbert,Health
+Drive Insurance,Transport,0.908661,distilbert,Transport
+LIBERTY MUTUAL,Utilities & Bills,1.0,rapidfuzz,Utilities & Bills
+RAZ*RIDHIIEESUURI Gautam BuddUP,Food & Drink,0.913533,distilbert,Food & Drink
+JPMorgan Chase,Finance,1.0,rapidfuzz,Travel
