@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Demo — FIFO</title>
     <meta name="description" content="Upload a PDF and preview it in the browser." />
-    <link rel="stylesheet" href="styles.css?v=4" />
+    <link rel="stylesheet" href="styles.css?v=5" />
   </head>
   <body>
     <div class="page">
@@ -212,7 +212,7 @@
               }
               const category = t.category || "Uncategorized";
               const rawEscaped = (t.raw_description || "").replace(/"/g, "&quot;");
-              return `<tr class="txn-row" data-raw="${rawEscaped}"><td>${t.date || ""}</td><td>${merchant}</td><td>${amount}</td></tr><tr class="txn-detail" hidden><td colspan="3" class="txn-raw">Raw: ${t.raw_description || ""}</td></tr>`;
+              return `<tr class="txn-row" onclick="toggleTxnDetail(this)"><td>${t.date || ""}</td><td>${merchant}</td><td>${amount}</td></tr><tr class="txn-detail" hidden><td colspan="3" class="txn-raw">Raw: ${t.raw_description || ""}</td></tr>`;
             }
           )
           .join("");
@@ -317,15 +317,13 @@
           });
       });
 
-      resultsBody.addEventListener("click", (event) => {
-        const row = event.target.closest(".txn-row");
-        if (!row) return;
+      function toggleTxnDetail(row) {
         const detail = row.nextElementSibling;
         if (detail && detail.classList.contains("txn-detail")) {
           detail.hidden = !detail.hidden;
           row.classList.toggle("is-expanded", !detail.hidden);
         }
-      });
+      }
 
       categorySummary.addEventListener("click", (event) => {
         const card = event.target.closest("[data-category]");
