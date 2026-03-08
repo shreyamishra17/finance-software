@@ -17,7 +17,28 @@
     "Chicago",
     "Miami",
     "Boston",
-    "Denver"
+    "Denver",
+    "Manhattan",
+    "San Bruno",
+    "Jamaica",
+    "Carmel",
+    "Del Mar",
+    "La Colombe",
+    "Bellevue",
+    "Brooklyn",
+    "Hoboken",
+    "Jersey City",
+    "Portland",
+    "Atlanta",
+    "Dallas",
+    "Houston",
+    "Phoenix",
+    "Minneapolis",
+    "Detroit",
+    "Las Vegas",
+    "Nashville",
+    "NYC",
+    "San Francisco CA"
   ],
   "state_abbrs": [
     "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
@@ -56,11 +77,20 @@
     "HULU": "Hulu",
     "AMAZON": "Amazon",
     "APPLE": "Apple",
-    "TMOBILE": "T-Mobile"
+    "TMOBILE": "T-Mobile",
+    "VICTORIA": "Victoria's Secret",
+    "UBR": "Uber",
+    "UBER": "Uber",
+    "COLOMBE": "La Colombe"
   },
   "merchant_url_tld_strip": ["com", "org", "net", "ca", "io"],
   "strip_suffix_tokens": [
-    "LAJ"
+    "LAJ",
+    "SANFRANCISCOCA",
+    "FRANCISCOCA",
+    "MANHATTANNY",
+    "BROOKLYNNY",
+    "SAN"
   ],
   "trailing_merchant_descriptors": [
     "RESTAURANTS",
@@ -88,7 +118,10 @@
     "CHECKCARD",
     "PURCHASE",
     "MOBILE PURCHASE",
-    "ONLINE"
+    "ONLINE",
+    "PENDING",
+    "ADMISSIONS",
+    "ADMISSION"
   ],
   "merchant_processor_prefixes": [
     "SP",
