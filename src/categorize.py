@@ -14,9 +14,10 @@ from typing import Iterable, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_RULES_PATH = PROJECT_ROOT / "config" / "category_rules.json"
-DEFAULT_BERT_MODEL_DIR = PROJECT_ROOT / "categorizer" / "models" / "bert_distilbert_50k_full"
+DEFAULT_BERT_MODEL_DIR = PROJECT_ROOT / "categorizer" / "models" / "distilbert_companies"
 DEFAULT_RAPIDFUZZ_CSV = PROJECT_ROOT / "categorizer" / "datasets" / "hardcoded_companies_for_classification.csv"
-RAPIDFUZZ_THRESHOLD = 85  # 0–100 scale; tune higher to be more strict
+RAPIDFUZZ_THRESHOLD = 90  # 0–100 scale; requires >=0.9 confidence
+BERT_MIN_CONFIDENCE = 0.7  # Only accept BERT if score is strictly greater than this.
 
 # Make categorizer/src importable for step_1
 _CATEGORIZER_SRC = str(PROJECT_ROOT / "categorizer" / "src")
@@ -321,14 +322,8 @@ def _load_rapidfuzz_reference() -> list[tuple[str, str]]:
 
 
 def _categorize_by_rapidfuzz(txn: dict, rules: dict) -> Optional[CategoryResult]:
-    merchant_clean = str(txn.get("merchant_clean") or "").strip()
-    merchant_raw = str(txn.get("raw_description") or txn.get("merchant_raw") or "").strip()
-    candidates: list[tuple[str, str]] = []
-    if len(merchant_clean) >= 3:
-        candidates.append(("merchant_clean", merchant_clean))
-    if len(merchant_raw) >= 3:
-        candidates.append(("merchant_raw", merchant_raw))
-    if not candidates:
+    merchant = str(txn.get("merchant_clean") or "").strip()
+    if len(merchant) < 3:
         return None
     reference = _load_rapidfuzz_reference()
     if not reference:
@@ -336,29 +331,20 @@ def _categorize_by_rapidfuzz(txn: dict, rules: dict) -> Optional[CategoryResult]
     try:
         from rapidfuzz import process, fuzz, utils  # type: ignore
         companies = [c for c, _ in reference]
-        best_result = None
-        best_source = None
-        for source, text in candidates:
-            result = process.extractOne(
-                text, companies, scorer=fuzz.WRatio, processor=utils.default_process
-            )
-            if result is None:
-                continue
-            if best_result is None or result[1] > best_result[1]:
-                best_result = result
-                best_source = source
-
-        if best_result is None or best_result[1] < RAPIDFUZZ_THRESHOLD:
+        result = process.extractOne(
+            merchant, companies, scorer=fuzz.WRatio, processor=utils.default_process
+        )
+        if result is None or result[1] < RAPIDFUZZ_THRESHOLD:
             return None
-        matched_company = best_result[0]
+        matched_company = result[0]
         category_raw = next((cat for comp, cat in reference if comp == matched_company), None)
         if not category_raw:
             return None
         return CategoryResult(
             category=_canonicalize_category_name(category_raw, rules),
-            confidence=round(best_result[1] / 100.0, 4),
+            confidence=round(result[1] / 100.0, 4),
             matched_rule="rapidfuzz",
-            matched_keyword=f"{matched_company} ({best_source})" if best_source else matched_company,
+            matched_keyword=matched_company,
             layer="rapidfuzz",
         )
     except Exception:
@@ -518,8 +504,8 @@ def categorize_transaction(txn: dict, rules_path: Optional[Path] = None) -> Cate
 
     # Layer 1: step_1 high-confidence pattern rules (Zelle, Direct Dep, TST*)
     if _STEP1_AVAILABLE:
-        merchant = str(txn.get("merchant_clean") or txn.get("merchant_raw") or "")
-        step1 = _categorize_step_1(merchant)
+        step1_text = str(txn.get("raw_description") or txn.get("merchant_raw") or txn.get("merchant_clean") or "")
+        step1 = _categorize_step_1(step1_text)
         if step1 is not None:
             return _post_validate_category(txn, CategoryResult(
                 category=_canonicalize_category_name(step1.category, rules),
@@ -534,16 +520,25 @@ def categorize_transaction(txn: dict, rules_path: Optional[Path] = None) -> Cate
     if fuzz_result is not None:
         return _post_validate_category(txn, fuzz_result, rules)
 
-    # Layer 3: BERT model fallback
-    text = str(txn.get("raw_description") or txn.get("merchant_raw") or "")
+    # Layer 3: BERT model fallback (use clean merchant string)
+    text = str(txn.get("merchant_clean") or "")
     if text and _init_bert():
         try:
             labels, scores = _bert_predict_batch([text], batch_size=1)
+            bert_score = float(scores[0])
+            if bert_score <= BERT_MIN_CONFIDENCE:
+                return CategoryResult(
+                    category="Uncategorized",
+                    confidence=bert_score,
+                    matched_rule="bert_low_confidence",
+                    matched_keyword=None,
+                    layer="bert_low_confidence",
+                )
             return _post_validate_category(
                 txn,
                 CategoryResult(
                     category=_canonicalize_category_name(labels[0], rules),
-                    confidence=float(scores[0]),
+                    confidence=bert_score,
                     matched_rule="bert_model",
                     matched_keyword=None,
                     layer="bert_model",
@@ -576,8 +571,8 @@ def categorize_transactions(
     for i, txn in enumerate(txns):
         # Layer 1: step_1 high-confidence pattern rules
         if _STEP1_AVAILABLE:
-            merchant = str(txn.get("merchant_clean") or txn.get("merchant_raw") or "")
-            step1 = _categorize_step_1(merchant)
+            step1_text = str(txn.get("raw_description") or txn.get("merchant_raw") or txn.get("merchant_clean") or "")
+            step1 = _categorize_step_1(step1_text)
             if step1 is not None:
                 result = _post_validate_category(txn, CategoryResult(
                     category=_canonicalize_category_name(step1.category, rules),
@@ -606,8 +601,8 @@ def categorize_transactions(
             categorized.append(txn)
             continue
 
-        # Layer 3: BERT — collect for batch inference
-        text = str(txn.get("raw_description") or txn.get("merchant_raw") or "")
+        # Layer 3: BERT — collect for batch inference (use clean merchant string)
+        text = str(txn.get("merchant_clean") or "")
         if text:
             bert_idx.append(i)
             bert_texts.append(text)
@@ -619,9 +614,17 @@ def categorize_transactions(
         try:
             labels, scores = _bert_predict_batch(bert_texts)
             for idx, label, score in zip(bert_idx, labels, scores):
+                score_val = float(score)
+                if score_val <= BERT_MIN_CONFIDENCE:
+                    categorized[idx]["category"] = "Uncategorized"
+                    categorized[idx]["confidence"] = score_val
+                    categorized[idx]["matched_rule"] = "bert_low_confidence"
+                    categorized[idx]["matched_keyword"] = None
+                    categorized[idx]["category_layer"] = "bert_low_confidence"
+                    continue
                 candidate = CategoryResult(
                     category=_canonicalize_category_name(label, rules),
-                    confidence=float(score),
+                    confidence=score_val,
                     matched_rule="bert_model",
                     matched_keyword=None,
                     layer="bert_model",
