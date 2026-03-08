@@ -1199,6 +1199,32 @@ def _refine_merchant(name: str, fallback: str) -> tuple[str, Optional[str]]:
     return cleaned, None
 
 
+_TITLE_CONNECTORS: frozenset = frozenset({"of", "and", "the", "in", "at", "to", "for", "a", "an"})
+
+
+def _smart_title(text: str) -> str:
+    """Title-case an all-uppercase merchant name.
+
+    Rules:
+    - Short all-alpha tokens (≤3 chars) are treated as abbreviations and kept uppercase.
+    - Connector words (of, and, the, …) after the first token are lowercased.
+    - Tokens with digits or punctuation are left unchanged.
+    - Everything else is capitalized.
+    """
+    words = text.split()
+    result = []
+    for i, word in enumerate(words):
+        if not word.isalpha():
+            result.append(word)  # digits/punctuation — leave as-is
+        elif i > 0 and word.lower() in _TITLE_CONNECTORS:
+            result.append(word.lower())
+        elif len(word) <= 3 and word.isupper():
+            result.append(word)  # short abbreviation — keep uppercase
+        else:
+            result.append(word.capitalize())
+    return " ".join(result)
+
+
 def merchant_clean(raw: str) -> str:
     stage_a = _truncate_at_garbage(raw)
     structured = _extract_structured_merchant(stage_a)
@@ -1210,6 +1236,11 @@ def merchant_clean(raw: str) -> str:
     # Skip fuzzy normalization for fee-type results — the fee label is already canonical.
     if not txn_subtype:
         normalized = _fuzzy_normalize_merchant(normalized)
+    # If the result is still all-uppercase, apply smart title-casing.
+    # Aliases and fuzzy normalization already produce correctly-cased output;
+    # this only fires for merchants that didn't match any known brand.
+    if normalized and normalized == normalized.upper():
+        normalized = _smart_title(normalized)
     if len(normalized) > 60:
         return normalized[:57].rstrip() + "..."
     return normalized
