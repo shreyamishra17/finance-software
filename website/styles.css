@@ -495,13 +495,14 @@ main {
   margin-bottom: 12px;
 }
 
-.txn-row {
+.txn-row,
+.txn-row td {
   cursor: pointer;
 }
-.txn-row:hover {
+.txn-row:hover td {
   background: #f5f7fa;
 }
-.txn-row.is-expanded {
+.txn-row.is-expanded td {
   background: #eef2ff;
 }
 .txn-detail .txn-raw {
