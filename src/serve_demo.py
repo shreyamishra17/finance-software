@@ -40,6 +40,12 @@ class DemoHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def end_headers(self) -> None:
+        # Prevent browsers from caching HTML so frontend changes are always fresh.
+        if self.path.split("?")[0].endswith(".html") or self.path == "/":
+            self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
     def do_GET(self) -> None:
         # Serve the static site from the website/ folder.
         path = urlparse(self.path).path
