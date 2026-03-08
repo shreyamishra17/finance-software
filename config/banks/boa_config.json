@@ -45,10 +45,12 @@
     "bankofamerica.com"
   ],
   "fee_keywords": [
-    "INTERNATIONAL TRANSACTION FEE"
+    "INTERNATIONAL TRANSACTION FEE",
+    "DMV FEE"
   ],
   "fee_labels": {
-    "INTERNATIONAL TRANSACTION FEE": "International Transaction Fee"
+    "INTERNATIONAL TRANSACTION FEE": "International Transaction Fee",
+    "DMV FEE": "DMV Fee"
   },
   "section_headers": {
     "deposits": ["Deposits and Other Additions"],

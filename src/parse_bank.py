@@ -932,10 +932,11 @@ def _strip_city_state_tail(tokens: List[str]) -> List[str]:
                 changed = True
                 continue
 
-        # Pattern 2: last 1–3 tokens form a known city name
+        # Pattern 2: last 1–3 tokens form a known city name (min 4 chars to avoid
+        # false positives on short common words like "Of" which exist in geonamescache).
         for n in range(min(3, len(result) - 1), 0, -1):
             candidate = " ".join(result[-n:]).lower()
-            if candidate in city_names:
+            if candidate in city_names and len(candidate) >= 4:
                 del result[-n:]
                 changed = True
                 break
@@ -944,10 +945,17 @@ def _strip_city_state_tail(tokens: List[str]) -> List[str]:
 
 
 def _strip_state_zip_anchor(tokens: List[str]) -> List[str]:
-    # Strip everything from the last state abbreviation to the end.
-    for i in range(len(tokens) - 1, -1, -1):
+    # Strip everything from the last state abbreviation to the end, but only search
+    # within the last 3 tokens. This prevents stripping state abbrs embedded in merchant
+    # names (e.g. "SD" in "SD ZOO ADMISSIONS", "CA" in "CA DMV FEE").
+    # Also never returns an empty list — if stripping would leave nothing, keep original.
+    if len(tokens) < 2:
+        return tokens
+    tail_start = max(0, len(tokens) - 3)
+    for i in range(len(tokens) - 1, tail_start - 1, -1):
         if _is_state_abbr(tokens[i].upper()):
-            return tokens[:i]
+            result = tokens[:i]
+            return result if result else tokens
     return tokens
 
 
@@ -1196,10 +1204,12 @@ def merchant_clean(raw: str) -> str:
     structured = _extract_structured_merchant(stage_a)
     stage_b = _stage_b_extract(structured or stage_a)
     cleaned = safe_cleanup(stage_b)
-    refined, _ = _refine_merchant(cleaned, structured or stage_b or stage_a)
+    refined, txn_subtype = _refine_merchant(cleaned, structured or stage_b or stage_a)
     refined = _strip_trailing_descriptors(refined)
     normalized = _apply_merchant_normalization(refined)
-    normalized = _fuzzy_normalize_merchant(normalized)
+    # Skip fuzzy normalization for fee-type results — the fee label is already canonical.
+    if not txn_subtype:
+        normalized = _fuzzy_normalize_merchant(normalized)
     if len(normalized) > 60:
         return normalized[:57].rstrip() + "..."
     return normalized
