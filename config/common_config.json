@@ -58,7 +58,9 @@
     "DRIVE INS CO": "Drive Insurance",
     "MIRAMAR CASH": "Miramar Cash and Carry",
     "TRADER JOE": "Trader Joe's",
-    "TRADER JOES": "Trader Joe's"
+    "TRADER JOES": "Trader Joe's",
+    "QUALCOMM": "Qualcomm",
+    "QUALCOMM VISION CENTER": "Qualcomm Vision Center"
   },
   "contains_aliases": {
     "WHOLE FOODS": "Whole Foods",
@@ -67,7 +69,6 @@
     "DOORDASH": "DoorDash",
     "LYFT": "Lyft",
     "NETFLIX": "Netflix",
-    "QUALCOMM": "Qualcomm",
     "BARNESNOBLE": "Barnes & Noble",
     "ZARA": "Zara",
     "COURSERA": "Coursera",
