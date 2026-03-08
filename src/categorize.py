@@ -328,9 +328,11 @@ def _categorize_by_rapidfuzz(txn: dict, rules: dict) -> Optional[CategoryResult]
     if not reference:
         return None
     try:
-        from rapidfuzz import process, fuzz  # type: ignore
+        from rapidfuzz import process, fuzz, utils  # type: ignore
         companies = [c for c, _ in reference]
-        result = process.extractOne(merchant, companies, scorer=fuzz.WRatio)
+        result = process.extractOne(
+            merchant, companies, scorer=fuzz.WRatio, processor=utils.default_process
+        )
         if result is None or result[1] < RAPIDFUZZ_THRESHOLD:
             return None
         matched_company = result[0]
