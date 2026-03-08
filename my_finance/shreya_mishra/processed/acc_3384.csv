@@ -72,3 +72,19 @@ date,payment_channel,transaction_code,merchant_raw,merchant_clean,city,state,zip
 06/21,NA,NA,STARBUCKS STORE 08947 LA JOLLA CA Restaurants,STARBUCKS STORE,NA,NA,NA,$7.00,credit,NA,disc_jul25_disc3384_disc3384.pdf,Food & Drink
 07/05,NA,SQ,SQ *THE HAPPY LEMONADE SPRING Restaurants,SQ THE HAPPY LEMONADE SPRING Restaurants,NA,NA,NA,$6.50,credit,NA,disc_jul25_disc3384_disc3384.pdf,Food & Drink
 07/08,NA,NA,ZARA USA 7013 SAN DIEGO CA Merchandise,ZARA USA,San Diego,CA,NA,$129.19,credit,NA,disc_jul25_disc3384_disc3384.pdf,Shopping
+02/02,NA,NA,LULULEMON WESTFIELD U SAN DIEGO CA,LULULEMON WESTFIELD,San Diego,CA,NA,-$426.69,debit,NA,disc_feb25_disc3384_disc3384.pdf,Uncategorized
+01/16,NA,NA,ZARA.COM/USA 855-635-9272 NY Merchandise,Zara,NA,NY,NA,$92.82,credit,NA,disc_feb25_disc3384_disc3384.pdf,Shopping
+01/19,NA,NA,LULULEMON WESTFIELD U SAN DIEGO CA Merchandise,LULULEMON WESTFIELD,San Diego,CA,NA,$63.57,credit,NA,disc_feb25_disc3384_disc3384.pdf,Shopping
+01/19,NA,NA,ANTHROPOLOGIE #513 SAN DIEGO CA Merchandise,Anthropologie,San Diego,CA,NA,$172.37,credit,NA,disc_feb25_disc3384_disc3384.pdf,Shopping
+01/19,NA,NA,PILATES REPUBLIC 7606427002 CA Travel/Entertainment,PILATES REPUBLIC,NA,CA,NA,$30.00,credit,7606427002,disc_feb25_disc3384_disc3384.pdf,Fitness
+01/24,NA,NA,RASRAJ SAN DIEGO CA Restaurants,RASRAJ,San Diego,CA,NA,$26.92,credit,NA,disc_feb25_disc3384_disc3384.pdf,Food & Drink
+01/24,NA,NA,COBS SPAINNY 212-7146655 NY Services,COBS SPAINNY,NA,NY,NA,$18.00,credit,NA,disc_feb25_disc3384_disc3384.pdf,Uncategorized
+01/25,NA,NA,LULULEMON LA JOLLA LA JOLLA CA Merchandise,LULULEMON,La Jolla,CA,NA,$443.93,credit,NA,disc_feb25_disc3384_disc3384.pdf,Shopping
+01/26,NA,NA,LULULEMON WESTFIELD U SAN DIEGO CA Merchandise,LULULEMON WESTFIELD,San Diego,CA,NA,$426.69,credit,NA,disc_feb25_disc3384_disc3384.pdf,Shopping
+01/30,NA,NA,PILATES REPUBLIC 7606427002 CA Travel/Entertainment,PILATES REPUBLIC,NA,CA,NA,$400.00,credit,7606427002,disc_feb25_disc3384_disc3384.pdf,Fitness
+01/31,NA,NA,CVSEXTRACARE 8007467287R Merchandise,CVSEXTRACARE,NA,NA,NA,$5.39,credit,NA,disc_feb25_disc3384_disc3384.pdf,Subscriptions
+01/31,NA,TST,TST*OSTERIA ROMANTICA LA JOLLA CA Restaurants,ROMANTICA,La Jolla,CA,NA,$36.94,credit,NA,disc_feb25_disc3384_disc3384.pdf,Food & Drink
+02/02,NA,NA,TARGET 00003053091 SAN DIEGO CA Supermarkets,TARGET,San Diego,CA,NA,$143.63,credit,NA,disc_feb25_disc3384_disc3384.pdf,Shopping
+02/10,NA,NA,THE TOLL ROADS OF OC 949-727-4800 CA Travel/Entertainment,THE TOLL ROADS,NA,CA,NA,$7.17,credit,NA,disc_feb25_disc3384_disc3384.pdf,Auto & Transport
+02/11,NA,NA,ANTHROPOLOGIE.COM 8003092500 PA Merchandise,Anthropologie,NA,PA,NA,$383.54,credit,8003092500,disc_feb25_disc3384_disc3384.pdf,Shopping
+02/11,NA,NA,ANTHROPOLOGIE.COM 8003092500 PA Merchandise,Anthropologie,NA,PA,NA,$51.72,credit,8003092500,disc_feb25_disc3384_disc3384.pdf,Shopping
