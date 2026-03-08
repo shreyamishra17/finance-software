@@ -49,6 +49,7 @@
               <div class="category-title">Categories</div>
               <div class="results-summary category-summary" id="categorySummary"></div>
             </div>
+            <div id="categoryTotal" class="category-total" hidden></div>
             <div class="results-table-wrap">
               <table class="results-table">
                 <thead>
@@ -84,6 +85,7 @@
       const resultsBody = document.getElementById("resultsBody");
       const categorySummary = document.getElementById("categorySummary");
       const categoryBlock = document.getElementById("categoryBlock");
+      const categoryTotal = document.getElementById("categoryTotal");
 
       let lastPayload = null;
       let activeCategory = "All";
@@ -151,12 +153,42 @@
           .join("");
       }
 
+      function parseAmount(amountStr) {
+        if (!amountStr) return null;
+        const s = String(amountStr).replace(/[$,\s]/g, "");
+        const n = parseFloat(s);
+        return isNaN(n) ? null : n;
+      }
+
       function renderTransactions(payload, categoryFilter = "All") {
         const txns = payload.transactions || [];
         const filteredTxns =
           categoryFilter && categoryFilter !== "All"
             ? txns.filter((t) => (t.category || "Uncategorized") === categoryFilter)
             : txns;
+
+        // Show total spending for the selected category
+        if (categoryFilter && categoryFilter !== "All") {
+          let total = 0;
+          filteredTxns.forEach((t) => {
+            let amount = t.amount || "";
+            const type = (t.txn_type || "").toLowerCase();
+            if (amount && (type === "withdrawals" || type === "fee")) {
+              if (!String(amount).startsWith("-") && !String(amount).startsWith("(")) {
+                amount = `-${amount}`;
+              }
+            }
+            const n = parseAmount(amount);
+            if (n !== null) total += n;
+          });
+          const sign = total < 0 ? "-" : total > 0 ? "+" : "";
+          const formatted = `$${Math.abs(total).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+          categoryTotal.textContent = `${categoryFilter}: ${sign}${formatted} across ${filteredTxns.length} transaction${filteredTxns.length !== 1 ? "s" : ""}`;
+          categoryTotal.hidden = false;
+        } else {
+          categoryTotal.hidden = true;
+        }
+
         const categoryCounts = {};
         resultsBody.innerHTML = filteredTxns
           .map(
