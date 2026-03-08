@@ -33,7 +33,7 @@ def categorize_step_1(merchant_name: str) -> Step1Result | None:
     # Priority 3: Toast POS transactions for restaurants/food service.
     if "TST*" in text or "TST *" in text:
         return Step1Result(
-            category="Food & Dining",
+            category="Food & Drink",
             confidence=1.0,
             predicted_by="step_1",
         )

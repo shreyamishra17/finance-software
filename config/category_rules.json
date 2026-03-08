@@ -9,11 +9,32 @@
     "HEALTH/SHOPPING": "Health",
     "HEALTHCARE & MEDICAL": "Health",
     "OTHER/MISC": "Miscellaneous",
+    "RESTAURANTS": "Food & Drink",
+    "MERCHANDISE": "Shopping",
     "SHOPPING & RETAIL": "Shopping",
+    "AUTOMOTIVE": "Auto & Transport",
+    "GASOLINE": "Auto & Transport",
+    "TRAVEL/ENTERTAINMENT": "Entertainment",
     "TRANSPORTATION": "Auto & Transport",
     "TRANSFER": "Finance",
     "UTILITIES & SERVICES": "Utilities & Bills"
   },
+  "statement_category_markers": [
+    "Restaurants",
+    "Merchandise",
+    "Automotive",
+    "Gasoline",
+    "Travel",
+    "Travel/Entertainment",
+    "Entertainment",
+    "Health/Shopping",
+    "Utilities & Services",
+    "Financial Services",
+    "Food & Dining",
+    "Shopping & Retail",
+    "Transportation",
+    "Other/Misc"
+  ],
   "high_confidence": [
     {
       "category": "Finance",

@@ -148,6 +148,39 @@ def _find_keyword_match(haystack: str, keywords: Iterable[str]) -> Optional[str]
     return None
 
 
+def _statement_category_markers(rules: dict) -> list[str]:
+    markers = rules.get("statement_category_markers", [])
+    if not isinstance(markers, list):
+        return []
+    normalized: list[str] = []
+    for marker in markers:
+        text = str(marker).strip()
+        if text:
+            normalized.append(_normalize(text))
+    return sorted(set(normalized), key=len, reverse=True)
+
+
+def _categorize_from_statement_tail(txn: dict, rules: dict) -> Optional[CategoryResult]:
+    raw = str(txn.get("raw_description") or txn.get("merchant_raw") or "").strip()
+    if not raw:
+        return None
+    raw_norm = _normalize(raw)
+    merchant_norm = _normalize(str(txn.get("merchant_clean") or ""))
+
+    for marker in _statement_category_markers(rules):
+        if not re.search(rf"(?:^|[\s:,\-/]){re.escape(marker)}$", raw_norm):
+            continue
+        if merchant_norm.endswith(marker):
+            continue
+        category = _canonicalize_category_name(marker, rules)
+        return CategoryResult(
+            category=category,
+            confidence=0.99,
+            matched_rule="statement_category_tail",
+            matched_keyword=marker,
+            layer="statement_category",
+        )
+    return None
 
 
 def _select_device(torch_module):
@@ -400,7 +433,12 @@ def categorize_transaction(txn: dict, rules_path: Optional[Path] = None) -> Cate
     if rules_result.layer != "rules_default":
         return rules_result
 
-    # Layer 2: BERT model fallback
+    # Layer 2: statement category hint (used only when rules do not match).
+    statement_result = _categorize_from_statement_tail(txn, rules)
+    if statement_result is not None:
+        return statement_result
+
+    # Layer 3: BERT model fallback
     text = str(txn.get("raw_description") or txn.get("merchant_raw") or "")
     if text and _init_bert():
         try:
@@ -449,6 +487,17 @@ def categorize_transactions(
             txn["matched_rule"] = rules_result.matched_rule
             txn["matched_keyword"] = rules_result.matched_keyword
             txn["category_layer"] = rules_result.layer
+            categorized.append(txn)
+            continue
+
+        # Layer 2: statement tail category hint only when rules had no match.
+        statement_result = _categorize_from_statement_tail(txn, rules)
+        if statement_result is not None:
+            txn["category"] = statement_result.category
+            txn["confidence"] = statement_result.confidence
+            txn["matched_rule"] = statement_result.matched_rule
+            txn["matched_keyword"] = statement_result.matched_keyword
+            txn["category_layer"] = statement_result.layer
             categorized.append(txn)
             continue
 

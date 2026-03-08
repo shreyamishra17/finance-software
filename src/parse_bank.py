@@ -7,6 +7,7 @@ import os
 import hashlib
 import re
 import sys
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -25,65 +26,36 @@ PROCESSED_DIR = Path(os.environ.get("FINELY_PROCESSED_DIR", str(DATA_ROOT / "pro
 
 class ParserConfig:
     COMMON_CONFIG_PATH = PROJECT_ROOT / "config" / "common_config.json"
-    CONFIG_PATH = PROJECT_ROOT / "config" / "banks" / "boa_config.json"
-
-    BOILERPLATE_PATTERNS: List[str] = []
+    # These regex patterns never change — kep
+    #  as class attributes so they're
+    # accessible both as ParserConfig.X (backwards compat) and _cfg().X (instance lookup).
     PHONE_RE = re.compile(r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b")
     MMDD_RE = re.compile(r"\b(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\b")
     MM_DD_RE = re.compile(r"\b(0[1-9]|1[0-2])/(0[1-9]|[12]\d|3[01])\b")
     LONG_ID_RE = re.compile(r"\b[0-9]{8,}\b")
 
-    STATE_ABBRS: set[str] = set()
-    MARKERS: dict = {}
-    LOCATION_WORDS: set[str] = set()
-    LOCATION_PREFIX_WORDS: set[str] = set()
-    LOCATION_PHRASES: List[str] = []
-    STOP_PHRASES: List[str] = []
-    FEE_KEYWORDS: List[str] = []
-    FEE_LABELS: dict = {}
-    SECTION_HEADERS: dict = {}
-    SECTION_END_MARKERS: List[str] = []
-    TABLE_HEADER_MARKERS: List[str] = []
-    MERCHANT_MARKERS: List[dict] = []
-    P2P_RULES: List[dict] = []
-    BANK_NAME: Optional[str] = None
-    BANK_ALIASES: List[str] = []
-    IGNORABLE_TAIL_PATTERNS: List[str] = []
-    METADATA_LABELS: List[str] = ["DES", "ID", "INDN", "CO ID", "PPD", "WEB", "INFO", "PMT"]
-    PREFERRED_MERCHANT_LABELS: List[str] = ["DES"]
-    SUMMARY_ALIASES: dict[str, list[str]] = {
-        "beginning_balance": ["beginning balance", "opening balance", "previous balance", "starting balance"],
-        "deposits_additions": ["deposits", "credits", "payments and credits", "money in", "total credits"],
-        "withdrawals_subtractions": ["withdrawals", "debits", "purchases", "money out", "total debits"],
-        "checks": ["checks", "check payments"],
-        "service_fees": ["service fees", "fees charged", "finance charges", "charges and fees"],
-        "ending_balance": ["ending balance", "new balance", "closing balance", "current balance"],
-    }
-    TRAILING_MERCHANT_DESCRIPTORS: List[str] = []
-    NON_TRANSACTION_PATTERNS: List[str] = []
-
-    @classmethod
-    def _reset_runtime_defaults(cls) -> None:
-        cls.BOILERPLATE_PATTERNS = []
-        cls.STATE_ABBRS = set()
-        cls.MARKERS = {}
-        cls.LOCATION_WORDS = set()
-        cls.LOCATION_PREFIX_WORDS = set()
-        cls.LOCATION_PHRASES = []
-        cls.STOP_PHRASES = []
-        cls.FEE_KEYWORDS = []
-        cls.FEE_LABELS = {}
-        cls.SECTION_HEADERS = {}
-        cls.SECTION_END_MARKERS = []
-        cls.TABLE_HEADER_MARKERS = []
-        cls.MERCHANT_MARKERS = []
-        cls.P2P_RULES = []
-        cls.BANK_NAME = None
-        cls.BANK_ALIASES = []
-        cls.IGNORABLE_TAIL_PATTERNS = []
-        cls.METADATA_LABELS = ["DES", "ID", "INDN", "CO ID", "PPD", "WEB", "INFO", "PMT"]
-        cls.PREFERRED_MERCHANT_LABELS = ["DES"]
-        cls.SUMMARY_ALIASES = {
+    def __init__(self) -> None:
+        self.CONFIG_PATH: Optional[Path] = None
+        self.BOILERPLATE_PATTERNS: List[str] = []
+        self.STATE_ABBRS: set[str] = set()
+        self.MARKERS: dict = {}
+        self.LOCATION_WORDS: set[str] = set()
+        self.LOCATION_PREFIX_WORDS: set[str] = set()
+        self.LOCATION_PHRASES: List[str] = []
+        self.STOP_PHRASES: List[str] = []
+        self.FEE_KEYWORDS: List[str] = []
+        self.FEE_LABELS: dict = {}
+        self.SECTION_HEADERS: dict = {}
+        self.SECTION_END_MARKERS: List[str] = []
+        self.TABLE_HEADER_MARKERS: List[str] = []
+        self.MERCHANT_MARKERS: List[dict] = []
+        self.P2P_RULES: List[dict] = []
+        self.BANK_NAME: Optional[str] = None
+        self.BANK_ALIASES: List[str] = []
+        self.IGNORABLE_TAIL_PATTERNS: List[str] = []
+        self.METADATA_LABELS: List[str] = ["DES", "ID", "INDN", "CO ID", "PPD", "WEB", "INFO", "PMT"]
+        self.PREFERRED_MERCHANT_LABELS: List[str] = ["DES"]
+        self.SUMMARY_ALIASES: dict[str, list[str]] = {
             "beginning_balance": ["beginning balance", "opening balance", "previous balance", "starting balance"],
             "deposits_additions": ["deposits", "credits", "payments and credits", "money in", "total credits"],
             "withdrawals_subtractions": ["withdrawals", "debits", "purchases", "money out", "total debits"],
@@ -91,133 +63,133 @@ class ParserConfig:
             "service_fees": ["service fees", "fees charged", "finance charges", "charges and fees"],
             "ending_balance": ["ending balance", "new balance", "closing balance", "current balance"],
         }
-        cls.TRAILING_MERCHANT_DESCRIPTORS = []
-        cls.NON_TRANSACTION_PATTERNS = []
+        self.TRAILING_MERCHANT_DESCRIPTORS: List[str] = []
+        self.MERCHANT_PROCESSOR_PREFIXES: List[str] = ["SP", "SQ", "TST*", "DD", "PAYPAL", "PP*"]
+        self.MERCHANT_TAIL_JUNK_PATTERNS: List[str] = [
+            r"^\d{2,4}-$",
+            r"^[A-Z]\d{4,}$",
+            r"^\d+[A-Z]+$",
+            r"^[A-Z]+\d+$",
+        ]
+        self.MERCHANT_SHORT_TOKEN_KEEP: set[str] = {
+            "BB",
+            "JR",
+            "SR",
+            "US",
+            "UK",
+            "NY",
+            "LA",
+            "SF",
+        }
+        self.MERCHANT_CONNECTOR_TOKENS: set[str] = {"&", "AND", "THE", "OF", "IN", "AT", "TO", "FOR"}
+        self.MERCHANT_URL_TLD_STRIP: List[str] = ["com", "org", "net", "ca", "io"]
+        self.NON_TRANSACTION_PATTERNS: List[str] = []
+        self.header_hints: List[str] = []
+        self.PAYMENT_CHANNEL_RULES: List[tuple[str, str]] = [
+            ("EXT TRNSFR", "External Transfer"),
+            ("EXT TRNSF", "External Transfer"),
+            ("EXTERNAL TRANSFER", "External Transfer"),
+            ("E-PAYMENT", "E-Payment"),
+            ("ZELLE", "Zelle"),
+            ("VENMO", "Venmo"),
+            ("DIRECT DEP", "Direct Dep"),
+            ("CHECKCARD", "Checkcard"),
+            ("MOBILE PURCHASE", "Mobile Purchase"),
+            ("CARD PURCHASE", "Card Purchase"),
+            ("PURCHASE", "Purchase"),
+            ("ACH", "ACH"),
+            ("WIRE", "Wire"),
+        ]
+        self.TRANSACTION_CODE_PATTERNS: List[str] = [
+            r"\bSQ\b",
+            r"\bTST\*?\b",
+            r"\bDES:?\b",
+            r"\bID:?\b",
+            r"\bACH\b",
+        ]
+        self.STATEMENT_TYPE_CREDIT_SIGNALS: List[str] = [
+            "minimum payment due", "credit limit", "available credit",
+            "new balance", "payments and credits", "purchases",
+            "cash advance", "balance transfer",
+        ]
+        self.STATEMENT_TYPE_DEBIT_SIGNALS: List[str] = [
+            "beginning balance", "ending balance", "deposits",
+            "withdrawals", "checks", "service fees",
+        ]
+        self.SUMMARY_IGNORE_MARKERS: List[str] = [
+            "trans date", "merchantcategory", "importantinformation",
+            "cashback bonus", "redeemedthisperiod", "warning",
+            "minimum payment warning", "midnight eastern",
+            "account made after", "cardmember agreement",
+            "directpayautomaticpayment",
+            "your next directpay automatic payment", "willbeon",
+        ]
+        self.SUMMARY_SIGNAL_TERMS: set[str] = {
+            "balance", "payment", "payments", "credit", "credits",
+            "purchase", "purchases", "debit", "debits", "fee", "fees",
+            "interest", "checks", "deposit", "deposits",
+            "withdrawal", "withdrawals", "due", "minimum", "total",
+        }
+        self.SUMMARY_CANONICAL_LABELS: dict[str, str] = {
+            "beginning_balance": "Previous Balance",
+            "deposits_additions": "Payments and Credits",
+            "withdrawals_subtractions": "Purchases",
+            "checks": "Checks",
+            "service_fees": "Fees Charged",
+            "ending_balance": "New Balance",
+        }
 
-        global HEADER_HINTS
-        HEADER_HINTS = []
-
-    @classmethod
-    def _load_common_defaults(cls) -> None:
-        path = cls.COMMON_CONFIG_PATH
-        if not path.exists():
-            return
-        try:
-            with path.open("r", encoding="utf-8") as fh:
-                data = json.load(fh)
-        except (OSError, json.JSONDecodeError):
-            return
-
-        state_abbrs = data.get("state_abbrs", [])
-        if isinstance(state_abbrs, list):
-            parsed = {str(x).upper() for x in state_abbrs if str(x).strip()}
-            if parsed:
-                cls.STATE_ABBRS = parsed
-
-        locations = data.get("locations", [])
-        if isinstance(locations, list):
-            normalized = [str(x).strip() for x in locations if str(x).strip()]
-            if normalized:
-                cls.LOCATION_PHRASES = normalized
-                words = set()
-                prefix_words = set()
-                for phrase in normalized:
-                    parts = phrase.lower().split()
-                    for part in parts:
-                        words.add(part)
-                    if len(parts) > 1:
-                        prefix_words.update(parts[:-1])
-                cls.LOCATION_WORDS = words
-                cls.LOCATION_PREFIX_WORDS = prefix_words
-
-        summary_aliases = data.get("summary_aliases", {})
-        if isinstance(summary_aliases, dict):
-            parsed: dict[str, list[str]] = {}
-            for key, values in summary_aliases.items():
-                if not isinstance(values, list):
-                    continue
-                vals = [str(v).lower().strip() for v in values if str(v).strip()]
-                if vals:
-                    parsed[str(key)] = vals
-            if parsed:
-                cls.SUMMARY_ALIASES = parsed
-
-        trailing_desc = data.get("trailing_merchant_descriptors", [])
-        if isinstance(trailing_desc, list):
-            parsed = [str(x).strip().upper() for x in trailing_desc if str(x).strip()]
-            if parsed:
-                cls.TRAILING_MERCHANT_DESCRIPTORS = parsed
-
-        non_txn = data.get("non_transaction_patterns", [])
-        if isinstance(non_txn, list):
-            parsed = [str(x).strip() for x in non_txn if str(x).strip()]
-            if parsed:
-                cls.NON_TRANSACTION_PATTERNS = parsed
-
-    @classmethod
-    def load_from_json(cls, config_path: Optional[Path] = None) -> None:
-        cls._reset_runtime_defaults()
-        cls._load_common_defaults()
-        if config_path is not None:
-            cls.CONFIG_PATH = config_path
-        if not cls.CONFIG_PATH.exists():
-            return
-        try:
-            with cls.CONFIG_PATH.open("r", encoding="utf-8") as fh:
-                data = json.load(fh)
-        except (OSError, json.JSONDecodeError):
-            return
-
+    def _apply_config_data(self, data: dict) -> None:
+        """Apply fields from a parsed JSON config dict onto this instance."""
         markers = data.get("markers", {})
         if isinstance(markers, dict):
-            cls.MARKERS = {str(k): v for k, v in markers.items()}
+            self.MARKERS = {str(k): v for k, v in markers.items()}
 
         stop_phrases = data.get("stop_phrases", [])
         if isinstance(stop_phrases, list):
-            cls.STOP_PHRASES = [str(x).lower() for x in stop_phrases if str(x).strip()]
+            self.STOP_PHRASES = [str(x).lower() for x in stop_phrases if str(x).strip()]
 
         fee_keywords = data.get("fee_keywords", [])
         if isinstance(fee_keywords, list):
-            cls.FEE_KEYWORDS = [str(x).upper() for x in fee_keywords if str(x).strip()]
+            self.FEE_KEYWORDS = [str(x).upper() for x in fee_keywords if str(x).strip()]
 
         fee_labels = data.get("fee_labels", {})
         if isinstance(fee_labels, dict):
-            cls.FEE_LABELS = {str(k).upper(): str(v) for k, v in fee_labels.items() if str(k).strip()}
+            self.FEE_LABELS = {str(k).upper(): str(v) for k, v in fee_labels.items() if str(k).strip()}
 
         boilerplate = data.get("boilerplate_patterns", [])
         if isinstance(boilerplate, list):
-            cls.BOILERPLATE_PATTERNS = [str(x) for x in boilerplate if str(x).strip()]
+            self.BOILERPLATE_PATTERNS = [str(x) for x in boilerplate if str(x).strip()]
 
         state_abbrs = data.get("state_abbrs", [])
         if isinstance(state_abbrs, list):
             parsed = {str(x).upper() for x in state_abbrs if str(x).strip()}
             if parsed:
-                cls.STATE_ABBRS = parsed
+                self.STATE_ABBRS = parsed
 
         locations = data.get("locations", [])
         if isinstance(locations, list):
             normalized = [str(x).strip() for x in locations if str(x).strip()]
             if normalized:
-                cls.LOCATION_PHRASES = normalized
-                words = set()
-                prefix_words = set()
+                self.LOCATION_PHRASES = normalized
+                words: set[str] = set()
+                prefix_words: set[str] = set()
                 for phrase in normalized:
                     parts = phrase.lower().split()
                     for part in parts:
                         words.add(part)
                     if len(parts) > 1:
                         prefix_words.update(parts[:-1])
-                cls.LOCATION_WORDS = words
-                cls.LOCATION_PREFIX_WORDS = prefix_words
+                self.LOCATION_WORDS = words
+                self.LOCATION_PREFIX_WORDS = prefix_words
 
         header_hints = data.get("header_hints", [])
         if isinstance(header_hints, list):
-            global HEADER_HINTS
-            HEADER_HINTS = [str(x).lower() for x in header_hints if str(x).strip()]
+            self.header_hints = [str(x).lower() for x in header_hints if str(x).strip()]
 
         section_headers = data.get("section_headers", {})
         if isinstance(section_headers, dict):
-            cls.SECTION_HEADERS = {
+            self.SECTION_HEADERS = {
                 str(k): [str(x).lower() for x in v if str(x).strip()]
                 for k, v in section_headers.items()
                 if isinstance(v, list)
@@ -225,80 +197,185 @@ class ParserConfig:
 
         section_end = data.get("section_end_markers", [])
         if isinstance(section_end, list):
-            cls.SECTION_END_MARKERS = [str(x).lower() for x in section_end if str(x).strip()]
+            self.SECTION_END_MARKERS = [str(x).lower() for x in section_end if str(x).strip()]
 
         table_headers = data.get("table_header_markers", [])
         if isinstance(table_headers, list):
-            cls.TABLE_HEADER_MARKERS = [str(x).lower() for x in table_headers if str(x).strip()]
+            self.TABLE_HEADER_MARKERS = [str(x).lower() for x in table_headers if str(x).strip()]
 
         merchant_markers = data.get("merchant_markers", [])
         if isinstance(merchant_markers, list):
-            cls.MERCHANT_MARKERS = [m for m in merchant_markers if isinstance(m, dict)]
+            parsed_mm = [m for m in merchant_markers if isinstance(m, dict)]
+            if parsed_mm:
+                self.MERCHANT_MARKERS.extend(parsed_mm)
 
         p2p_rules = data.get("p2p_rules", [])
         if isinstance(p2p_rules, list):
-            cls.P2P_RULES = [r for r in p2p_rules if isinstance(r, dict)]
+            parsed_p2p = [r for r in p2p_rules if isinstance(r, dict)]
+            if parsed_p2p:
+                self.P2P_RULES.extend(parsed_p2p)
 
         bank_name = data.get("bank_name")
         if isinstance(bank_name, str) and bank_name.strip():
-            cls.BANK_NAME = bank_name.strip()
+            self.BANK_NAME = bank_name.strip()
 
         bank_aliases = data.get("bank_aliases", [])
         if isinstance(bank_aliases, list):
-            cls.BANK_ALIASES = [str(x).lower() for x in bank_aliases if str(x).strip()]
+            self.BANK_ALIASES = [str(x).lower() for x in bank_aliases if str(x).strip()]
 
         ignorable_tail = data.get("ignorable_tail_patterns", [])
         if isinstance(ignorable_tail, list):
-            cls.IGNORABLE_TAIL_PATTERNS = [str(x) for x in ignorable_tail if str(x).strip()]
+            self.IGNORABLE_TAIL_PATTERNS = [str(x) for x in ignorable_tail if str(x).strip()]
 
         metadata_labels = data.get("metadata_labels", [])
         if isinstance(metadata_labels, list):
-            parsed = [str(x).strip() for x in metadata_labels if str(x).strip()]
-            if parsed:
-                cls.METADATA_LABELS = parsed
+            parsed_ml = [str(x).strip() for x in metadata_labels if str(x).strip()]
+            if parsed_ml:
+                self.METADATA_LABELS = parsed_ml
 
         preferred_labels = data.get("preferred_merchant_labels", [])
         if isinstance(preferred_labels, list):
-            parsed = [str(x).strip() for x in preferred_labels if str(x).strip()]
-            if parsed:
-                cls.PREFERRED_MERCHANT_LABELS = parsed
+            parsed_pl = [str(x).strip() for x in preferred_labels if str(x).strip()]
+            if parsed_pl:
+                self.PREFERRED_MERCHANT_LABELS = parsed_pl
 
         summary_aliases = data.get("summary_aliases", {})
         if isinstance(summary_aliases, dict):
-            parsed: dict[str, list[str]] = {}
+            parsed_sa: dict[str, list[str]] = {}
             for key, values in summary_aliases.items():
                 if not isinstance(values, list):
                     continue
                 vals = [str(v).lower().strip() for v in values if str(v).strip()]
                 if vals:
-                    parsed[str(key)] = vals
-            if parsed:
-                cls.SUMMARY_ALIASES = parsed
+                    parsed_sa[str(key)] = vals
+            if parsed_sa:
+                self.SUMMARY_ALIASES = parsed_sa
 
         trailing_desc = data.get("trailing_merchant_descriptors", [])
         if isinstance(trailing_desc, list):
-            parsed = [str(x).strip().upper() for x in trailing_desc if str(x).strip()]
-            if parsed:
-                cls.TRAILING_MERCHANT_DESCRIPTORS = parsed
+            parsed_td = [str(x).strip().upper() for x in trailing_desc if str(x).strip()]
+            if parsed_td:
+                self.TRAILING_MERCHANT_DESCRIPTORS = parsed_td
+
+        processor_prefixes = data.get("merchant_processor_prefixes", [])
+        if isinstance(processor_prefixes, list):
+            parsed_pp = [str(x).strip().upper() for x in processor_prefixes if str(x).strip()]
+            if parsed_pp:
+                self.MERCHANT_PROCESSOR_PREFIXES = parsed_pp
+
+        tail_junk_patterns = data.get("merchant_tail_junk_patterns", [])
+        if isinstance(tail_junk_patterns, list):
+            parsed_tj = [str(x).strip() for x in tail_junk_patterns if str(x).strip()]
+            if parsed_tj:
+                self.MERCHANT_TAIL_JUNK_PATTERNS = parsed_tj
+
+        short_keep = data.get("merchant_short_token_keep", [])
+        if isinstance(short_keep, list):
+            parsed_sk = {str(x).strip().upper() for x in short_keep if str(x).strip()}
+            if parsed_sk:
+                self.MERCHANT_SHORT_TOKEN_KEEP = parsed_sk
+
+        connector_tokens = data.get("merchant_connector_tokens", [])
+        if isinstance(connector_tokens, list):
+            parsed_ct = {str(x).strip().upper() for x in connector_tokens if str(x).strip()}
+            if parsed_ct:
+                self.MERCHANT_CONNECTOR_TOKENS = parsed_ct
+
+        url_tld_strip = data.get("merchant_url_tld_strip", [])
+        if isinstance(url_tld_strip, list):
+            parsed_tld = [str(x).strip().lower() for x in url_tld_strip if str(x).strip()]
+            if parsed_tld:
+                self.MERCHANT_URL_TLD_STRIP = parsed_tld
 
         non_txn = data.get("non_transaction_patterns", [])
         if isinstance(non_txn, list):
-            parsed = [str(x).strip() for x in non_txn if str(x).strip()]
-            if parsed:
-                cls.NON_TRANSACTION_PATTERNS = parsed
+            parsed_nt = [str(x).strip() for x in non_txn if str(x).strip()]
+            if parsed_nt:
+                self.NON_TRANSACTION_PATTERNS = parsed_nt
+
+        payment_channel_rules = data.get("payment_channel_rules", [])
+        if isinstance(payment_channel_rules, list):
+            parsed_pcr = [
+                (str(r[0]).upper(), str(r[1]))
+                for r in payment_channel_rules
+                if isinstance(r, (list, tuple)) and len(r) == 2
+            ]
+            if parsed_pcr:
+                self.PAYMENT_CHANNEL_RULES = parsed_pcr
+
+        transaction_code_patterns = data.get("transaction_code_patterns", [])
+        if isinstance(transaction_code_patterns, list):
+            parsed_tcp = [str(x) for x in transaction_code_patterns if str(x).strip()]
+            if parsed_tcp:
+                self.TRANSACTION_CODE_PATTERNS = parsed_tcp
+
+        credit_signals = data.get("statement_type_credit_signals", [])
+        if isinstance(credit_signals, list):
+            parsed_cs = [str(x).lower().strip() for x in credit_signals if str(x).strip()]
+            if parsed_cs:
+                self.STATEMENT_TYPE_CREDIT_SIGNALS = parsed_cs
+
+        debit_signals = data.get("statement_type_debit_signals", [])
+        if isinstance(debit_signals, list):
+            parsed_ds = [str(x).lower().strip() for x in debit_signals if str(x).strip()]
+            if parsed_ds:
+                self.STATEMENT_TYPE_DEBIT_SIGNALS = parsed_ds
+
+        summary_ignore = data.get("summary_ignore_markers", [])
+        if isinstance(summary_ignore, list):
+            parsed_si = [str(x).lower().strip() for x in summary_ignore if str(x).strip()]
+            if parsed_si:
+                self.SUMMARY_IGNORE_MARKERS = parsed_si
+
+        summary_signal_terms = data.get("summary_signal_terms", [])
+        if isinstance(summary_signal_terms, list):
+            parsed_sst = {str(x).lower().strip() for x in summary_signal_terms if str(x).strip()}
+            if parsed_sst:
+                self.SUMMARY_SIGNAL_TERMS = parsed_sst
+
+        summary_canonical = data.get("summary_canonical_labels", {})
+        if isinstance(summary_canonical, dict):
+            parsed_scl = {str(k): str(v) for k, v in summary_canonical.items() if str(k).strip() and str(v).strip()}
+            if parsed_scl:
+                self.SUMMARY_CANONICAL_LABELS = parsed_scl
+
+    def _load_common_defaults(self) -> None:
+        path = self.COMMON_CONFIG_PATH
+        if not path.exists():
+            return
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return
+        self._apply_config_data(data)
+
+    def load_from_json(self, config_path: Optional[Path] = None) -> None:
+        self.__init__()
+        self._load_common_defaults()
+        if config_path is not None:
+            self.CONFIG_PATH = config_path
+        if self.CONFIG_PATH is None or not self.CONFIG_PATH.exists():
+            return
+        try:
+            with self.CONFIG_PATH.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return
+        self._apply_config_data(data)
 
 
 class MerchantNormalizationConfig:
     CONFIG_PATH = PROJECT_ROOT / "config" / "common_config.json"
 
-    TOKEN_REPLACEMENTS: dict[str, str] = {}
-    ALIASES: dict[str, str] = {}
-    CONTAINS_ALIASES: dict[str, str] = {}
-    STRIP_SUFFIX_TOKENS: set[str] = set()
+    def __init__(self) -> None:
+        self.TOKEN_REPLACEMENTS: dict[str, str] = {}
+        self.ALIASES: dict[str, str] = {}
+        self.CONTAINS_ALIASES: dict[str, str] = {}
+        self.STRIP_SUFFIX_TOKENS: set[str] = set()
 
-    @classmethod
-    def load_from_json(cls, config_path: Optional[Path] = None) -> None:
-        path = config_path or cls.CONFIG_PATH
+    def load_from_json(self, config_path: Optional[Path] = None) -> None:
+        path = config_path or self.CONFIG_PATH
         if not path.exists():
             return
         try:
@@ -309,7 +386,7 @@ class MerchantNormalizationConfig:
 
         token_replacements = data.get("token_replacements", {})
         if isinstance(token_replacements, dict):
-            cls.TOKEN_REPLACEMENTS = {
+            self.TOKEN_REPLACEMENTS = {
                 str(k).upper().strip(): str(v).strip()
                 for k, v in token_replacements.items()
                 if str(k).strip() and str(v).strip()
@@ -317,7 +394,7 @@ class MerchantNormalizationConfig:
 
         aliases = data.get("aliases", {})
         if isinstance(aliases, dict):
-            cls.ALIASES = {
+            self.ALIASES = {
                 str(k).upper().strip(): str(v).strip()
                 for k, v in aliases.items()
                 if str(k).strip() and str(v).strip()
@@ -325,7 +402,7 @@ class MerchantNormalizationConfig:
 
         contains_aliases = data.get("contains_aliases", {})
         if isinstance(contains_aliases, dict):
-            cls.CONTAINS_ALIASES = {
+            self.CONTAINS_ALIASES = {
                 str(k).upper().strip(): str(v).strip()
                 for k, v in contains_aliases.items()
                 if str(k).strip() and str(v).strip()
@@ -333,10 +410,38 @@ class MerchantNormalizationConfig:
 
         strip_suffix_tokens = data.get("strip_suffix_tokens", [])
         if isinstance(strip_suffix_tokens, list):
-            cls.STRIP_SUFFIX_TOKENS = {str(x).upper().strip() for x in strip_suffix_tokens if str(x).strip()}
+            self.STRIP_SUFFIX_TOKENS = {str(x).upper().strip() for x in strip_suffix_tokens if str(x).strip()}
 
 
-HEADER_HINTS: List[str] = []
+# ---------------------------------------------------------------------------
+# Thread-local storage — each thread gets its own isolated config instances
+# and parse stats, so concurrent PDF uploads never interfere with each other.
+# ---------------------------------------------------------------------------
+_thread_local = threading.local()
+
+
+def _cfg() -> ParserConfig:
+    """Return the ParserConfig instance for the current thread."""
+    if not hasattr(_thread_local, "parser_config"):
+        _thread_local.parser_config = ParserConfig()
+    return _thread_local.parser_config
+
+
+def _merch_cfg() -> MerchantNormalizationConfig:
+    """Return the MerchantNormalizationConfig instance for the current thread."""
+    if not hasattr(_thread_local, "merch_config"):
+        _thread_local.merch_config = MerchantNormalizationConfig()
+    return _thread_local.merch_config
+
+
+def _last_parse_stats() -> Optional["ParseStats"]:
+    """Return the ParseStats recorded by the most recent parse on this thread."""
+    return getattr(_thread_local, "last_parse_stats", None)
+
+
+def _set_last_parse_stats(stats: "ParseStats") -> None:
+    """Store parse stats for the current thread."""
+    _thread_local.last_parse_stats = stats
 
 
 def _strip_token_punct(token: str) -> str:
@@ -345,14 +450,14 @@ def _strip_token_punct(token: str) -> str:
 
 
 def _is_state_abbr(token: str) -> bool:
-    return token.isalpha() and token.isupper() and token in ParserConfig.STATE_ABBRS
+    return token.isalpha() and token.isupper() and token in _cfg().STATE_ABBRS
 
 
 def safe_cleanup(raw: str) -> str:
     text = raw.strip()
 
     # Remove boilerplate phrases conservatively.
-    for pattern in ParserConfig.BOILERPLATE_PATTERNS:
+    for pattern in _cfg().BOILERPLATE_PATTERNS:
         text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
 
     # Remove phone numbers, short MM/DD or MMDD date tokens, and long numeric IDs.
@@ -383,15 +488,12 @@ def safe_cleanup(raw: str) -> str:
 def _truncate_at_garbage(text: str) -> str:
     lower = text.lower()
     cut = None
-    for phrase in ParserConfig.STOP_PHRASES:
+    for phrase in _cfg().STOP_PHRASES:
         idx = lower.find(phrase)
         if idx != -1:
             cut = idx if cut is None else min(cut, idx)
     return text[:cut].strip() if cut is not None else text
 
-
-def _stage_a_truncate(raw: str) -> str:
-    return _truncate_at_garbage(raw)
 
 
 def _tokenize_basic(text: str) -> List[str]:
@@ -420,7 +522,7 @@ def _stage_b_extract(raw: str) -> str:
     if p2p_result:
         return p2p_result
 
-    for rule in ParserConfig.MERCHANT_MARKERS:
+    for rule in _cfg().MERCHANT_MARKERS:
         match = str(rule.get("match", "")).lower()
         value = str(rule.get("value", "")).upper()
         action = str(rule.get("action", "")).lower()
@@ -474,7 +576,7 @@ def _stage_b_extract(raw: str) -> str:
 
 
 def _extract_p2p(text: str, upper_tokens: List[str]) -> Optional[str]:
-    for rule in ParserConfig.P2P_RULES:
+    for rule in _cfg().P2P_RULES:
         match_tokens = [str(x).upper() for x in rule.get("match_tokens", []) if str(x).strip()]
         if not match_tokens:
             continue
@@ -602,6 +704,153 @@ def _strip_terminal_numbers(token: str) -> Optional[str]:
     return token
 
 
+def _is_processor_prefix(token: str) -> bool:
+    upper = token.upper().rstrip("*")
+    for rule in _cfg().MERCHANT_PROCESSOR_PREFIXES:
+        r = rule.upper().strip()
+        if not r:
+            continue
+        if r.endswith("*"):
+            if upper.startswith(r[:-1]):
+                return True
+            continue
+        if upper == r:
+            return True
+    return False
+
+
+def _strip_processor_prefix_tokens(tokens: List[str]) -> List[str]:
+    out = list(tokens)
+    while len(out) > 1 and _is_processor_prefix(out[0]):
+        out.pop(0)
+    return out
+
+
+def _is_url_token(token: str) -> bool:
+    lower = token.lower()
+    if lower.startswith("www."):
+        return True
+    for tld in _cfg().MERCHANT_URL_TLD_STRIP:
+        if re.search(rf"\.{re.escape(tld)}(/\S*)?$", lower):
+            return True
+    return False
+
+
+def _extract_domain_from_url_token(token: str) -> Optional[str]:
+    lower = token.lower()
+    if lower.startswith("www."):
+        lower = lower[4:]
+    domain = lower.split(".")[0]
+    if len(domain) >= 3 and any(c.isalpha() for c in domain):
+        return domain.capitalize()
+    return None
+
+
+def _strip_url_tokens(tokens: List[str]) -> List[str]:
+    url_domains: List[str] = []
+    non_url: List[str] = []
+    for t in tokens:
+        if _is_url_token(t):
+            domain = _extract_domain_from_url_token(t)
+            if domain:
+                url_domains.append(domain)
+        else:
+            non_url.append(t)
+
+    if not non_url:
+        # All tokens were URLs — use extracted domains or fall back to originals
+        return url_domains if url_domains else tokens
+
+    if url_domains:
+        # If remaining non-URL tokens are entirely location/state/descriptor noise, prefer the domain
+        meaningful = [
+            t for t in non_url
+            if not _is_state_abbr(t.upper())
+            and t.lower() not in _cfg().LOCATION_WORDS
+            and t.upper() not in _cfg().TRAILING_MERCHANT_DESCRIPTORS
+        ]
+        if not meaningful:
+            return url_domains
+
+    return non_url
+
+
+def _is_tail_junk_token(token: str) -> bool:
+    upper = token.upper()
+    for pattern in _cfg().MERCHANT_TAIL_JUNK_PATTERNS:
+        try:
+            if re.fullmatch(pattern, upper):
+                return True
+        except re.error:
+            continue
+    return False
+
+
+def _strip_tail_junk_tokens(tokens: List[str]) -> List[str]:
+    out = list(tokens)
+    while len(out) > 1 and _is_tail_junk_token(out[-1]):
+        out.pop()
+    return out
+
+
+def _is_high_quality_merchant_token(token: str) -> bool:
+    upper = token.upper()
+    if upper in _cfg().MERCHANT_CONNECTOR_TOKENS:
+        return False
+    if token.isdigit():
+        return False
+    if _is_tail_junk_token(token):
+        return False
+    alpha_count = sum(ch.isalpha() for ch in token)
+    if alpha_count == 0:
+        return False
+    if len(token) >= 2:
+        return True
+    return upper in _cfg().MERCHANT_SHORT_TOKEN_KEEP
+
+
+def _strip_low_quality_tail_tokens(tokens: List[str]) -> List[str]:
+    out = list(tokens)
+    while len(out) > 1:
+        tail = out[-1]
+        upper_tail = tail.upper()
+        if upper_tail in _cfg().MERCHANT_CONNECTOR_TOKENS:
+            out.pop()
+            continue
+        if len(tail) == 1 and upper_tail not in _cfg().MERCHANT_SHORT_TOKEN_KEEP:
+            out.pop()
+            continue
+        if len(tail) == 2 and tail.isalpha() and upper_tail not in _cfg().MERCHANT_SHORT_TOKEN_KEEP:
+            out.pop()
+            continue
+        if _is_tail_junk_token(tail):
+            out.pop()
+            continue
+        break
+    return out
+
+
+def _strip_single_char_noise_tokens(tokens: List[str]) -> List[str]:
+    out: List[str] = []
+    for token in tokens:
+        upper = token.upper()
+        if len(token) == 1 and upper not in _cfg().MERCHANT_SHORT_TOKEN_KEEP and upper not in _cfg().MERCHANT_CONNECTOR_TOKENS:
+            continue
+        out.append(token)
+    return out
+
+
+def _select_best_merchant_span(tokens: List[str], min_quality: int = 2, max_quality: int = 4) -> List[str]:
+    if not tokens:
+        return tokens
+    quality_positions = [i for i, tok in enumerate(tokens) if _is_high_quality_merchant_token(tok)]
+    if len(quality_positions) < min_quality:
+        return tokens
+    cut_pos = quality_positions[min(max_quality, len(quality_positions)) - 1]
+    span = tokens[: cut_pos + 1]
+    return _strip_low_quality_tail_tokens(span)
+
+
 def _strip_location_tail(tokens: List[str]) -> List[str]:
     if not tokens:
         return tokens
@@ -610,7 +859,7 @@ def _strip_location_tail(tokens: List[str]) -> List[str]:
     lowered = [t.lower() for t in tokens]
 
     phrases = sorted(
-        ParserConfig.LOCATION_PHRASES,
+        _cfg().LOCATION_PHRASES,
         key=lambda p: len(p.split()),
         reverse=True,
     )
@@ -626,12 +875,12 @@ def _strip_location_tail(tokens: List[str]) -> List[str]:
         tokens = tokens[:-1]
         lowered = lowered[:-1]
 
-    if tokens and tokens[-1].lower() in ParserConfig.LOCATION_WORDS:
+    if tokens and tokens[-1].lower() in _cfg().LOCATION_WORDS:
         tokens = tokens[:-1]
 
     # Remove orphan location prefix tokens left at the end
     # (e.g., "NEW" after stripping "YORK"/state from "NEW YORK ...").
-    while len(tokens) > 1 and tokens[-1].lower() in ParserConfig.LOCATION_PREFIX_WORDS:
+    while len(tokens) > 1 and tokens[-1].lower() in _cfg().LOCATION_PREFIX_WORDS:
         tokens = tokens[:-1]
 
     return tokens if tokens else original
@@ -655,7 +904,7 @@ def _strip_location_like_merchant_tail(parts: List[str]) -> List[str]:
 
     compact_locations = {
         re.sub(r"[^A-Za-z0-9]", "", phrase).upper()
-        for phrase in ParserConfig.LOCATION_PHRASES
+        for phrase in _cfg().LOCATION_PHRASES
         if phrase.strip()
     }
 
@@ -674,7 +923,7 @@ def _strip_location_like_merchant_tail(parts: List[str]) -> List[str]:
             continue
         # State+location compact token, e.g. "CALAJOLLA".
         stripped = False
-        for st in ParserConfig.STATE_ABBRS:
+        for st in _cfg().STATE_ABBRS:
             if tail.startswith(st) and tail[len(st) :] in compact_locations:
                 out.pop()
                 stripped = True
@@ -694,7 +943,7 @@ def _apply_merchant_normalization(name: str) -> str:
         return name
 
     # Remove known branch/suffix tokens at tail.
-    while parts and parts[-1].upper() in MerchantNormalizationConfig.STRIP_SUFFIX_TOKENS:
+    while parts and parts[-1].upper() in _merch_cfg().STRIP_SUFFIX_TOKENS:
         parts.pop()
 
     # Remove compact location-like tails (e.g., CALaJolla) using configured locations.
@@ -703,7 +952,7 @@ def _apply_merchant_normalization(name: str) -> str:
     # Token-level replacements.
     replaced_parts: List[str] = []
     for part in parts:
-        replacement = MerchantNormalizationConfig.TOKEN_REPLACEMENTS.get(part.upper())
+        replacement = _merch_cfg().TOKEN_REPLACEMENTS.get(part.upper())
         if replacement:
             replaced_parts.extend(replacement.split())
         else:
@@ -712,10 +961,10 @@ def _apply_merchant_normalization(name: str) -> str:
     normalized_text = " ".join(replaced_parts).strip()
     alias_key = _normalize_alias_key(normalized_text)
 
-    if alias_key in MerchantNormalizationConfig.ALIASES:
-        return MerchantNormalizationConfig.ALIASES[alias_key]
+    if alias_key in _merch_cfg().ALIASES:
+        return _merch_cfg().ALIASES[alias_key]
 
-    for key, canonical in MerchantNormalizationConfig.CONTAINS_ALIASES.items():
+    for key, canonical in _merch_cfg().CONTAINS_ALIASES.items():
         if key and key in alias_key:
             return canonical
 
@@ -732,7 +981,7 @@ def _is_good_merchant_candidate(text: str) -> bool:
 
 
 def _extract_structured_merchant(raw: str) -> Optional[str]:
-    labels = [label.strip() for label in ParserConfig.METADATA_LABELS if label.strip()]
+    labels = [label.strip() for label in _cfg().METADATA_LABELS if label.strip()]
     if not labels:
         return None
 
@@ -757,7 +1006,7 @@ def _extract_structured_merchant(raw: str) -> Optional[str]:
     if _is_good_merchant_candidate(prefix_clean):
         return prefix_clean
 
-    for preferred in ParserConfig.PREFERRED_MERCHANT_LABELS:
+    for preferred in _cfg().PREFERRED_MERCHANT_LABELS:
         value = fields.get(preferred.upper())
         if not value:
             continue
@@ -776,14 +1025,14 @@ def _extract_structured_merchant(raw: str) -> Optional[str]:
 def _refine_merchant(name: str, fallback: str) -> tuple[str, Optional[str]]:
     # Fee detection takes precedence (config-driven labels).
     upper = name.upper()
-    for key in ParserConfig.FEE_KEYWORDS:
+    for key in _cfg().FEE_KEYWORDS:
         if key in upper:
-            label = ParserConfig.FEE_LABELS.get(key, key.title())
+            label = _cfg().FEE_LABELS.get(key, key.title())
             return label, "fee"
 
     stage = name.strip()
     is_p2p_formatted = False
-    for rule in ParserConfig.P2P_RULES:
+    for rule in _cfg().P2P_RULES:
         prefix = str(rule.get("prefix", "")).strip().lower()
         if prefix and stage.lower().startswith(prefix + " "):
             is_p2p_formatted = True
@@ -801,9 +1050,19 @@ def _refine_merchant(name: str, fallback: str) -> tuple[str, Optional[str]]:
             continue
         tokens.append(token)
 
+    tokens = _strip_processor_prefix_tokens(tokens)
+    tokens = _strip_url_tokens(tokens)
+    tokens = _strip_tail_junk_tokens(tokens)
+    tokens = _strip_low_quality_tail_tokens(tokens)
+
     if not is_p2p_formatted:
         tokens = _strip_state_zip_anchor(tokens)
         tokens = _strip_location_tail(tokens)
+        tokens = _strip_tail_junk_tokens(tokens)
+        tokens = _strip_low_quality_tail_tokens(tokens)
+        tokens = _select_best_merchant_span(tokens)
+        tokens = _strip_single_char_noise_tokens(tokens)
+        tokens = _strip_low_quality_tail_tokens(tokens)
     tokens = _fuzzy_dedupe(tokens)
 
     cleaned = " ".join(tokens).strip()
@@ -813,11 +1072,12 @@ def _refine_merchant(name: str, fallback: str) -> tuple[str, Optional[str]]:
 
 
 def merchant_clean(raw: str) -> str:
-    stage_a = _stage_a_truncate(raw)
+    stage_a = _truncate_at_garbage(raw)
     structured = _extract_structured_merchant(stage_a)
     stage_b = _stage_b_extract(structured or stage_a)
     cleaned = safe_cleanup(stage_b)
     refined, _ = _refine_merchant(cleaned, structured or stage_b or stage_a)
+    refined = _strip_trailing_descriptors(refined)
     normalized = _apply_merchant_normalization(refined)
     if len(normalized) > 60:
         return normalized[:57].rstrip() + "..."
@@ -847,22 +1107,7 @@ def _apply_venmo_direction(merchant: str, raw_description: str, txn_type: Option
 
 def _detect_payment_channel(raw_description: str) -> str:
     text = raw_description.upper()
-    channel_rules = [
-        ("EXT TRNSFR", "External Transfer"),
-        ("EXT TRNSF", "External Transfer"),
-        ("EXTERNAL TRANSFER", "External Transfer"),
-        ("E-PAYMENT", "E-Payment"),
-        ("ZELLE", "Zelle"),
-        ("VENMO", "Venmo"),
-        ("DIRECT DEP", "Direct Dep"),
-        ("CHECKCARD", "Checkcard"),
-        ("MOBILE PURCHASE", "Mobile Purchase"),
-        ("CARD PURCHASE", "Card Purchase"),
-        ("PURCHASE", "Purchase"),
-        ("ACH", "ACH"),
-        ("WIRE", "Wire"),
-    ]
-    for needle, label in channel_rules:
+    for needle, label in _cfg().PAYMENT_CHANNEL_RULES:
         if needle in text:
             return label
     return "NA"
@@ -870,14 +1115,7 @@ def _detect_payment_channel(raw_description: str) -> str:
 
 def _extract_transaction_code(raw_description: str) -> str:
     text = raw_description.upper()
-    code_patterns = [
-        r"\bSQ\b",
-        r"\bTST\*?\b",
-        r"\bDES:?\b",
-        r"\bID:?\b",
-        r"\bACH\b",
-    ]
-    for pattern in code_patterns:
+    for pattern in _cfg().TRANSACTION_CODE_PATTERNS:
         match = re.search(pattern, text)
         if match:
             return match.group(0).replace(":", "").replace("*", "")
@@ -893,7 +1131,7 @@ def _extract_city_state_zip(raw_description: str) -> tuple[str, str, str]:
         # Location should come from merchant/location tail, not metadata segments
         # like "DES:...", "INDN:...", "CO ID:...".
         cut_idx: Optional[int] = None
-        for label in ParserConfig.METADATA_LABELS:
+        for label in _cfg().METADATA_LABELS:
             token = str(label).strip()
             if not token:
                 continue
@@ -932,19 +1170,19 @@ def _extract_city_state_zip(raw_description: str) -> tuple[str, str, str]:
     # Prefer right-most known location phrase that leaves only optional state/zip at tail.
     lowered = text.lower()
     best_match: tuple[int, int, str, str, str] | None = None  # (start_idx, length, city, state, zip)
-    for phrase in ParserConfig.LOCATION_PHRASES:
+    for phrase in _cfg().LOCATION_PHRASES:
         p = phrase.strip()
         if not p:
             continue
         phrase_re = _phrase_regex(p)
         for m in phrase_re.finditer(text):
             tail = text[m.end() :].strip()
-            tail_match = re.fullmatch(r"(?:(?P<state>[A-Z]{2}))?(?:\s+(?P<zip>\d{5}(?:-\d{4})?))?\s*", tail)
+            tail_match = re.fullmatch(r"(?:(?P<state>[A-Z]{2}))?(?:\s+(?P<zip>\d{5}(?:-\d{4})?))?[\s]*", tail)
             if not tail_match:
                 continue
             candidate_state = (tail_match.group("state") or "").upper()
             candidate_zip = tail_match.group("zip") or "NA"
-            if candidate_state and candidate_state not in ParserConfig.STATE_ABBRS:
+            if candidate_state and candidate_state not in _cfg().STATE_ABBRS:
                 continue
             candidate = (m.start(), len(p), p, candidate_state if candidate_state else "NA", candidate_zip)
             if best_match is None or candidate[0] > best_match[0] or (
@@ -963,14 +1201,14 @@ def _extract_city_state_zip(raw_description: str) -> tuple[str, str, str]:
     if work and re.fullmatch(r"\d{5}(?:-\d{4})?", work[-1]):
         tail_zip = work[-1]
         work = work[:-1]
-    if work and work[-1].upper() in ParserConfig.STATE_ABBRS:
+    if work and work[-1].upper() in _cfg().STATE_ABBRS:
         tail_state = work[-1].upper()
         work = work[:-1]
     compact_city_tail = re.sub(r"[^A-Za-z0-9]", "", "".join(work[-3:]).upper()) if work else ""
     if compact_city_tail.endswith("CIT"):
         compact_city_tail = compact_city_tail[:-3] + "CITY"
     if compact_city_tail:
-        for phrase in sorted(ParserConfig.LOCATION_PHRASES, key=len, reverse=True):
+        for phrase in sorted(_cfg().LOCATION_PHRASES, key=len, reverse=True):
             p = phrase.strip()
             if not p:
                 continue
@@ -978,32 +1216,32 @@ def _extract_city_state_zip(raw_description: str) -> tuple[str, str, str]:
             if compact_phrase and compact_city_tail.endswith(compact_phrase):
                 return p, tail_state, tail_zip
         if tail_state == "NA":
-            for st in ParserConfig.STATE_ABBRS:
+            for st in _cfg().STATE_ABBRS:
                 if not compact_city_tail.endswith(st):
                     continue
                 city_compact = compact_city_tail[: -len(st)]
                 if not city_compact:
                     continue
-                for phrase in sorted(ParserConfig.LOCATION_PHRASES, key=len, reverse=True):
+                for phrase in sorted(_cfg().LOCATION_PHRASES, key=len, reverse=True):
                     compact_phrase = re.sub(r"[^A-Za-z0-9]", "", phrase).upper()
                     if compact_phrase and city_compact.endswith(compact_phrase):
                         return phrase, st, tail_zip
 
     # Tail match only: CITY STATE [ZIP] at end of description.
     tail_match = re.search(
-        r"\b(?P<city>[A-Za-z][A-Za-z .'-]{1,40}?)\s+(?P<state>[A-Z]{2})(?:\s+(?P<zip>\d{5}(?:-\d{4})?))?\s*$",
+        r"\b(?P<city>[A-Za-z][A-Za-z .'-]{1,40}?)\s+(?P<state>[A-Z]{2})(?:\s+(?P<zip>\d{5}(?:-\d{4})?))?[\s]*$",
         text,
     )
     if tail_match:
         candidate_state = tail_match.group("state").upper()
-        if candidate_state in ParserConfig.STATE_ABBRS:
+        if candidate_state in _cfg().STATE_ABBRS:
             state = candidate_state
             city = re.sub(r"\s+", " ", tail_match.group("city")).strip(" ,.-")
             zip_group = tail_match.group("zip")
             zip_code = zip_group if zip_group else "NA"
             city_tokens = [tok for tok in city.split() if tok]
-            city_is_known_single = len(city_tokens) == 1 and city_tokens[0].lower() in ParserConfig.LOCATION_WORDS
-            known_phrase_set = {p.lower() for p in ParserConfig.LOCATION_PHRASES}
+            city_is_known_single = len(city_tokens) == 1 and city_tokens[0].lower() in _cfg().LOCATION_WORDS
+            known_phrase_set = {p.lower() for p in _cfg().LOCATION_PHRASES}
             city_is_known_phrase = city.lower() in known_phrase_set
             if len(city_tokens) < 2 and not city_is_known_single and zip_code == "NA":
                 return "NA", "NA", "NA"
@@ -1015,7 +1253,7 @@ def _extract_city_state_zip(raw_description: str) -> tuple[str, str, str]:
 
     # Fallback: known location phrase at end (no state/zip present).
     normalized_tail_text = _normalize_location_text(lowered)
-    for phrase in sorted(ParserConfig.LOCATION_PHRASES, key=len, reverse=True):
+    for phrase in sorted(_cfg().LOCATION_PHRASES, key=len, reverse=True):
         p = phrase.strip()
         if p and normalized_tail_text.endswith(_normalize_location_text(p.lower())):
             return p, "NA", "NA"
@@ -1029,7 +1267,7 @@ def _extract_city_state_zip(raw_description: str) -> tuple[str, str, str]:
         merged = "".join(tail_window[-n:])
         if merged.endswith("CIT"):
             merged = merged[:-3] + "CITY"
-        for phrase in ParserConfig.LOCATION_PHRASES:
+        for phrase in _cfg().LOCATION_PHRASES:
             compact_phrase = re.sub(r"[^A-Za-z0-9]", "", phrase).upper()
             if compact_phrase and merged == compact_phrase:
                 return phrase, "NA", "NA"
@@ -1038,7 +1276,7 @@ def _extract_city_state_zip(raw_description: str) -> tuple[str, str, str]:
     tail_state_only = re.search(r"\b([A-Z]{2})\b\s*$", text.upper())
     if tail_state_only:
         candidate_state = tail_state_only.group(1)
-        if candidate_state in ParserConfig.STATE_ABBRS:
+        if candidate_state in _cfg().STATE_ABBRS:
             return "NA", candidate_state, "NA"
 
     # Fallback: state code merged into domain-like token suffix (e.g. .COMCA).
@@ -1046,7 +1284,7 @@ def _extract_city_state_zip(raw_description: str) -> tuple[str, str, str]:
     for token in reversed(domainish_tokens):
         upper_tok = token.upper()
         suffix = upper_tok[-2:]
-        if suffix not in ParserConfig.STATE_ABBRS:
+        if suffix not in _cfg().STATE_ABBRS:
             continue
         prefix = upper_tok[:-2]
         if not prefix:
@@ -1174,14 +1412,14 @@ def _strip_city_overlap_from_merchant(merchant: str, city: str) -> str:
 
 
 def _strip_trailing_descriptors(text: str) -> str:
-    if not text.strip() or not ParserConfig.TRAILING_MERCHANT_DESCRIPTORS:
+    if not text.strip() or not _cfg().TRAILING_MERCHANT_DESCRIPTORS:
         return text
     out = text.strip()
     changed = True
     while changed and out:
         changed = False
         upper = out.upper().strip()
-        for desc in sorted(ParserConfig.TRAILING_MERCHANT_DESCRIPTORS, key=len, reverse=True):
+        for desc in sorted(_cfg().TRAILING_MERCHANT_DESCRIPTORS, key=len, reverse=True):
             if upper.endswith(desc):
                 out = out[: len(out) - len(desc)].strip(" ,.-/")
                 changed = True
@@ -1190,9 +1428,9 @@ def _strip_trailing_descriptors(text: str) -> str:
 
 
 def _is_non_transaction_row(text: str) -> bool:
-    if not text.strip() or not ParserConfig.NON_TRANSACTION_PATTERNS:
+    if not text.strip() or not _cfg().NON_TRANSACTION_PATTERNS:
         return False
-    for pattern in ParserConfig.NON_TRANSACTION_PATTERNS:
+    for pattern in _cfg().NON_TRANSACTION_PATTERNS:
         try:
             if re.search(pattern, text, flags=re.IGNORECASE):
                 return True
@@ -1267,7 +1505,7 @@ def _bank_short_slug(bank_name: Optional[str], original_name: Optional[str] = No
     candidates: List[str] = []
     if isinstance(bank_name, str) and bank_name.strip():
         candidates.append(bank_name)
-    candidates.extend(ParserConfig.BANK_ALIASES or [])
+    candidates.extend(_cfg().BANK_ALIASES or [])
 
     normalized: List[str] = []
     for c in candidates:
@@ -1442,8 +1680,6 @@ def persist_uploaded_statement(
     if not input_name.lower().endswith(".pdf"):
         input_name = f"{Path(input_name).stem}.pdf"
 
-    period = statement.get("statement_period")
-    period_slug = _statement_range_slug(period, Path(input_name))
     original_slug = _sanitize_slug(Path(input_name).stem, "statement")
     bank_short = _bank_short_slug(statement.get("bank_name"), input_name)
     base_pdf_name = f"{original_slug}_{bank_short}{account_slug}.pdf"
@@ -1524,9 +1760,6 @@ class ParseStats:
     section_sums: dict = None
     warnings: List[str] = None
     failed_rows: List[str] = None
-
-
-LAST_PARSE_STATS: Optional[ParseStats] = None
 
 
 def extract_text(pdf_path: Path) -> List[str]:
@@ -1669,7 +1902,7 @@ def _is_ignorable_tail(tail: str) -> bool:
     if not tail.strip():
         return True
     stripped = tail.strip()
-    for key in ParserConfig.FEE_KEYWORDS:
+    for key in _cfg().FEE_KEYWORDS:
         stripped = re.sub(re.escape(key), " ", stripped, flags=re.IGNORECASE)
     stripped = re.sub(r"\s+", " ", stripped).strip()
     if not stripped:
@@ -1687,7 +1920,7 @@ def _is_ignorable_tail(tail: str) -> bool:
         # OCR often merges CITY+STATE (e.g., VALLEYCA, LAGUNABEACHCA).
         if re.fullmatch(r"[A-Z]{5,}", token.upper()) and _is_state_abbr(token.upper()[-2:]):
             continue
-        ok = any(re.fullmatch(p, token, flags=re.IGNORECASE) for p in ParserConfig.IGNORABLE_TAIL_PATTERNS)
+        ok = any(re.fullmatch(p, token, flags=re.IGNORECASE) for p in _cfg().IGNORABLE_TAIL_PATTERNS)
         if not ok and _is_state_abbr(token.upper()):
             ok = True
         if not ok:
@@ -1705,7 +1938,7 @@ def _is_redundant_tail(remainder: str, amount_match: re.Match[str]) -> bool:
     head = remainder[: amount_match.start()].upper()
     head_tokens = set(re.findall(r"[A-Z0-9*'/.-]+", head))
     descriptor_tokens: set[str] = set()
-    for desc in ParserConfig.TRAILING_MERCHANT_DESCRIPTORS:
+    for desc in _cfg().TRAILING_MERCHANT_DESCRIPTORS:
         descriptor_tokens.update(re.findall(r"[A-Z0-9*'/.-]+", desc.upper()))
 
     for token in re.findall(r"[A-Z0-9*'/.-]+", tail.upper()):
@@ -1765,8 +1998,8 @@ def parse_statement_info(lines: Iterable[str]) -> StatementInfo:
     )
     owner_re = re.compile(r"^[A-Z][A-Z .'-]+$")
 
-    if ParserConfig.BANK_NAME:
-        info.bank_name = ParserConfig.BANK_NAME
+    if _cfg().BANK_NAME:
+        info.bank_name = _cfg().BANK_NAME
 
     for line in lines:
         lower = line.lower()
@@ -1809,11 +2042,10 @@ def parse_statement_info(lines: Iterable[str]) -> StatementInfo:
 
 def is_noise(line: str) -> bool:
     lower = line.lower()
-    return any(hint in lower for hint in HEADER_HINTS)
+    return any(hint in lower for hint in _cfg().header_hints)
 
 
 def parse_transactions(lines: Iterable[str]) -> List[Transaction]:
-    global LAST_PARSE_STATS
     transactions: List[Transaction] = []
     reconstructed_rows: List[dict] = []
     failed_rows: List[str] = []
@@ -1838,7 +2070,7 @@ def parse_transactions(lines: Iterable[str]) -> List[Transaction]:
             continue
 
         matched_section = None
-        for name, markers in ParserConfig.SECTION_HEADERS.items():
+        for name, markers in _cfg().SECTION_HEADERS.items():
             if any(m in lower for m in markers):
                 matched_section = name
                 break
@@ -1848,11 +2080,11 @@ def parse_transactions(lines: Iterable[str]) -> List[Transaction]:
             section = matched_section
             continue
 
-        if any(m in lower for m in ParserConfig.SECTION_END_MARKERS):
+        if any(m in lower for m in _cfg().SECTION_END_MARKERS):
             flush_row()
             section = None
             continue
-        if any(m in lower for m in ParserConfig.TABLE_HEADER_MARKERS):
+        if any(m in lower for m in _cfg().TABLE_HEADER_MARKERS):
             flush_row()
             continue
         if is_noise(line):
@@ -1873,7 +2105,7 @@ def parse_transactions(lines: Iterable[str]) -> List[Transaction]:
             continue
         date = anchor.group("date")
         remainder = text[anchor.end() :].strip()
-        remainder = _stage_a_truncate(remainder)
+        remainder = _truncate_at_garbage(remainder)
         if _is_non_transaction_row(remainder):
             continue
 
@@ -1920,7 +2152,7 @@ def parse_transactions(lines: Iterable[str]) -> List[Transaction]:
         txn_type = None
         desc_upper = remainder.upper()
         row_upper = text.upper()
-        for key in ParserConfig.FEE_KEYWORDS:
+        for key in _cfg().FEE_KEYWORDS:
             if key in desc_upper or key in row_upper:
                 txn_type = "fee"
                 break
@@ -1946,20 +2178,20 @@ def parse_transactions(lines: Iterable[str]) -> List[Transaction]:
         else:
             section_sums["withdrawals"] += abs(parsed_amount)
 
-    LAST_PARSE_STATS = ParseStats(
+    _set_last_parse_stats(ParseStats(
         reconstructed_rows=len(reconstructed_rows),
         output_txns=len(transactions),
         section_sums=section_sums,
         warnings=[],
         failed_rows=failed_rows,
-    )
+    ))
     return transactions
 
 
 def parse_account_summary(lines: Iterable[str]) -> AccountSummary:
     summary = AccountSummary()
 
-    aliases = ParserConfig.SUMMARY_ALIASES
+    aliases = _cfg().SUMMARY_ALIASES
 
     def normalized(text: str) -> str:
         return re.sub(r"[^a-z0-9]+", "", text.lower())
@@ -2123,7 +2355,7 @@ def _canonical_summary_key(label: str) -> Optional[str]:
     compact_norm = _compact_label(label)
     if not norm:
         return None
-    for key, aliases in ParserConfig.SUMMARY_ALIASES.items():
+    for key, aliases in _cfg().SUMMARY_ALIASES.items():
         for alias in aliases:
             alias_norm = _normalize_label(alias)
             alias_compact = _compact_label(alias)
@@ -2133,54 +2365,13 @@ def _canonical_summary_key(label: str) -> Optional[str]:
 
 
 def extract_dynamic_summary(lines: Iterable[str]) -> List[dict[str, str]]:
-    ignore_markers = [
-        "trans date",
-        "merchantcategory",
-        "importantinformation",
-        "cashback bonus",
-        "redeemedthisperiod",
-        "warning",
-        "minimum payment warning",
-        "midnight eastern",
-        "account made after",
-        "cardmember agreement",
-        "directpayautomaticpayment",
-        "your next directpay automatic payment",
-        "willbeon",
-    ]
-    summary_signal_terms = {
-        "balance",
-        "payment",
-        "payments",
-        "credit",
-        "credits",
-        "purchase",
-        "purchases",
-        "debit",
-        "debits",
-        "fee",
-        "fees",
-        "interest",
-        "checks",
-        "deposit",
-        "deposits",
-        "withdrawal",
-        "withdrawals",
-        "due",
-        "minimum",
-        "total",
-    }
+    cfg = _cfg()
+    ignore_markers = cfg.SUMMARY_IGNORE_MARKERS
+    summary_signal_terms = cfg.SUMMARY_SIGNAL_TERMS
+    canonical_labels = cfg.SUMMARY_CANONICAL_LABELS
     known_credit_labels = [
         ("minimum payment due", "minimum_payment_due", "Minimum Payment Due"),
     ]
-    canonical_labels = {
-        "beginning_balance": "Previous Balance",
-        "deposits_additions": "Payments and Credits",
-        "withdrawals_subtractions": "Purchases",
-        "checks": "Checks",
-        "service_fees": "Fees Charged",
-        "ending_balance": "New Balance",
-    }
     entries: dict[str, dict[str, str]] = {}
 
     def extract_amount(line: str) -> Optional[str]:
@@ -2246,26 +2437,9 @@ def infer_statement_type(dynamic_summary: List[dict[str, str]], lines: Iterable[
     label_text = " ".join(item.get("label", "").lower() for item in dynamic_summary)
     page_text = " ".join(str(x).lower() for x in lines)
     text = f"{label_text} {page_text}"
-    credit_signals = [
-        "minimum payment due",
-        "credit limit",
-        "available credit",
-        "new balance",
-        "payments and credits",
-        "purchases",
-        "cash advance",
-        "balance transfer",
-    ]
-    debit_signals = [
-        "beginning balance",
-        "ending balance",
-        "deposits",
-        "withdrawals",
-        "checks",
-        "service fees",
-    ]
-    credit_score = sum(1 for s in credit_signals if s in text)
-    debit_score = sum(1 for s in debit_signals if s in text)
+    cfg = _cfg()
+    credit_score = sum(1 for s in cfg.STATEMENT_TYPE_CREDIT_SIGNALS if s in text)
+    debit_score = sum(1 for s in cfg.STATEMENT_TYPE_DEBIT_SIGNALS if s in text)
     if credit_score > debit_score:
         return "credit"
     if debit_score > credit_score:
@@ -2349,15 +2523,16 @@ def print_statement(info: StatementInfo, summary: AccountSummary, transactions: 
     print("")
     print("Transactions")
     print("------------")
-    if LAST_PARSE_STATS:
-        print(f"DEBUG: Reconstructed rows: {LAST_PARSE_STATS.reconstructed_rows}")
-        print(f"DEBUG: Parsed transactions: {LAST_PARSE_STATS.output_txns}")
-        if LAST_PARSE_STATS.reconstructed_rows != LAST_PARSE_STATS.output_txns:
+    stats = _last_parse_stats()
+    if stats:
+        print(f"DEBUG: Reconstructed rows: {stats.reconstructed_rows}")
+        print(f"DEBUG: Parsed transactions: {stats.output_txns}")
+        if stats.reconstructed_rows != stats.output_txns:
             print(
-                f"WARNING: Reconstructed {LAST_PARSE_STATS.reconstructed_rows} rows "
-                f"but output {LAST_PARSE_STATS.output_txns} transactions."
+                f"WARNING: Reconstructed {stats.reconstructed_rows} rows "
+                f"but output {stats.output_txns} transactions."
             )
-        failed = LAST_PARSE_STATS.failed_rows or []
+        failed = stats.failed_rows or []
         print(f"DEBUG: Failed rows: {len(failed)}")
         if failed:
             print("DEBUG: First 20 failed rows:")
@@ -2367,103 +2542,109 @@ def print_statement(info: StatementInfo, summary: AccountSummary, transactions: 
         cleaned = merchant_clean(txn.description)
         print(f"{txn.date} | {cleaned} | {txn.amount}")
 
-    if LAST_PARSE_STATS and LAST_PARSE_STATS.section_sums:
+    if stats and stats.section_sums:
         warnings = []
         tol = 0.01
         if summary.deposits_additions:
             target = _parse_amount(str(summary.deposits_additions))
             if target is not None:
-                delta = abs(LAST_PARSE_STATS.section_sums["deposits"] - abs(target))
+                delta = abs(stats.section_sums["deposits"] - abs(target))
                 if delta > tol:
                     warnings.append(
-                        f"Deposits mismatch: parsed {LAST_PARSE_STATS.section_sums['deposits']:.2f} vs "
+                        f"Deposits mismatch: parsed {stats.section_sums['deposits']:.2f} vs "
                         f"statement {abs(target):.2f}"
                     )
         if summary.withdrawals_subtractions:
             target = _parse_amount(str(summary.withdrawals_subtractions))
             if target is not None:
-                delta = abs(LAST_PARSE_STATS.section_sums["withdrawals"] - abs(target))
+                delta = abs(stats.section_sums["withdrawals"] - abs(target))
                 if delta > tol:
                     warnings.append(
-                        f"Withdrawals mismatch: parsed {LAST_PARSE_STATS.section_sums['withdrawals']:.2f} vs "
+                        f"Withdrawals mismatch: parsed {stats.section_sums['withdrawals']:.2f} vs "
                         f"statement {abs(target):.2f}"
                     )
         if summary.service_fees:
             target = _parse_amount(str(summary.service_fees))
             if target is not None:
-                delta = abs(LAST_PARSE_STATS.section_sums["fees"] - abs(target))
+                delta = abs(stats.section_sums["fees"] - abs(target))
                 if delta > tol:
                     warnings.append(
-                        f"Fees mismatch: parsed {LAST_PARSE_STATS.section_sums['fees']:.2f} vs "
+                        f"Fees mismatch: parsed {stats.section_sums['fees']:.2f} vs "
                         f"statement {abs(target):.2f}"
                     )
         for warning in warnings:
             print(f"WARNING: {warning}")
 
+# Pipeline helper: resolve bank config path with explicit > detected > inferred > fallback precedence.
+def _resolve_parser_config_path(lines: List[str], explicit_config_path: Optional[Path]) -> Path:
+    if explicit_config_path is not None:
+        return explicit_config_path
+    config_dir = PROJECT_ROOT / "config" / "banks"
+    auto_path = _detect_config_path(lines, config_dir)
+    if auto_path is not None:
+        return auto_path
+    inferred_path = _infer_config_path_by_bank_name(lines, config_dir)
+    if inferred_path is not None:
+        return inferred_path
+    # Very last resort only when no known bank config can be resolved.
+    return config_dir / "unknown_config.json"
 
-DEFAULT_PDF_PATH = PROJECT_ROOT / "my_finance" / "raw" / "apr10_25_boa7238.pdf"
 
-
-def parse_pdf_to_payload(pdf_path: Path, config_path: Optional[Path] = None) -> dict:
-    lines = extract_text(pdf_path)
-    if config_path is None:
-        config_dir = PROJECT_ROOT / "config" / "banks"
-        auto_path = _detect_config_path(lines, config_dir)
-        if auto_path is not None:
-            config_path = auto_path
-        else:
-            inferred_path = _infer_config_path_by_bank_name(lines, config_dir)
-            if inferred_path is not None:
-                config_path = inferred_path
-            else:
-                # Very last resort only when no known bank config can be resolved.
-                config_path = config_dir / "unknown_config.json"
-    ParserConfig.load_from_json(config_path)
-    MerchantNormalizationConfig.load_from_json()
-
+# Pipeline helper: generic parse stage that must work even without bank-specific refinement.
+def _parse_generic_stage(lines: List[str]) -> tuple[StatementInfo, List[Transaction], AccountSummary]:
     info = parse_statement_info(lines)
     transactions = parse_transactions(lines)
     summary = apply_summary_fallback(parse_account_summary(lines), transactions)
+    return info, transactions, summary
+
+
+# Pipeline helper: derive statement-level context used by UI cards and sign normalization.
+def _infer_statement_context(lines: List[str], summary: AccountSummary) -> tuple[dict[str, str], str, List[dict[str, str]]]:
     dynamic_summary = extract_dynamic_summary(lines)
     statement_type = infer_statement_type(dynamic_summary, lines)
     summary_cards = build_summary_cards(summary, dynamic_summary, statement_type)
+    return dynamic_summary, statement_type, summary_cards
 
-    def _normalize_txn_type_for_statement(
-        txn_type: Optional[str], amount: str, stmt_type: str, raw_description: str
-    ) -> Optional[str]:
-        base = (txn_type or "").lower().strip()
-        if stmt_type != "credit":
-            return txn_type
-        if base in {"fee", "unparsed"}:
-            return txn_type
 
-        # For credit-card statements, purchases are usually positive amounts and
-        # credits/payments/refunds are negative amounts.
-        parsed = _parse_amount(amount)
-        if parsed is None:
-            return txn_type
-        desc_upper = raw_description.upper()
-        credit_hints = (
-            "PAYMENT",
-            "PAYMENTS",
-            "CREDIT",
-            "REFUND",
-            "REVERSAL",
-            "REWARD",
-            "CASHBACK",
-        )
-        if any(hint in desc_upper for hint in credit_hints):
-            return "deposits"
-        return "withdrawals" if parsed > 0 else "deposits"
+def _normalize_txn_type_for_statement(
+    txn_type: Optional[str], amount: str, statement_type: str, raw_description: str
+) -> Optional[str]:
+    base = (txn_type or "").lower().strip()
+    if statement_type != "credit":
+        return txn_type
+    if base in {"fee", "unparsed"}:
+        return txn_type
 
-    tx_payload = []
+    # For credit-card statements, purchases are usually positive amounts and
+    # credits/payments/refunds are negative amounts.
+    parsed = _parse_amount(amount)
+    if parsed is None:
+        return txn_type
+    desc_upper = raw_description.upper()
+    credit_hints = (
+        "PAYMENT",
+        "PAYMENTS",
+        "CREDIT",
+        "REFUND",
+        "REVERSAL",
+        "REWARD",
+        "CASHBACK",
+    )
+    if any(hint in desc_upper for hint in credit_hints):
+        return "deposits"
+    return "withdrawals" if parsed > 0 else "deposits"
+
+
+# Pipeline helper: normalize transaction-facing fields after parsing/refinement.
+def _build_normalized_transactions(transactions: List[Transaction], statement_type: str) -> List[dict[str, Optional[str]]]:
+    out: List[dict[str, Optional[str]]] = []
     for txn in transactions:
         merchant = merchant_clean(txn.description)
         merchant = _apply_venmo_direction(merchant, txn.description, txn.txn_type)
         normalized_txn_type = _normalize_txn_type_for_statement(
             txn.txn_type, txn.amount, statement_type, txn.description
         )
-        tx_payload.append(
+        out.append(
             {
                 "date": txn.date,
                 "raw_description": txn.description,
@@ -2472,13 +2653,31 @@ def parse_pdf_to_payload(pdf_path: Path, config_path: Optional[Path] = None) -> 
                 "txn_type": normalized_txn_type,
             }
         )
+    return out
 
-    parse_stats = {
-        "reconstructed_rows": LAST_PARSE_STATS.reconstructed_rows if LAST_PARSE_STATS else 0,
-        "parsed_transactions": LAST_PARSE_STATS.output_txns if LAST_PARSE_STATS else 0,
-        "failed_rows": LAST_PARSE_STATS.failed_rows if LAST_PARSE_STATS and LAST_PARSE_STATS.failed_rows else [],
-        "section_sums": LAST_PARSE_STATS.section_sums if LAST_PARSE_STATS and LAST_PARSE_STATS.section_sums else {},
+
+# Pipeline helper: convert thread-local parse stats into API payload shape.
+def _build_parse_stats_payload() -> dict:
+    stats = _last_parse_stats()
+    return {
+        "reconstructed_rows": stats.reconstructed_rows if stats else 0,
+        "parsed_transactions": stats.output_txns if stats else 0,
+        "failed_rows": stats.failed_rows if stats and stats.failed_rows else [],
+        "section_sums": stats.section_sums if stats and stats.section_sums else {},
     }
+
+
+def parse_pdf_to_payload(pdf_path: Path, config_path: Optional[Path] = None) -> dict:
+    # Orchestrator: extract text -> load config -> generic parse -> context -> payload shaping.
+    lines = extract_text(pdf_path)
+    resolved_config_path = _resolve_parser_config_path(lines, config_path)
+    _cfg().load_from_json(resolved_config_path)
+    _merch_cfg().load_from_json()
+
+    info, transactions, summary = _parse_generic_stage(lines)
+    dynamic_summary, statement_type, summary_cards = _infer_statement_context(lines, summary)
+    tx_payload = _build_normalized_transactions(transactions, statement_type)
+    parse_stats = _build_parse_stats_payload()
 
     return {
         "statement_type": statement_type,
@@ -2515,12 +2714,11 @@ def main() -> int:
             # Remove config args before normal arg parsing.
             del sys.argv[idx : idx + 2]
     if len(sys.argv) < 2:
-        pdf_path = DEFAULT_PDF_PATH
-    else:
-        pdf_path = Path(sys.argv[1]).expanduser()
+        print("Usage: python3 parse_bank.py <statement.pdf> [--config <config.json>]")
+        return 1
+    pdf_path = Path(sys.argv[1]).expanduser()
     if not pdf_path.exists():
         print(f"File not found: {pdf_path}")
-        print("Pass a path explicitly: python3 parse_bank.py <statement.pdf>")
         return 1
 
     payload = parse_pdf_to_payload(pdf_path, config_path)
