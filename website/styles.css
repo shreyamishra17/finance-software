@@ -498,6 +498,7 @@ main {
 .txn-row,
 .txn-row td {
   cursor: pointer;
+  user-select: none;
 }
 .txn-row:hover td {
   background: #f5f7fa;
