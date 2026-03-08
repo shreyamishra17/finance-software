@@ -211,7 +211,8 @@
                 merchant = `ZELLE ${merchant}`.trim();
               }
               const category = t.category || "Uncategorized";
-              return `<tr><td>${t.date || ""}</td><td>${merchant}</td><td>${amount}</td></tr>`;
+              const rawEscaped = (t.raw_description || "").replace(/"/g, "&quot;");
+              return `<tr class="txn-row" data-raw="${rawEscaped}"><td>${t.date || ""}</td><td>${merchant}</td><td>${amount}</td></tr><tr class="txn-detail" hidden><td colspan="3" class="txn-raw">Raw: ${t.raw_description || ""}</td></tr>`;
             }
           )
           .join("");
@@ -314,6 +315,16 @@
             parseMeta.textContent = friendly;
             results.hidden = true;
           });
+      });
+
+      resultsBody.addEventListener("click", (event) => {
+        const row = event.target.closest(".txn-row");
+        if (!row) return;
+        const detail = row.nextElementSibling;
+        if (detail && detail.classList.contains("txn-detail")) {
+          detail.hidden = !detail.hidden;
+          row.classList.toggle("is-expanded", !detail.hidden);
+        }
       });
 
       categorySummary.addEventListener("click", (event) => {
