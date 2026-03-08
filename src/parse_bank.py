@@ -886,6 +886,63 @@ def _strip_location_tail(tokens: List[str]) -> List[str]:
     return tokens if tokens else original
 
 
+_CITY_NAMES_CACHE: Optional[set] = None
+_CITY_NAMES_CACHE_LOADED: bool = False
+_CITY_NAMES_LOCK = threading.Lock()
+
+
+def _load_city_names() -> set:
+    global _CITY_NAMES_CACHE, _CITY_NAMES_CACHE_LOADED
+    with _CITY_NAMES_LOCK:
+        if _CITY_NAMES_CACHE_LOADED:
+            return _CITY_NAMES_CACHE or set()
+        _CITY_NAMES_CACHE_LOADED = True
+        try:
+            import geonamescache  # type: ignore
+            gc = geonamescache.GeonamesCache()
+            _CITY_NAMES_CACHE = {c["name"].lower() for c in gc.get_cities().values()}
+        except Exception:
+            _CITY_NAMES_CACHE = set()
+        return _CITY_NAMES_CACHE or set()
+
+
+def _strip_city_state_tail(tokens: List[str]) -> List[str]:
+    """Strip trailing city/state tokens using geonamescache + compact CITYSTATE detection.
+
+    Handles two patterns missed by the existing location stripper:
+      1. Compact merged tokens: "FRANCISCOCA", "Carmel-by-theCA" (city + 2-letter state, no space)
+      2. Multi-word city names not in the manual LOCATION_WORDS config list
+    """
+    if len(tokens) <= 1:
+        return tokens
+    city_names = _load_city_names()
+    state_abbrs = _cfg().STATE_ABBRS
+    result = list(tokens)
+
+    changed = True
+    while changed and len(result) > 1:
+        changed = False
+        last = result[-1]
+
+        # Pattern 1: compact CITYSTATE token (e.g. "FRANCISCOCA", "Carmel-by-theCA")
+        if len(last) > 3 and last[-2:].upper() in state_abbrs:
+            prefix = last[:-2]
+            if len(prefix) >= 3:
+                result.pop()
+                changed = True
+                continue
+
+        # Pattern 2: last 1–3 tokens form a known city name
+        for n in range(min(3, len(result) - 1), 0, -1):
+            candidate = " ".join(result[-n:]).lower()
+            if candidate in city_names:
+                del result[-n:]
+                changed = True
+                break
+
+    return result if result else tokens
+
+
 def _strip_state_zip_anchor(tokens: List[str]) -> List[str]:
     # Strip everything from the last state abbreviation to the end.
     for i in range(len(tokens) - 1, -1, -1):
@@ -1120,6 +1177,7 @@ def _refine_merchant(name: str, fallback: str) -> tuple[str, Optional[str]]:
     if not is_p2p_formatted:
         tokens = _strip_state_zip_anchor(tokens)
         tokens = _strip_location_tail(tokens)
+        tokens = _strip_city_state_tail(tokens)
         tokens = _strip_tail_junk_tokens(tokens)
         tokens = _strip_low_quality_tail_tokens(tokens)
         tokens = _select_best_merchant_span(tokens)
