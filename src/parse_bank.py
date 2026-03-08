@@ -971,6 +971,68 @@ def _apply_merchant_normalization(name: str) -> str:
     return re.sub(r"\s+", " ", normalized_text).strip()
 
 
+_REFERENCE_COMPANIES: Optional[List[str]] = None
+_REFERENCE_COMPANIES_LOADED: bool = False
+_REFERENCE_COMPANIES_LOCK = threading.Lock()
+_DEFAULT_REFERENCE_CSV = PROJECT_ROOT / "categorizer" / "datasets" / "hardcoded_companies_for_classification.csv"
+_FUZZY_NORMALIZE_THRESHOLD = 90
+
+
+def _load_reference_companies() -> List[str]:
+    global _REFERENCE_COMPANIES, _REFERENCE_COMPANIES_LOADED
+    with _REFERENCE_COMPANIES_LOCK:
+        if _REFERENCE_COMPANIES_LOADED:
+            return _REFERENCE_COMPANIES or []
+        _REFERENCE_COMPANIES_LOADED = True
+        csv_path = Path(os.environ.get("RAPIDFUZZ_REFERENCE_CSV", str(_DEFAULT_REFERENCE_CSV)))
+        if not csv_path.exists():
+            _REFERENCE_COMPANIES = []
+            return []
+        try:
+            companies: List[str] = []
+            with csv_path.open("r", encoding="utf-8") as fh:
+                reader = csv.DictReader(fh)
+                for row in reader:
+                    company = str(row.get("Company", "")).strip()
+                    if company:
+                        companies.append(company)
+            _REFERENCE_COMPANIES = companies
+        except Exception:
+            _REFERENCE_COMPANIES = []
+        return _REFERENCE_COMPANIES or []
+
+
+def _fuzzy_normalize_merchant(merchant: str) -> str:
+    """If merchant fuzzy-matches a known canonical company at high confidence, return the canonical name."""
+    if len(merchant.strip()) < 3:
+        return merchant
+    # Preserve Zelle/Venmo transfers — recipient name is meaningful
+    m_lower = merchant.lower()
+    if m_lower.startswith("zelle") or m_lower.startswith("venmo"):
+        return merchant
+    companies = _load_reference_companies()
+    if not companies:
+        return merchant
+    try:
+        from rapidfuzz import process, fuzz, utils  # type: ignore
+        result = process.extractOne(
+            merchant, companies, scorer=fuzz.WRatio, processor=utils.default_process
+        )
+        if result is None or result[1] < _FUZZY_NORMALIZE_THRESHOLD:
+            return merchant
+        canonical = result[0]
+        # Guard: canonical name must be at least 50% the length of the query (no spaces).
+        # Prevents short names like "Mobil" matching inside longer strings like "TMOBILE AUTO".
+        q_ns = merchant.replace(" ", "")
+        c_ns = canonical.replace(" ", "")
+        if len(c_ns) < len(q_ns) * 0.5:
+            return merchant
+        return canonical
+    except Exception:
+        pass
+    return merchant
+
+
 def _is_good_merchant_candidate(text: str) -> bool:
     if len(text.strip()) < 3:
         return False
@@ -1079,6 +1141,7 @@ def merchant_clean(raw: str) -> str:
     refined, _ = _refine_merchant(cleaned, structured or stage_b or stage_a)
     refined = _strip_trailing_descriptors(refined)
     normalized = _apply_merchant_normalization(refined)
+    normalized = _fuzzy_normalize_merchant(normalized)
     if len(normalized) > 60:
         return normalized[:57].rstrip() + "..."
     return normalized

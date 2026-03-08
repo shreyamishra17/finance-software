@@ -55,7 +55,8 @@
     "SPOTIFY": "Spotify",
     "HULU": "Hulu",
     "AMAZON": "Amazon",
-    "APPLE": "Apple"
+    "APPLE": "Apple",
+    "TMOBILE": "T-Mobile"
   },
   "merchant_url_tld_strip": ["com", "org", "net", "ca", "io"],
   "strip_suffix_tokens": [
@@ -82,7 +83,12 @@
     "SUPERMARKETS",
     "AUTO DEALERS",
     "HEALTH & BEAUTY",
-    "SUBSCRIPTION"
+    "SUBSCRIPTION",
+    "RECURRING",
+    "CHECKCARD",
+    "PURCHASE",
+    "MOBILE PURCHASE",
+    "ONLINE"
   ],
   "merchant_processor_prefixes": [
     "SP",
