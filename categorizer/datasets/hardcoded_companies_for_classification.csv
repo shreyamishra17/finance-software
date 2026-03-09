@@ -92,15 +92,16 @@ Finance,Revolut
 
 Fitness,Peloton
 Fitness,Equinox
-Fitness,Planet Fitness
+Fitness,Fitness
 Fitness,LA Fitness
+Fitness,Pilates
 Fitness,24 Hour Fitness
 Fitness,Orangetheory
 Fitness,SoulCycle
 Fitness,ClassPass
 Fitness,CrossFit
 Fitness,F45 Training
-Fitness,Gold's Gym
+Fitness,Gym
 Fitness,Anytime Fitness
 Fitness,Burn Boot Camp
 Fitness,Beachbody
@@ -131,6 +132,7 @@ Food & Drink,IHOP
 Food & Drink,Shake Shack
 Food & Drink,Five Guys
 Food & Drink,Tim Hortons
+Food & Drink,DOORDASHDASHPASS
 
 Government & Legal,IRS
 Government & Legal,USCIS
@@ -196,6 +198,48 @@ Health,One Medical
 Health,Carbon Health
 Health,Hims
 Health,Hers
+Health,CVSEXTRACARE
+Health,CVS
+Health,Pharmacy
+Health,Drug Store
+Health,Kaiser
+Health,Anthem
+Health,Blue Cross
+Health,Blue Shield
+Health,Cedars-Sinai
+Health,NYU Langone
+Health,UCLA Health
+Health,UCSF Medical
+Health,Mount Sinai
+Health,Mass General
+Health,Johns Hopkins
+Health,Stanford Health
+Health,Dental
+Health,Dentist
+Health,Optometry
+Health,Vision Center
+Health,Urgent Care
+Health,Medical Center
+Health,Hospital
+Health,Eye Care
+Health,Psychiatrist
+Health,Specialist
+Health,Urologist
+Health,Gynecologist
+Health,Primary Care
+Health,Blood Test
+Health,Chiropractor
+Health,Pediatrician
+Health,Emergency Room
+Health,Neurologist
+Health,Orthopedist
+Health,Cardiologist
+Health,Walk-In Clinic
+Health,Dermatologist
+Health,Speech Therapy
+Health,Physical Therapy
+Health,Occupational Therapy
+Health,Surgery
 
 Housing,Zillow
 Housing,Redfin
@@ -217,6 +261,11 @@ Housing,RentCafe
 Housing,Rent.com
 Housing,Realtor.com
 Housing,HomeAdvisor
+Housing,Rent
+Housing,Renters
+Housing,Leaase
+Housing,Clickpay
+Housing,Proptpay
 
 Income,ADP
 Income,Paychex
@@ -235,11 +284,15 @@ Income,Stripe
 Income,Amazon Seller Central
 
 Personal Care,Sephora
-Personal Care,Ulta Beauty
+Personal Care,Ulta
+Personal Care,Barber
+Personal Care,Hair
+Personal Care,Nail
+Personal Care,Cosmetic
 Personal Care,Great Clips
 Personal Care,Supercuts
-Personal Care,Sally Beauty
-Personal Care,Massage Envy
+Personal Care,Beauty
+Personal Care,Massage 
 Personal Care,European Wax Center
 Personal Care,Drybar
 Personal Care,Floyd's Barbershop
@@ -372,3 +425,19 @@ Utilities & Bills,Kaiser Permanente
 Utilities & Bills,MetLife Insurance
 Utilities & Bills,New York Life
 Utilities & Bills,Prudential Financial
+
+Finance,ZELLE
+Finance,VENMO
+Finance,PAYPAL
+Finance,XFER
+Finance,TRANSFER
+Finance,EXT TRNSFR
+Finance,ACH TRANSFER
+Finance,PMNT SENT
+Finance,PMNT RCVD
+Finance,VISA DIRECT
+Finance,P2P
+
+Parcel,FedEx
+Parcel,UPS Store
+Parcel,UPS

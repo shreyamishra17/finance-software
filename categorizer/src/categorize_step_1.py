@@ -23,7 +23,7 @@ def categorize_step_1(merchant_name: str) -> Step1Result | None:
         )
 
     # Priority 2: direct deposit payroll/income-like transactions.
-    if "DIRECT DEP" in text:
+    if "DIRECT DEP" in text or "PAYROLL" in text:
         return Step1Result(
             category="Income",
             confidence=1.0,
