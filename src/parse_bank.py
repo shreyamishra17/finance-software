@@ -840,6 +840,15 @@ def _strip_single_char_noise_tokens(tokens: List[str]) -> List[str]:
     return out
 
 
+def _is_p2p_channel_token(token: str) -> bool:
+    upper = token.upper()
+    for rule in _cfg().P2P_RULES:
+        for marker in rule.get("match_tokens", []):
+            if upper == str(marker).upper().rstrip("*"):
+                return True
+    return upper in {"VENMO", "ZELLE"}
+
+
 def _select_best_merchant_span(tokens: List[str], min_quality: int = 2, max_quality: int = 4) -> List[str]:
     if not tokens:
         return tokens
@@ -916,6 +925,12 @@ def _strip_city_state_tail(tokens: List[str]) -> List[str]:
     if len(tokens) <= 1:
         return tokens
     city_names = _load_city_names()
+    city_compact = {re.sub(r"[^a-z0-9]", "", c) for c in city_names if len(c) >= 4}
+    known_compact = {
+        re.sub(r"[^a-z0-9]", "", p.lower())
+        for p in _cfg().LOCATION_PHRASES
+        if str(p).strip()
+    }
     state_abbrs = _cfg().STATE_ABBRS
     result = list(tokens)
 
@@ -924,10 +939,15 @@ def _strip_city_state_tail(tokens: List[str]) -> List[str]:
         changed = False
         last = result[-1]
 
-        # Pattern 1: compact CITYSTATE token (e.g. "FRANCISCOCA", "Carmel-by-theCA")
-        if len(last) > 3 and last[-2:].upper() in state_abbrs:
+        # Pattern 1: compact CITYSTATE token (e.g. "SANDIEGOCA", "MANHATTANNY").
+        # Require the token to be all-uppercase — person names like "Jenny" (ends with "ny")
+        # would otherwise be misidentified as compact CITYSTATE tokens.
+        if last.isupper() and len(last) > 3 and last[-2:] in state_abbrs:
             prefix = last[:-2]
-            if len(prefix) >= 3:
+            prefix_norm = re.sub(r"[^a-z0-9]", "", prefix.lower())
+            if len(prefix) >= 3 and (
+                prefix.lower() in city_names or prefix_norm in city_compact or prefix_norm in known_compact
+            ):
                 result.pop()
                 changed = True
                 continue
@@ -935,6 +955,11 @@ def _strip_city_state_tail(tokens: List[str]) -> List[str]:
         # Pattern 2: last 1–3 tokens form a known city name (min 4 chars to avoid
         # false positives on short common words like "Of" which exist in geonamescache).
         for n in range(min(3, len(result) - 1), 0, -1):
+            # Single-token city stripping from global GeoNames creates too many
+            # false positives in merchant names (e.g., "LIBERTY MUTUAL").
+            # Keep this matcher for multi-word city tails only.
+            if n == 1:
+                continue
             candidate = " ".join(result[-n:]).lower()
             if candidate in city_names and len(candidate) >= 4:
                 del result[-n:]
@@ -1092,6 +1117,14 @@ def _fuzzy_normalize_merchant(merchant: str) -> str:
         c_ns = canonical.replace(" ", "")
         if len(c_ns) < len(q_ns) * 0.5:
             return merchant
+        # Guard: word-overlap check for multi-word merchants.
+        # Prevents "LIBERTY MUTUAL" matching "Liberty Utilities" just because "LIBERTY" is shared.
+        # If the input has ≥2 significant words (len≥5), all of them must appear in the canonical.
+        input_sig = [w.lower() for w in merchant.split() if len(w) >= 5]
+        if len(input_sig) >= 2:
+            canonical_words = {w.lower() for w in canonical.split()}
+            if not all(w in canonical_words for w in input_sig):
+                return merchant
         return canonical
     except Exception:
         pass
@@ -1180,17 +1213,20 @@ def _refine_merchant(name: str, fallback: str) -> tuple[str, Optional[str]]:
     tokens = _strip_processor_prefix_tokens(tokens)
     tokens = _strip_url_tokens(tokens)
     tokens = _strip_tail_junk_tokens(tokens)
-    tokens = _strip_low_quality_tail_tokens(tokens)
+    is_p2p_channel = bool(tokens) and _is_p2p_channel_token(tokens[0])
+    if not is_p2p_channel:
+        tokens = _strip_low_quality_tail_tokens(tokens)
 
     if not is_p2p_formatted:
         tokens = _strip_state_zip_anchor(tokens)
         tokens = _strip_location_tail(tokens)
         tokens = _strip_city_state_tail(tokens)
         tokens = _strip_tail_junk_tokens(tokens)
-        tokens = _strip_low_quality_tail_tokens(tokens)
-        tokens = _select_best_merchant_span(tokens)
-        tokens = _strip_single_char_noise_tokens(tokens)
-        tokens = _strip_low_quality_tail_tokens(tokens)
+        if not is_p2p_channel:
+            tokens = _strip_low_quality_tail_tokens(tokens)
+            tokens = _select_best_merchant_span(tokens)
+            tokens = _strip_single_char_noise_tokens(tokens)
+            tokens = _strip_low_quality_tail_tokens(tokens)
     tokens = _fuzzy_dedupe(tokens)
 
     cleaned = " ".join(tokens).strip()
@@ -2127,10 +2163,25 @@ def _is_redundant_tail(remainder: str, amount_match: re.Match[str]) -> bool:
     return True
 
 
+def _is_irs_tax_refund_metadata_row(remainder: str) -> bool:
+    upper = remainder.upper()
+    return "IRS TREAS" in upper and ("TAX REF" in upper or "TAX REFUND" in upper)
+
+
 def _choose_amount_candidate(remainder: str) -> Optional[re.Match[str]]:
     candidates = list(AMOUNT_RE.finditer(remainder))
     if not candidates:
         return None
+
+    # Temporary targeted fallback for IRS tax-refund rows where PMT INFO metadata
+    # appears after the amount and breaks generic tail validation.
+    if _is_irs_tax_refund_metadata_row(remainder):
+        for m in reversed(candidates):
+            tail = remainder[m.end() :]
+            if re.search(r"^\s*ID:?\s*[A-Z0-9-]{4,}", tail, flags=re.IGNORECASE):
+                return m
+        return candidates[-1]
+
     valid: List[tuple[int, int, int, re.Match[str]]] = []
     for m in candidates:
         tail = remainder[m.end() :].strip()
