@@ -1,9 +1,15 @@
 __pycache__/
 *.pyc
 .DS_Store
+data/sessions/
+data/*.db
 *-adminsdk-*.json
 *.serviceaccount.json
 config/banks/unknown_config.json
 config/banks/*_bootstrap_report.json
 config/unknown_config.json
 config/*_bootstrap_report.json
+categorizer/models/
+my_finance/shreya_mishra/raw/
+my_finance/shreya_mishra/processed/*.csv
+.env

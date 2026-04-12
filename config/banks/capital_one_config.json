@@ -1,0 +1,195 @@
+{
+  "bank_name": "Capital One",
+  "bank_aliases": [
+    "capital one",
+    "capital one"
+  ],
+  "markers": {
+    "TST*": {
+      "type": "toast",
+      "action": "extract_after"
+    },
+    "SQ": {
+      "type": "square",
+      "action": "extract_after"
+    },
+    "AMZN": {
+      "type": "amazon",
+      "canonical": "Amazon"
+    }
+  },
+  "merchant_markers": [
+    {
+      "match": "contains",
+      "value": "APPLE.COM/BILL",
+      "action": "canonical",
+      "canonical": "Apple"
+    },
+    {
+      "match": "contains",
+      "value": "AMZN",
+      "action": "canonical",
+      "canonical": "Amazon"
+    },
+    {
+      "match": "contains",
+      "value": "AMAZON",
+      "action": "canonical",
+      "canonical": "Amazon"
+    },
+    {
+      "match": "prefix",
+      "value": "VENMO",
+      "action": "extract_after",
+      "include_marker": true,
+      "max_tokens": 2,
+      "stop_tokens": [
+        "VISA",
+        "DIRECT"
+      ]
+    },
+    {
+      "match": "token",
+      "value": "VENMO",
+      "action": "extract_after",
+      "include_marker": true,
+      "max_tokens": 2,
+      "stop_tokens": [
+        "VISA",
+        "DIRECT"
+      ]
+    },
+    {
+      "match": "prefix",
+      "value": "TST*",
+      "action": "extract_after"
+    },
+    {
+      "match": "token",
+      "value": "SQ",
+      "action": "extract_after"
+    },
+    {
+      "match": "prefix",
+      "value": "SQ*",
+      "action": "extract_after"
+    },
+    {
+      "match": "prefix",
+      "value": "DD*",
+      "action": "extract_after"
+    }
+  ],
+  "p2p_rules": [
+    {
+      "match_tokens": [
+        "ZELLE"
+      ],
+      "prefix": "Zelle payment",
+      "direction_tokens": [
+        "FROM",
+        "TO"
+      ],
+      "memo_token": "FOR",
+      "stop_tokens": [
+        "CONF#",
+        "CONF",
+        "ID:",
+        "PPD",
+        "WEB",
+        "VISA",
+        "DIRECT",
+        "CONTINUED"
+      ],
+      "max_name_tokens": 6,
+      "min_name_tokens": 1
+    },
+    {
+      "match_tokens": [
+        "VENMO",
+        "VENMO*"
+      ],
+      "prefix": "Venmo payment",
+      "direction_tokens": [
+        "FROM",
+        "TO"
+      ],
+      "memo_token": "FOR",
+      "stop_tokens": [
+        "CONF#",
+        "CONF",
+        "ID:",
+        "PPD",
+        "WEB",
+        "VISA",
+        "DIRECT",
+        "CONTINUED"
+      ],
+      "max_name_tokens": 6,
+      "min_name_tokens": 1
+    }
+  ],
+  "stop_phrases": [
+    "continued on the next page",
+    "date description amount"
+  ],
+  "fee_keywords": [
+    "INTERNATIONAL TRANSACTION FEE",
+    "SERVICE FEES"
+  ],
+  "fee_labels": {
+    "INTERNATIONAL TRANSACTION FEE": "International Transaction Fee",
+    "SERVICE FEES": "Service Fees"
+  },
+  "section_headers": {
+    "deposits": [
+      "payments, credits and adjustments",
+      "payments and credits"
+    ],
+    "withdrawals": [
+      "transactions"
+    ],
+    "fees": [
+      "service fees",
+      "fees"
+    ]
+  },
+  "section_end_markers": [
+    "account summary",
+    "important information"
+  ],
+  "table_header_markers": [
+    "date description amount",
+    "date description"
+  ],
+  "boilerplate_patterns": [
+    "\\bMOBILE PURCHASE\\b",
+    "\\bCARD PURCHASE\\b",
+    "\\bDEBIT CARD\\b",
+    "\\bCHECKCARD\\b",
+    "\\bDES:\\s*",
+    "\\bID:\\s*",
+    "\\bINDN:\\s*",
+    "\\bCO ID:\\s*",
+    "\\bPPD\\b",
+    "\\bWEB\\b"
+  ],
+  "header_hints": [
+    "statement",
+    "account number",
+    "account #",
+    "balance",
+    "payment",
+    "page "
+  ],
+  "ignorable_tail_patterns": [
+    "(?i)ID:?.*",
+    "(?i)CO",
+    "(?i)PPD",
+    "(?i)WEB",
+    "(?i)DES:?.*",
+    "(?i)INDN:?.*",
+    "(?i)continued",
+    "#?[0-9]{6,}"
+  ]
+}

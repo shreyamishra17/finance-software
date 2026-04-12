@@ -1,4 +1,6 @@
 pdfplumber
+plaid-python
+python-dotenv
 firebase-admin
 pandas
 scikit-learn
@@ -8,3 +10,14 @@ geonamescache
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.5.1+cpu
 transformers
+
+# ── FIFO API server ───────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+
+# ── Background scheduler ──────────────────────────────────────────────
+apscheduler>=3.10.4
+
+# ── Session encryption ────────────────────────────────────────────────
+cryptography>=42.0.0
