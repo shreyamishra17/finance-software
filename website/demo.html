@@ -18,9 +18,6 @@
           <a href="about.html#product">Product</a>
           <a href="about.html#who">Who we are</a>
         </nav>
-        <div class="nav-cta">
-          <a class="primary" href="demo.html">Try our demo</a>
-        </div>
       </header>
 
       <main>
@@ -35,7 +32,6 @@
           <div class="accounts-section">
             <div class="accounts-header">
               <span class="accounts-title">My Accounts</span>
-              <button class="add-account-btn" onclick="openBankPicker()">+ Add Account</button>
             </div>
             <div id="accountsList" class="accounts-list">
               <p class="accounts-empty" id="accountsEmpty">No accounts connected yet.</p>
@@ -43,20 +39,21 @@
           </div>
 
           <div class="demo-simple">
-            <label class="upload upload-cta">
-              <input id="pdfInput" type="file" accept="application/pdf" />
-              <span id="uploadLabel">Upload PDF</span>
-            </label>
-            <div class="demo-meta" id="pdfMeta">No file selected.</div>
-            <div class="demo-meta" id="parseMeta"></div>
-
-            <div class="connect-bank-divider">— or —</div>
             <div class="connect-bank-section">
               <button class="connect-bank-btn" onclick="openBankPicker()">
                 Connect Bank Account
               </button>
               <p id="connectBankStatus" class="connect-status" style="display:none"></p>
             </div>
+
+            <div class="connect-bank-divider">— or —</div>
+
+            <label class="upload upload-cta">
+              <input id="pdfInput" type="file" accept="application/pdf" />
+              <span id="uploadLabel">Upload PDF</span>
+            </label>
+            <div class="demo-meta" id="pdfMeta">No file selected.</div>
+            <div class="demo-meta" id="parseMeta"></div>
 
           </div>
 
