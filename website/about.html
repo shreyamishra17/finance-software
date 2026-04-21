@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>About Us — FIFO</title>
     <meta name="description" content="FIFO is a personalized finance platform that turns messy PDFs into clear, actionable insights." />
-    <link rel="stylesheet" href="styles.css?v=2" />
+    <link rel="stylesheet" href="styles.css?v=7" />
   </head>
   <body>
     <div class="page">
@@ -23,8 +23,8 @@
       </header>
 
       <main>
-        <section id="about" class="hero">
-          <div class="hero-copy">
+        <section id="about" class="hero reveal-section">
+          <div class="hero-copy reveal-item">
             <h1>Clarity for every financial decision.</h1>
             <p class="subhead">
               FIFO is a personalized finance platform designed for control, and real-world simplicity. We are a one-stop solution for your personal finances. 
@@ -34,23 +34,90 @@
               <a class="ghost" href="#product">See how it works</a>
             </div>
           </div>
+          <div class="hero-visual reveal-item reveal-delay-1" aria-hidden="true">
+            <div class="hero-preview">
+              <div class="hero-preview-header">
+                <span class="hero-preview-dot"></span>
+                <span class="hero-preview-dot"></span>
+                <span class="hero-preview-dot"></span>
+                <span class="hero-preview-chip">Insights dashboard</span>
+              </div>
+              <div class="hero-preview-body">
+                <div class="hero-preview-card hero-preview-card-wide">
+                  <span class="hero-preview-label">Net change</span>
+                  <span class="hero-preview-number">+$4,820</span>
+                  <span class="hero-preview-sub">Last 90 days</span>
+                </div>
+                <div class="hero-preview-grid">
+                  <div class="hero-preview-card">
+                    <span class="hero-preview-label">Income</span>
+                    <span class="hero-preview-number">$12.4K</span>
+                  </div>
+                  <div class="hero-preview-card">
+                    <span class="hero-preview-label">Expenses</span>
+                    <span class="hero-preview-number">-$7.6K</span>
+                  </div>
+                </div>
+                <div class="hero-preview-chart">
+                  <div class="hero-bar" style="--bar-height: 36%"></div>
+                  <div class="hero-bar" style="--bar-height: 58%"></div>
+                  <div class="hero-bar" style="--bar-height: 44%"></div>
+                  <div class="hero-bar" style="--bar-height: 72%"></div>
+                  <div class="hero-bar" style="--bar-height: 61%"></div>
+                  <div class="hero-bar hero-bar-accent" style="--bar-height: 84%"></div>
+                </div>
+                <div class="hero-preview-list">
+                  <div class="hero-preview-row">
+                    <span>Housing</span>
+                    <span>$2,665</span>
+                  </div>
+                  <div class="hero-preview-row">
+                    <span>Food & Drink</span>
+                    <span>$812</span>
+                  </div>
+                  <div class="hero-preview-row">
+                    <span>Auto & Transport</span>
+                    <span>$231</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </section>
 
-        <section id="goal" class="section">
-          <div class="section-title">
+        <section class="stats-bar reveal-section">
+          <div class="stats-bar-card reveal-item">
+            <span class="stats-bar-value" data-counter="192" data-suffix="+">0</span>
+            <span class="stats-bar-label">transactions analyzed</span>
+          </div>
+          <div class="stats-bar-card reveal-item reveal-delay-1">
+            <span class="stats-bar-value" data-counter="82" data-prefix="$" data-suffix="K">0</span>
+            <span class="stats-bar-label">income tracked</span>
+          </div>
+          <div class="stats-bar-card reveal-item reveal-delay-2">
+            <span class="stats-bar-value" data-counter="8">0</span>
+            <span class="stats-bar-label">spending categories</span>
+          </div>
+        </section>
+
+        <section id="goal" class="section section-soft section-soft-sage reveal-section">
+          <div class="section-title reveal-item">
             <p class="eyebrow">Our goal</p>
-            <h2>We help you track ...</h2>
+            <h2>We help you track everything that matters.</h2>
           </div>
           <div class="pillars">
-            <div class="pillar">
+            <div class="pillar reveal-item">
+              <div class="pillar-icon" aria-hidden="true">💰</div>
               <h3>Income</h3>
               <p>Your various sources of income, including salary and business income</p>
             </div>
-            <div class="pillar">
+            <div class="pillar reveal-item reveal-delay-1">
+              <div class="pillar-icon" aria-hidden="true">💳</div>
               <h3>Expenses</h3>
               <p>Help categorize and keep track of all your expenses</p>
             </div>
-            <div class="pillar">
+            <div class="pillar reveal-item reveal-delay-2">
+              <div class="pillar-icon" aria-hidden="true">📈</div>
               <h3>Investments</h3>
               <p>We integrate various investment instruments including debt and equity</p>
             </div>
@@ -58,51 +125,51 @@
           <div class="pillars-note">... and a lot more</div>
         </section>
 
-        <section id="product" class="section glass">
-          <div class="section-title">
+        <section id="product" class="section glass section-soft section-soft-ivory reveal-section">
+          <div class="section-title reveal-item">
             <p class="eyebrow">Product</p>
             <h2>Personalized finance that starts with your documents.</h2>
           </div>
           <div class="product-grid">
-            <div class="product-card">
+            <div class="product-card reveal-item">
               <h3>Smooth integration</h3>
               <p>We work in the background without interrupting you</p>
             </div>
-            <div class="product-card">
+            <div class="product-card reveal-item reveal-delay-1">
               <h3>Smart summaries</h3>
               <p>Clear insights about cash flow, recurring charges, and upcoming risks.</p>
             </div>
-            <div class="product-card">
+            <div class="product-card reveal-item reveal-delay-2">
               <h3>Next steps</h3>
               <p>We give you the power to take your next steps confidently.</p>
             </div>
           </div>
         </section>
 
-        <section id="who" class="section">
-          <div class="section-title">
+        <section id="who" class="section section-soft section-soft-mist reveal-section">
+          <div class="section-title reveal-item">
             <h2>Get to know us</h2>
           </div>
           <div class="team-grid">
-            <div class="team-card">
-              <div class="headshot" aria-label="Photo placeholder for Shreya Mishra"></div>
+            <div class="team-card reveal-item">
+              <div class="headshot" data-initials="SM" aria-label="Profile placeholder for Shreya Mishra"></div>
               <h3>Shreya Mishra</h3>
               <p>A graduate from University of Massachusetts, Amherst, Shreya brings her passion for solving complex problems through technology. Shreya has had over 3 years of experience working as a software enginner at Qualcomm.</p>
             </div>
-            <div class="team-card">
-              <div class="headshot" aria-label="Photo placeholder for Kshitij Gupta"></div>
+            <div class="team-card reveal-item reveal-delay-1">
+              <div class="headshot" data-initials="KG" aria-label="Profile placeholder for Kshitij Gupta"></div>
               <h3>Kshitij Gupta</h3>
               <p>A graduate from Columbia University, Kshitij brings his mathematical and problem solving skills to help simplify the world of finance. Kshitij is currently finishing his PhD in theoretical physics.</p>
             </div>
           </div>
         </section>
 
-        <section id="demo" class="cta">
-          <div>
+        <section id="demo" class="cta reveal-section">
+          <div class="reveal-item">
             <h2>Try our demo</h2>
             <p class="subhead">Upload a PDF statement. We will connect this to our parser to extract and summarize data.</p>
           </div>
-          <div class="demo">
+          <div class="demo reveal-item reveal-delay-1">
             <a class="primary" href="demo.html">Go to demo page</a>
           </div>
         </section>
@@ -118,5 +185,45 @@
         <div class="footer-note">© 2026 FIFO. All rights reserved.</div>
       </footer>
     </div>
+    <script>
+      (() => {
+        const revealNodes = document.querySelectorAll(".reveal-item, .reveal-section");
+        const io = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            entry.target.classList.add("is-visible");
+            io.unobserve(entry.target);
+          });
+        }, { threshold: 0.18, rootMargin: "0px 0px -40px 0px" });
+        revealNodes.forEach((node) => io.observe(node));
+
+        const counters = document.querySelectorAll("[data-counter]");
+        const animateCounter = (el) => {
+          const target = Number(el.dataset.counter || 0);
+          const prefix = el.dataset.prefix || "";
+          const suffix = el.dataset.suffix || "";
+          const start = performance.now();
+          const duration = 1200;
+          const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+
+          const frame = (now) => {
+            const progress = Math.min(1, (now - start) / duration);
+            const value = Math.round(target * easeOut(progress));
+            el.textContent = `${prefix}${value.toLocaleString()}${suffix}`;
+            if (progress < 1) requestAnimationFrame(frame);
+          };
+          requestAnimationFrame(frame);
+        };
+
+        const counterObserver = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            animateCounter(entry.target);
+            counterObserver.unobserve(entry.target);
+          });
+        }, { threshold: 0.4 });
+        counters.forEach((counter) => counterObserver.observe(counter));
+      })();
+    </script>
   </body>
 </html>

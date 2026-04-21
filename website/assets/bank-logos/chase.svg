@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Chase logo badge">
+  <rect x="1.5" y="1.5" width="61" height="61" rx="16" fill="#ffffff" stroke="#dbe3ef" stroke-width="1.5"/>
+  <g transform="translate(32 19)">
+    <path d="M0-10 8-8 10 0 8 8 0 10-8 8-10 0-8-8Z" fill="#1565c0"/>
+    <path d="M0-5.6 4.8-4.8 5.6 0 4.8 4.8 0 5.6-4.8 4.8-5.6 0-4.8-4.8Z" fill="#fff"/>
+  </g>
+  <text x="32" y="49" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="10" font-weight="800" fill="#1565c0" letter-spacing="1">CHASE</text>
+</svg>

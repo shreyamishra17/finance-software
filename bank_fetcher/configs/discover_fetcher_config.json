@@ -1,0 +1,53 @@
+{
+    "bank_key": "discover",
+    "bank_display_name": "Discover",
+    "account_type": "credit",
+    "keyring_service": "fifo_bank_fetcher",
+    "keyring_username_key": "discover_username",
+    "keyring_password_key": "discover_password",
+    "keyring_totp_secret_key": "discover_totp_secret",
+    "mfa_mode": "otp_interactive",
+    "headless": false,
+    "browser_channel": "chrome",
+    "timeouts_ms": {
+        "page_load": 60000,
+        "element_wait": 10000,
+        "download_wait": 60000
+    },
+    "navigation": {
+        "logout_url": "https://portal.discover.com/customerSvcs2/universalLogin/logout"
+    },
+    "interactive_login_steps": [
+        {"action": "goto", "url": "https://portal.discover.com/customerSvcs2/universalLogin/login_flow"},
+        {
+            "action": "wait_for_url",
+            "pattern": "**/home**",
+            "timeout": 300000
+        },
+        {
+            "action": "inject_banner",
+            "message": "FIFO: Discover — Logged in! Click on your credit card account, then navigate to the full transaction list. Browser closes automatically."
+        },
+        {
+            "action": "wait_for_url",
+            "pattern": "**/activity**",
+            "timeout": 120000
+        },
+        {
+            "action": "wait_for_selector",
+            "selector": "TODO: run dom_discovery.js on the transactions page to get this",
+            "timeout": 30000
+        }
+    ],
+    "auto_discover_rows": false,
+    "transactions_steps": [],
+    "transactions_config": {
+        "row_selector": "TODO: run dom_discovery.js on the transactions page to get this",
+        "view_more_selector": "TODO: run dom_discovery.js on the transactions page to get this",
+        "columns": {
+            "date":        "TODO",
+            "description": "TODO",
+            "amount":      "TODO"
+        }
+    }
+}

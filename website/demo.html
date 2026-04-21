@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Demo — FIFO</title>
     <meta name="description" content="Upload a PDF and preview it in the browser." />
-    <link rel="stylesheet" href="styles.css?v=5" />
+    <link rel="stylesheet" href="styles.css?v=10" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   </head>
   <body>
     <div class="page">
@@ -30,6 +31,17 @@
             <p class="subhead">Upload your statement PDF to begin.</p>
           </div>
 
+          <!-- My Accounts -->
+          <div class="accounts-section">
+            <div class="accounts-header">
+              <span class="accounts-title">My Accounts</span>
+              <button class="add-account-btn" onclick="openBankPicker()">+ Add Account</button>
+            </div>
+            <div id="accountsList" class="accounts-list">
+              <p class="accounts-empty" id="accountsEmpty">No accounts connected yet.</p>
+            </div>
+          </div>
+
           <div class="demo-simple">
             <label class="upload upload-cta">
               <input id="pdfInput" type="file" accept="application/pdf" />
@@ -37,30 +49,91 @@
             </label>
             <div class="demo-meta" id="pdfMeta">No file selected.</div>
             <div class="demo-meta" id="parseMeta"></div>
+
+            <div class="connect-bank-divider">— or —</div>
+            <div class="connect-bank-section">
+              <button class="connect-bank-btn" onclick="openBankPicker()">
+                Connect Bank Account
+              </button>
+              <p id="connectBankStatus" class="connect-status" style="display:none"></p>
+            </div>
+
           </div>
 
           <div id="results" class="results" hidden>
             <div class="results-head">
-              <h3>Parsed results</h3>
+              <h3 id="resultsHeading">Your Transactions</h3>
               <p id="resultsInfo" class="demo-meta"></p>
             </div>
-            <div class="results-summary" id="resultsSummary"></div>
-            <div class="category-block" id="categoryBlock">
+            <div class="results-tabs" id="resultsTabs" style="display:none">
+              <button class="results-tab is-active" id="tabTransactions" onclick="switchTab('transactions')">Transactions</button>
+              <button class="results-tab" id="tabInsights" onclick="switchTab('insights')">Insights</button>
+            </div>
+            <div class="results-summary results-fade" id="resultsSummary"></div>
+            <div class="category-block results-fade" id="categoryBlock">
               <div class="category-title">Categories</div>
               <div class="results-summary category-summary" id="categorySummary"></div>
             </div>
             <div id="categoryTotal" class="category-total" hidden></div>
-            <div class="results-table-wrap">
+            <div class="period-filter-row" id="periodFilterRow" style="display:none">
+              <button class="period-btn is-active" data-period="all" onclick="filterByPeriod(this)">All</button>
+              <button class="period-btn" data-period="1m" onclick="filterByPeriod(this)">1M</button>
+              <button class="period-btn" data-period="3m" onclick="filterByPeriod(this)">3M</button>
+              <button class="period-btn" data-period="6m" onclick="filterByPeriod(this)">6M</button>
+              <button class="period-btn" data-period="1y" onclick="filterByPeriod(this)">1Y</button>
+              <button class="period-btn" data-period="ytd" onclick="filterByPeriod(this)">YTD</button>
+            </div>
+            <div class="results-table-wrap results-fade">
               <table class="results-table">
                 <thead>
                   <tr>
                     <th>Date</th>
                     <th>Merchant</th>
                     <th>Amount</th>
+                    <th id="accountColHeader" style="display:none">Account</th>
                   </tr>
                 </thead>
                 <tbody id="resultsBody"></tbody>
               </table>
+            </div>
+            <div id="insightsPane" class="insights-pane-shell" style="display:none">
+              <!-- Date range selector -->
+              <div class="insights-period-row">
+                <button class="insights-period-btn is-active" data-period="all"  onclick="setInsightsPeriod(this)">All time</button>
+                <button class="insights-period-btn" data-period="1y"  onclick="setInsightsPeriod(this)">12 months</button>
+                <button class="insights-period-btn" data-period="6m"  onclick="setInsightsPeriod(this)">6 months</button>
+                <button class="insights-period-btn" data-period="3m"  onclick="setInsightsPeriod(this)">3 months</button>
+                <button class="insights-period-btn" data-period="1m"  onclick="setInsightsPeriod(this)">30 days</button>
+              </div>
+              <!-- Stat cards row: Runway + Spent + Income + Net -->
+              <div class="insights-header-cards" id="insightsStats"></div>
+
+              <!-- Payment health (credit card accounts only) -->
+              <div id="insightsPaymentHealth" style="display:none"></div>
+
+              <!-- Charts: Monthly cashflow + Category donut -->
+              <div class="insights-chart-grid">
+                <div class="insights-chart-card">
+                  <div class="insights-chart-title">Monthly Cash Flow</div>
+                  <div class="insights-chart-wrap" id="monthlyChartWrap">
+                    <canvas id="monthlyChart"></canvas>
+                  </div>
+                  <p id="monthlyChartNote" class="insights-chart-note" style="display:none">Sandbox data — identical transactions repeat each month. Real accounts will show actual variation.</p>
+                </div>
+                <div class="insights-chart-card">
+                  <div class="insights-chart-title">Spending by Category</div>
+                  <div class="donut-wrap" id="donutChartWrap">
+                    <canvas id="donutChart"></canvas>
+                  </div>
+                  <div id="donutLegend" class="donut-legend"></div>
+                </div>
+              </div>
+
+              <!-- Top Merchants -->
+              <div class="insights-merchants-card">
+                <div class="insights-chart-title">Top Merchants</div>
+                <div id="insightsTopMerchants"></div>
+              </div>
             </div>
           </div>
         </section>
@@ -86,9 +159,12 @@
       const categorySummary = document.getElementById("categorySummary");
       const categoryBlock = document.getElementById("categoryBlock");
       const categoryTotal = document.getElementById("categoryTotal");
+      const demoShell = document.querySelector(".demo-shell");
+      const demoSimple = document.querySelector(".demo-simple");
 
       let lastPayload = null;
       let activeCategory = "All";
+      let activeDirectionFilter = null; // "money_in" | "money_out" | null
 
       function setUploadState(state) {
         uploadCta.classList.remove("is-uploaded", "is-loading", "is-error");
@@ -122,6 +198,19 @@
         return res.json();
       }
 
+      // Map summary card labels to direction filter keys
+      const _LABEL_TO_DIRECTION = { "Money In": "money_in", "Money Out": "money_out" };
+
+      function _onSummaryCardClick(direction) {
+        // Toggle: clicking the active card clears the filter
+        activeDirectionFilter = activeDirectionFilter === direction ? null : direction;
+        // Refresh active state on cards
+        resultsSummary.querySelectorAll(".result-card[data-direction]").forEach(el => {
+          el.classList.toggle("is-active", el.dataset.direction === activeDirectionFilter);
+        });
+        renderTransactions(lastPayload, activeCategory);
+      }
+
       function renderSummary(payload) {
         const dynamicCards = Array.isArray(payload.summary_cards) ? payload.summary_cards : [];
         if (dynamicCards.length) {
@@ -129,7 +218,12 @@
             .map((card) => {
               const label = card.label || card.key || "Summary";
               const value = card.amount || "-";
-              return `<div class="result-card"><div class="result-label">${label}</div><div class="result-value">${value}</div></div>`;
+              const colorClass = card.color === "positive" ? " value-positive" : card.color === "negative" ? " value-negative" : "";
+              const direction = _LABEL_TO_DIRECTION[label];
+              const dirAttr = direction ? ` data-direction="${direction}"` : "";
+              const activeClass = direction && direction === activeDirectionFilter ? " is-active" : "";
+              const clickAttr = direction ? ` onclick="_onSummaryCardClick('${direction}')"` : "";
+              return `<div class="result-card${activeClass}"${dirAttr}${clickAttr}><div class="result-label">${label}</div><div class="result-value${colorClass}">${value}</div></div>`;
             })
             .join("");
           return;
@@ -160,25 +254,134 @@
         return isNaN(n) ? null : n;
       }
 
+      // Normalize an amount for display based on account type.
+      // Credit accounts: bank stores charges positive, payments negative.
+      //   → flip: charges show as -$X (money out), payments/refunds as +$X (money in)
+      // Checking accounts: use txn_type to determine sign (existing convention).
+      // This is the ONLY place sign normalization lives — no per-bank hardcoding.
+      function _displayAmt(rawAmount, txnType, isCreditAcct) {
+        const n = parseAmount(rawAmount);
+        if (n === null) return rawAmount;
+        const abs = Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        if (isCreditAcct) {
+          if (n > 0) return `-$${abs}`;       // charge → negative (money out)
+          if (n < 0) return `+$${abs}`;       // payment/refund → positive (money in)
+          return `$0.00`;
+        } else {
+          const type = (txnType || "").toLowerCase();
+          if ((type === "withdrawals" || type === "fee") &&
+              !String(rawAmount).startsWith("-") && !String(rawAmount).startsWith("(")) {
+            return `-${rawAmount}`;
+          }
+          return rawAmount;
+        }
+      }
+
+      function easeOutCubic(t) {
+        return 1 - Math.pow(1 - t, 3);
+      }
+
+      function formatCompactCurrency(value, decimals = 0) {
+        return "$" + Math.abs(value).toLocaleString("en-US", {
+          minimumFractionDigits: decimals,
+          maximumFractionDigits: decimals,
+        });
+      }
+
+      function animateCountNode(node) {
+        if (!node) return;
+        const raw = Number(node.dataset.targetValue || 0);
+        const prefix = node.dataset.prefix || "";
+        const suffix = node.dataset.suffix || "";
+        const decimals = Number(node.dataset.decimals || 0);
+        const duration = Number(node.dataset.duration || 800);
+        const start = performance.now();
+
+        const render = (value) => {
+          // Build the full string in one shot — never concatenate "-" after the fact,
+          // which causes the minus sign to render on a separate line in some browsers.
+          node.textContent = `${prefix}${Math.abs(value).toLocaleString("en-US", {
+            minimumFractionDigits: decimals,
+            maximumFractionDigits: decimals,
+          })}${suffix}`;
+        };
+
+        const tick = (now) => {
+          const progress = Math.min(1, (now - start) / duration);
+          render(raw * easeOutCubic(progress));
+          if (progress < 1) requestAnimationFrame(tick);
+        };
+
+        render(0);
+        requestAnimationFrame(tick);
+      }
+
+      function animateInsightsNumbers() {
+        document.querySelectorAll("#insightsStats [data-target-value]").forEach((node) => animateCountNode(node));
+      }
+
+      function resetInsightCharts() {
+        document.getElementById("monthlyChartWrap").innerHTML = '<canvas id="monthlyChart"></canvas>';
+        document.getElementById("donutChartWrap").innerHTML = '<canvas id="donutChart"></canvas>';
+      }
+
+      function renderInsightsSkeleton() {
+        document.getElementById("insightsStats").innerHTML = `
+          <div class="skeleton-grid">
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+          </div>`;
+        resetInsightCharts();
+        document.getElementById("monthlyChartWrap").innerHTML = '<div class="skeleton-chart"></div>';
+        document.getElementById("donutChartWrap").innerHTML = '<div class="skeleton-chart"></div>';
+        document.getElementById("insightsTopMerchants").innerHTML = `
+          <div class="skeleton-line"></div>
+          <div class="skeleton-line"></div>
+          <div class="skeleton-line"></div>
+          <div class="skeleton-line"></div>`;
+        document.getElementById("donutLegend").innerHTML = `
+          <div class="skeleton-line"></div>
+          <div class="skeleton-line"></div>
+          <div class="skeleton-line"></div>`;
+      }
+
+      function setDemoMode(mode) {
+        if (!demoShell || !demoSimple) return;
+        demoShell.classList.toggle("account-view", mode === "account");
+        demoSimple.style.display = mode === "account" ? "none" : "";
+      }
+
       function renderTransactions(payload, categoryFilter = "All") {
         const txns = payload.transactions || [];
+        const isCreditAcct = !!payload._isCreditCard;
+
+        // Apply direction filter (Money In / Money Out) first
+        let dirFiltered = txns;
+        if (activeDirectionFilter) {
+          dirFiltered = txns.filter(t => {
+            const n = parseAmount(t.amount);
+            if (n === null) return false;
+            if (isCreditAcct) {
+              return activeDirectionFilter === "money_in" ? n < 0 : n >= 0;
+            } else {
+              const isCredit = (t.txn_type || "").toLowerCase() === "credit";
+              return activeDirectionFilter === "money_in" ? isCredit : !isCredit;
+            }
+          });
+        }
+
         const filteredTxns =
           categoryFilter && categoryFilter !== "All"
-            ? txns.filter((t) => (t.category || "Uncategorized") === categoryFilter)
-            : txns;
+            ? dirFiltered.filter((t) => (t.category || "Uncategorized") === categoryFilter)
+            : dirFiltered;
 
         // Show total spending for the selected category
         if (categoryFilter && categoryFilter !== "All") {
           let total = 0;
           filteredTxns.forEach((t) => {
-            let amount = t.amount || "";
-            const type = (t.txn_type || "").toLowerCase();
-            if (amount && (type === "withdrawals" || type === "fee")) {
-              if (!String(amount).startsWith("-") && !String(amount).startsWith("(")) {
-                amount = `-${amount}`;
-              }
-            }
-            const n = parseAmount(amount);
+            const n = parseAmount(_displayAmt(t.amount || "", t.txn_type, isCreditAcct));
             if (n !== null) total += n;
           });
           const sign = total < 0 ? "-" : total > 0 ? "+" : "";
@@ -190,16 +393,11 @@
         }
 
         const categoryCounts = {};
+        const categoryTotals = {};
         resultsBody.innerHTML = filteredTxns
           .map(
             (t) => {
-              let amount = t.amount || "";
-              const type = (t.txn_type || "").toLowerCase();
-              if (amount && (type === "withdrawals" || type === "fee")) {
-                if (!amount.startsWith("-") && !amount.startsWith("(")) {
-                  amount = `-${amount}`;
-                }
-              }
+              const amount = _displayAmt(t.amount || "", t.txn_type, isCreditAcct);
               const raw = t.raw_description || "";
               let merchant = t.merchant_clean || raw || "";
               const rawUpper = raw.toUpperCase();
@@ -210,15 +408,15 @@
               if (rawUpper.includes("ZELLE") && !merchUpper.includes("ZELLE")) {
                 merchant = `ZELLE ${merchant}`.trim();
               }
-              const category = t.category || "Uncategorized";
-              const rawEscaped = (t.raw_description || "").replace(/"/g, "&quot;");
-              return `<tr class="txn-row" onclick="toggleTxnDetail(this)"><td>${t.date || ""}</td><td>${merchant}</td><td>${amount}</td></tr><tr class="txn-detail" hidden><td colspan="3" class="txn-raw">Raw: ${t.raw_description || ""}</td></tr>`;
+              return `<tr class="txn-row" onclick="toggleTxnDetail(this)"><td>${t.date || ""}</td><td>${merchant}</td><td>${amount}</td></tr><tr class="txn-detail" hidden><td colspan="3" class="txn-raw">Raw: ${t.raw_description || ""} &nbsp;·&nbsp; ${amount}</td></tr>`;
             }
           )
           .join("");
         txns.forEach((t) => {
           const category = t.category || "Uncategorized";
           categoryCounts[category] = (categoryCounts[category] || 0) + 1;
+          const n = parseAmount(t.amount);
+          if (n !== null) categoryTotals[category] = (categoryTotals[category] || 0) + n;
         });
         const orderedCategories = Object.keys(categoryCounts).sort();
         if (!orderedCategories.length) {
@@ -226,17 +424,25 @@
           return;
         }
         categoryBlock.hidden = false;
+        function fmtCardTotal(total) {
+          if (total === undefined || total === null || isNaN(total)) return "";
+          const sign = total < 0 ? "-" : total > 0 ? "+" : "";
+          return `${sign}$${Math.abs(total).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        }
+        const allTotal = Object.values(categoryTotals).reduce((s, v) => s + v, 0);
+        // For credit cards show the balance due on the "All" pill; for others show net spending
+        const allDisplayVal = payload._creditBalanceNum != null
+          ? "-$" + payload._creditBalanceNum.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          : fmtCardTotal(-allTotal);
         const allCard = `<div class="result-card${
           categoryFilter === "All" ? " is-active" : ""
-        }" data-category="All"><div class="result-label">All</div><div class="result-value">${
-          txns.length
-        }</div></div>`;
+        }" data-category="All"><div class="result-label">All</div><div class="result-value">${allDisplayVal}</div></div>`;
         categorySummary.innerHTML =
           allCard +
           orderedCategories
             .map((category) => {
               const active = categoryFilter === category ? " is-active" : "";
-              return `<div class="result-card${active}" data-category="${category}"><div class="result-label">${category}</div><div class="result-value">${categoryCounts[category]}</div></div>`;
+              return `<div class="result-card${active}" data-category="${category}"><div class="result-label">${category}</div><div class="result-value">${fmtCardTotal(categoryTotals[category])}</div></div>`;
             })
             .join("");
       }
@@ -244,6 +450,7 @@
       input.addEventListener("change", (event) => {
         const file = event.target.files && event.target.files[0];
         if (!file) {
+          setDemoMode("default");
           meta.textContent = "No file selected.";
           parseMeta.textContent = "";
           uploadLabel.textContent = "Upload PDF";
@@ -252,6 +459,7 @@
           return;
         }
         if (file.type !== "application/pdf") {
+          setDemoMode("default");
           meta.textContent = "Please choose a PDF file.";
           parseMeta.textContent = "";
           uploadLabel.textContent = "Upload PDF";
@@ -260,6 +468,7 @@
           return;
         }
         meta.textContent = `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+        setDemoMode("default");
         uploadLabel.textContent = "PDF uploaded";
         setUploadState("uploaded");
         parseMeta.textContent = "Parsing statement...";
@@ -302,6 +511,9 @@
             resultsInfo.textContent = `${count} transactions extracted`;
             lastPayload = payload;
             activeCategory = "All";
+            activeDirectionFilter = null;
+            currentAccountId = null;
+            document.getElementById("periodFilterRow").style.display = "none";
             renderSummary(payload);
             renderTransactions(payload, activeCategory);
           })
@@ -327,12 +539,1193 @@
 
       categorySummary.addEventListener("click", (event) => {
         const card = event.target.closest("[data-category]");
-        if (!card || !lastPayload) {
-          return;
-        }
+        if (!card || !lastPayload) return;
         activeCategory = card.getAttribute("data-category") || "All";
         renderTransactions(lastPayload, activeCategory);
+        // If viewing a live account, re-fetch filtered period from API
+        if (currentAccountId && activeCategory !== "All") {
+          const activePeriodBtn = document.querySelector("#periodFilterRow .period-btn.is-active");
+          const period = activePeriodBtn ? activePeriodBtn.dataset.period : "all";
+          // filtering is done client-side on lastPayload — no extra fetch needed
+        }
       });
+
+      // ── Bookmarklet setup ──────────────────────────────────────────
+      const BANK_CONFIG = {
+        boa: {
+          name: "Bank of America",
+          url: "https://www.bankofamerica.com/",
+          bookmarkletJs: `(function(){var rows=document.querySelectorAll('tr.activity-row');if(!rows.length){alert('FIFO: No transactions found.\\n\\nMake sure you are on your account Transactions page.');return;}var txns=[];rows.forEach(function(r){var date=(r.querySelector('td:nth-child(1)')||{}).innerText||'';var desc=(r.querySelector('td:nth-child(2)')||{}).innerText||'';var type=(r.querySelector('td:nth-child(3)')||{}).innerText||'';var amt=(r.querySelector('td:nth-child(4)')||{}).innerText||'';if(date.trim()||desc.trim())txns.push({date:date.trim(),description:desc.trim(),amount_type:type.trim(),amount:amt.trim()});});fetch('{ORIGIN}/api/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bank_key:'boa',transactions:txns})}).then(function(r){return r.json();}).then(function(d){alert('FIFO: Imported '+d.count+' transactions!\\nYou can close this tab.');}).catch(function(e){alert('FIFO Error: '+e.message+'\\n\\nMake sure FIFO is running at {ORIGIN}');});})();`,
+        },
+        capital_one: {
+          name: "Capital One",
+          url: "https://www.capitalone.com/",
+          bookmarkletJs: `(function(){var sels=['[data-testid="purchase-list-item"]','[data-testid="txn-row"]','tr[class*="transaction"]','li[class*="TransactionRow"]'];var rows=[];for(var i=0;i<sels.length;i++){rows=Array.from(document.querySelectorAll(sels[i]));if(rows.length)break;}if(!rows.length){alert('FIFO: No transactions found.\\n\\nMake sure you are on the Transactions tab and scroll to load more.');return;}var txns=rows.map(function(r){var dateSel='[data-testid="transaction-date"],[class*="date"],[class*="Date"]';var descSel='[data-testid="merchant-name"],[data-testid="transaction-description"],[class*="merchant"],[class*="Merchant"],[class*="description"],[class*="Description"]';var amtSel='[data-testid="transaction-amount"],[class*="amount"],[class*="Amount"]';return{date:(r.querySelector(dateSel)||{}).innerText||'',description:(r.querySelector(descSel)||{}).innerText||'',amount:(r.querySelector(amtSel)||{}).innerText||''};}).filter(function(t){return t.description.trim();});fetch('{ORIGIN}/api/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bank_key:'capital_one',transactions:txns})}).then(function(r){return r.json();}).then(function(d){alert('FIFO: Imported '+d.count+' transactions!\\nYou can close this tab.');}).catch(function(e){alert('FIFO Error: '+e.message+'\\n\\nMake sure FIFO is running at {ORIGIN}');});})();`,
+        },
+        discover: {
+          name: "Discover",
+          url: "https://portal.discover.com/",
+          bookmarkletJs: `(function(){var sels=['[data-testid="purchase-list-item"]','[data-testid="transaction-row"]','[data-testid="activity-row"]','li[class*="transaction"]','div[class*="transaction-item"]','[role="row"]'];var rows=[];for(var i=0;i<sels.length;i++){rows=Array.from(document.querySelectorAll(sels[i]));if(rows.length)break;}if(!rows.length){alert('FIFO: No transactions found.\\n\\nMake sure you are on the Activity/Transactions page.');return;}var txns=rows.map(function(r){var dateSel='[data-testid*="date"],[class*="date"],[class*="Date"]';var descSel='[data-testid*="merchant"],[data-testid*="description"],[class*="merchant"],[class*="description"],[class*="name"]';var amtSel='[data-testid*="amount"],[class*="amount"],[class*="Amount"]';return{date:(r.querySelector(dateSel)||{}).innerText||'',description:(r.querySelector(descSel)||{}).innerText||'',amount:(r.querySelector(amtSel)||{}).innerText||''};}).filter(function(t){return t.description.trim();});fetch('{ORIGIN}/api/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bank_key:'discover',transactions:txns})}).then(function(r){return r.json();}).then(function(d){alert('FIFO: Imported '+d.count+' transactions!\\nYou can close this tab.');}).catch(function(e){alert('FIFO Error: '+e.message+'\\n\\nMake sure FIFO is running at {ORIGIN}');});})();`,
+        },
+      };
+
+      let currentBookmarkletBank = null;
+
+      function openBookmarkletSetup(bankKey) {
+        document.getElementById("bankPickerOverlay").style.display = "none";
+        const cfg = BANK_CONFIG[bankKey];
+        if (!cfg) return;
+        currentBookmarkletBank = bankKey;
+        document.getElementById("bookmarkletBankName").textContent = cfg.name;
+        document.getElementById("openBankBtn").textContent = `Open ${cfg.name} →`;
+        const origin = window.location.origin;
+        const js = cfg.bookmarkletJs.replace(/\{ORIGIN\}/g, origin);
+        document.getElementById("bookmarkletLink").href = "javascript:" + js;
+        document.getElementById("bookmarkletOverlay").style.display = "flex";
+      }
+
+      function closeBookmarkletModal(event) {
+        if (event && event.target !== document.getElementById("bookmarkletOverlay")) return;
+        document.getElementById("bookmarkletOverlay").style.display = "none";
+      }
+
+      function openBankInBrowser() {
+        const cfg = BANK_CONFIG[currentBookmarkletBank];
+        if (cfg) window.open(cfg.url, "_blank");
+      }
+
+      const PERIOD_LABELS = {
+        "1m": "last 30 days", "3m": "last 3 months", "6m": "last 6 months",
+        "1y": "last year", "ytd": "year to date", "all": "all time",
+      };
+
+      // ── Bank picker modal ────────────────────────────────────────────
+      function openBankPicker() {
+        document.getElementById("bankPickerOverlay").style.display = "flex";
+      }
+
+      function closeBankPicker(event) {
+        if (event && event.target !== document.getElementById("bankPickerOverlay")) return;
+        document.getElementById("bankPickerOverlay").style.display = "none";
+      }
+
+      let currentAccountId = null;
+
+      function filterByPeriod(btn) {
+        if (!currentAccountId) return;
+        document.querySelectorAll("#periodFilterRow .period-btn").forEach((b) => b.classList.remove("is-active"));
+        btn.classList.add("is-active");
+        const period = btn.dataset.period;
+        const label = document.querySelector(`.account-card[data-id="${currentAccountId}"] .acct-name`)?.textContent?.trim() || "Account";
+        Promise.all([
+          fetch(`/api/accounts/${currentAccountId}/transactions?period=${period}`).then(r => r.json()),
+          fetch("/api/accounts").then(r => r.json()),
+        ]).then(([txns, accounts]) => {
+          const acctMeta = accounts.find(a => a.id === currentAccountId) || null;
+          _renderLiveTransactions(txns, label, acctMeta);
+          if (activeCategory !== "All") {
+            renderTransactions(lastPayload, activeCategory);
+          }
+          if (activeTab === "insights") {
+            loadInsights(currentAccountId, period);
+          }
+        });
+      }
+
+      // ── Insights tab ──────────────────────────────────────────────────
+      let activeTab = "transactions";
+      let _monthlyChartInstance = null;
+      let _donutChartInstance = null;
+
+      function switchTab(tab) {
+        activeTab = tab;
+        document.getElementById("tabTransactions").classList.toggle("is-active", tab === "transactions");
+        document.getElementById("tabInsights").classList.toggle("is-active", tab === "insights");
+
+        const txnEls = ["resultsSummary", "categoryBlock", "categoryTotal"];
+        txnEls.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = tab === "transactions" ? "" : "none";
+        });
+        const periodRow = document.getElementById("periodFilterRow");
+        if (periodRow) periodRow.style.display = tab === "transactions" && currentAccountId ? "" : "none";
+        const tableWrap = document.querySelector(".results-table-wrap");
+        if (tableWrap) tableWrap.style.display = tab === "transactions" ? "" : "none";
+        document.getElementById("insightsPane").style.display = tab === "insights" ? "" : "none";
+
+        if (tab === "insights" && currentAccountId) {
+          const activePeriodBtn = document.querySelector("#periodFilterRow .period-btn.is-active");
+          const period = activePeriodBtn ? activePeriodBtn.dataset.period : "all";
+          loadInsights(currentAccountId, period);
+        }
+      }
+
+      let _insightsPeriod = "all";
+
+      function _periodLabel(period) {
+        return { "1m": "Last 30 days", "3m": "Last 3 months", "6m": "Last 6 months",
+                 "1y": "Last 12 months", "ytd": "Year to date", "all": "All time" }[period] || "All time";
+      }
+
+      function setInsightsPeriod(btn) {
+        document.querySelectorAll(".insights-period-btn").forEach(b => b.classList.remove("is-active"));
+        btn.classList.add("is-active");
+        _insightsPeriod = btn.dataset.period;
+        loadInsights(currentAccountId, _insightsPeriod);
+      }
+
+      async function loadInsights(accountId, period) {
+        if (!accountId) return;
+        period = period || _insightsPeriod || "all";
+        const pane = document.getElementById("insightsPane");
+        pane.classList.add("is-loading");
+        renderInsightsSkeleton();
+        if (_donutChartInstance) { _donutChartInstance.destroy(); _donutChartInstance = null; }
+        if (_monthlyChartInstance) { _monthlyChartInstance.destroy(); _monthlyChartInstance = null; }
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 180));
+          const monthsParam = { "1m": 2, "3m": 3, "6m": 6, "1y": 12, "ytd": 12, "all": 24 }[period] || 24;
+          const [ins, monthly] = await Promise.all([
+            fetch(`/api/accounts/${accountId}/insights?period=${period}`).then(r => r.json()),
+            fetch(`/api/accounts/${accountId}/monthly?months=${monthsParam}`).then(r => r.json()),
+          ]);
+          _renderInsights(ins, monthly, period);
+        } catch (err) {
+          document.getElementById("insightsStats").innerHTML = `<p class="insights-loading">Error: ${err.message}</p>`;
+        } finally {
+          pane.classList.remove("is-loading");
+        }
+      }
+
+      const DONUT_COLORS = [
+        "#1f5f55","#3b82f6","#f59e0b","#ef4444","#8b5cf6",
+        "#06b6d4","#f97316","#ec4899","#6366f1","#10b981",
+      ];
+
+      function _renderInsights(ins, monthly, period) {
+        resetInsightCharts();
+        const fmt  = v => formatCompactCurrency(v, 0);
+        const fmtFull = v => "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const periodLabel  = _periodLabel(period || "all");
+        const isCreditCard = ins.account_type === "credit";
+        const months       = monthly.months || [];
+        const statsEl      = document.getElementById("insightsStats");
+        const healthEl     = document.getElementById("insightsPaymentHealth");
+
+        // ── Section title renames for credit cards ────────────────────
+        const monthlyChartTitleEl = document.querySelector("#insightsPane .insights-chart-grid .insights-chart-title");
+        if (monthlyChartTitleEl) {
+          monthlyChartTitleEl.textContent = isCreditCard ? "Monthly Activity" : "Monthly Cash Flow";
+        }
+        document.querySelector(".insights-merchants-card .insights-chart-title").textContent = "Top Merchants";
+
+        if (isCreditCard) {
+          _renderCreditInsights(ins, months, periodLabel, fmt, fmtFull, statsEl, healthEl);
+        } else {
+          healthEl.style.display = "none";
+          _renderCheckingInsights(ins, months, periodLabel, fmt, statsEl);
+        }
+
+        animateInsightsNumbers();
+
+        // ── Monthly chart ─────────────────────────────────────────────
+        _renderMonthlyChart(months, isCreditCard);
+
+        // ── Category donut ────────────────────────────────────────────
+        _renderCategoryDonut(ins, fmt);
+
+        // ── Top merchants ─────────────────────────────────────────────
+        _renderTopMerchants(ins, fmt);
+      }
+
+      // ── Credit card Insights ──────────────────────────────────────────
+      function _renderCreditInsights(ins, months, periodLabel, fmt, fmtFull, statsEl, healthEl) {
+        const charges  = ins.total_charges  || 0;
+        const payments = ins.total_payments || 0;
+        const unpaid   = ins.unpaid_charges || 0;
+
+        // Balance Due card — amber styling (credit balance is always a liability)
+        const balDueColor = unpaid > 0 ? "#b45309" : "#059669";
+        statsEl.innerHTML = `
+          <div class="insights-metric-card insights-balance-due-card">
+            <div class="insights-metric-icon">💳</div>
+            <div class="insights-metric-label">Balance Due</div>
+            <div class="insights-metric-value" style="color:${balDueColor};white-space:nowrap"
+                 data-target-value="${unpaid.toFixed(2)}" data-prefix="-$" data-decimals="2"></div>
+            <div class="insights-metric-period">${periodLabel}</div>
+          </div>
+          <div class="insights-metric-card">
+            <div class="insights-metric-icon">🛍️</div>
+            <div class="insights-metric-label">Total Charges</div>
+            <div class="insights-metric-value negative" style="white-space:nowrap"
+                 data-target-value="${charges.toFixed(2)}" data-prefix="-$" data-decimals="2"></div>
+            <div class="insights-metric-period">${periodLabel}</div>
+          </div>
+          <div class="insights-metric-card">
+            <div class="insights-metric-icon">✅</div>
+            <div class="insights-metric-label">Payments Made</div>
+            <div class="insights-metric-value positive" style="white-space:nowrap"
+                 data-target-value="${payments.toFixed(2)}" data-prefix="+$" data-decimals="2"></div>
+            <div class="insights-metric-period">${periodLabel}</div>
+          </div>
+          <div class="insights-metric-card">
+            <div class="insights-metric-icon">${unpaid > 0 ? "📉" : "🎉"}</div>
+            <div class="insights-metric-label">Unpaid Charges</div>
+            <div class="insights-metric-value ${unpaid > 0 ? "negative" : "positive"}" style="white-space:nowrap"
+                 data-target-value="${unpaid.toFixed(2)}" data-prefix="${unpaid > 0 ? "-$" : "+$"}" data-decimals="2"></div>
+            <div class="insights-metric-period">${periodLabel}</div>
+          </div>`;
+
+        // ── Payment Health section ────────────────────────────────────
+        const pct = charges > 0 ? Math.min(100, Math.round((payments / charges) * 100)) : 0;
+        const fullyPaid = payments >= charges;
+        const barColor  = fullyPaid ? "#059669" : pct >= 70 ? "#d97706" : "#dc2626";
+        const calloutColor = fullyPaid ? "#059669" : "#b45309";
+        const calloutText  = fullyPaid
+          ? "You're fully paid up this period!"
+          : `You have ${fmtFull(unpaid)} in unpaid charges this period`;
+
+        healthEl.style.display = "";
+        healthEl.innerHTML = `
+          <div class="payment-health-card">
+            <div class="payment-health-title">Payment Health</div>
+            <div class="payment-health-meta">${fmtFull(charges)} charged &nbsp;·&nbsp; ${fmtFull(payments)} paid</div>
+            <div class="payment-health-bar-wrap">
+              <div class="payment-health-bar-fill" style="width:${pct}%;background:${barColor}"></div>
+            </div>
+            <div class="payment-health-stats">${pct}% of charges paid this period</div>
+            <div class="payment-health-callout" style="color:${calloutColor}">${calloutText}</div>
+          </div>`;
+      }
+
+      // ── Checking account Insights (original logic) ────────────────────
+      function _renderCheckingInsights(ins, months, periodLabel, fmt, statsEl) {
+        const spendMonths    = months.filter(m => m.expenses > 0);
+        const avgMonthlySpend = spendMonths.length
+          ? spendMonths.reduce((s, m) => s + m.expenses, 0) / spendMonths.length : 0;
+        const balRaw   = (ins.current_balance || "").replace(/[$,]/g, "").trim();
+        const balNum   = balRaw ? parseFloat(balRaw) : null;
+        const avgMonthlyIncome = months.filter(m => m.income > 0).length
+          ? months.filter(m => m.income > 0).reduce((s, m) => s + m.income, 0) / months.filter(m => m.income > 0).length : 0;
+        const isFinanciallyHealthy = avgMonthlyIncome > 0 && avgMonthlyIncome >= avgMonthlySpend * 0.9;
+        const balanceIsSet  = balNum !== null && (avgMonthlySpend === 0 || balNum >= avgMonthlySpend * 0.5);
+        const runwayMonths  = (balanceIsSet && avgMonthlySpend > 0) ? balNum / avgMonthlySpend : null;
+        const net = ins.net || 0;
+
+        let runwayCard;
+        if (!balanceIsSet) {
+          runwayCard = `<div class="insights-runway-card insights-runway-card--empty">
+             <div class="insights-runway-icon" style="font-size:22px">🏦</div>
+             <div class="insights-runway-label">Runway</div>
+             <div class="insights-runway-empty-msg">Enter your current balance<br>in the account card above<br>to calculate runway</div>
+             <div class="insights-runway-sub" style="margin-top:10px">${avgMonthlySpend > 0 ? "Avg spend: " + fmt(avgMonthlySpend) + "/mo" : ""}</div>
+           </div>`;
+        } else if (isFinanciallyHealthy && (runwayMonths === null || runwayMonths > 24)) {
+          runwayCard = `<div class="insights-runway-card insights-runway-card--healthy">
+             <div class="insights-runway-icon">✅</div>
+             <div class="insights-runway-label">Financial Health</div>
+             <div class="insights-runway-value" style="font-size:22px;line-height:1.2">Positive<br>Cash Flow</div>
+             <div class="insights-runway-sub">${fmt(avgMonthlyIncome)}/mo in · ${fmt(avgMonthlySpend)}/mo out</div>
+           </div>`;
+        } else if (runwayMonths !== null) {
+          const runwayColor = runwayMonths >= 6 ? "" : runwayMonths >= 3 ? "style='color:#f59e0b'" : "style='color:#ef4444'";
+          runwayCard = `<div class="insights-runway-card">
+             <div class="insights-runway-icon">🏦</div>
+             <div class="insights-runway-label">Runway · ${fmt(balNum)} balance</div>
+             <div class="insights-runway-value" ${runwayColor} data-target-value="${runwayMonths.toFixed(1)}" data-decimals="1" data-suffix=" mo"></div>
+             <div class="insights-runway-sub">at ${fmt(avgMonthlySpend)}/mo avg spend</div>
+           </div>`;
+        } else {
+          runwayCard = `<div class="insights-runway-card">
+             <div class="insights-runway-icon">🏦</div>
+             <div class="insights-runway-label">Avg Monthly Spend</div>
+             <div class="insights-runway-value" style="font-size:24px"${avgMonthlySpend > 0 ? ` data-target-value="${avgMonthlySpend.toFixed(0)}" data-prefix="$"` : ""}>${avgMonthlySpend > 0 ? "" : "—"}</div>
+             <div class="insights-runway-sub">Set a balance above to see runway</div>
+           </div>`;
+        }
+
+        statsEl.innerHTML = runwayCard + `
+          <div class="insights-metric-card">
+            <div class="insights-metric-icon">💸</div>
+            <div class="insights-metric-label">Total Spent</div>
+            <div class="insights-metric-value negative" style="white-space:nowrap"
+                 data-target-value="${Math.abs(ins.total_expenses || 0).toFixed(2)}" data-prefix="-$" data-decimals="2"></div>
+            <div class="insights-metric-period">${periodLabel}</div>
+          </div>
+          <div class="insights-metric-card">
+            <div class="insights-metric-icon">💰</div>
+            <div class="insights-metric-label">Total Income</div>
+            <div class="insights-metric-value positive" style="white-space:nowrap"
+                 data-target-value="${Math.abs(ins.total_income || 0).toFixed(2)}" data-prefix="+$" data-decimals="2"></div>
+            <div class="insights-metric-period">${periodLabel}</div>
+          </div>
+          <div class="insights-metric-card">
+            <div class="insights-metric-icon">${net >= 0 ? "📈" : "📉"}</div>
+            <div class="insights-metric-label">Net Change</div>
+            <div class="insights-metric-value ${net >= 0 ? "positive" : "negative"}" style="white-space:nowrap"
+                 data-target-value="${Math.abs(net).toFixed(2)}" data-prefix="${net >= 0 ? "+$" : "-$"}" data-decimals="2"></div>
+            <div class="insights-metric-period">${periodLabel}</div>
+          </div>`;
+      }
+
+      // ── Monthly chart ─────────────────────────────────────────────────
+      function _renderMonthlyChart(months, isCreditCard) {
+        if (_monthlyChartInstance) { _monthlyChartInstance.destroy(); _monthlyChartInstance = null; }
+        const canvas = document.getElementById("monthlyChart");
+        canvas.style.display = "";
+        const noteEl = document.getElementById("monthlyChartNote");
+
+        if (!months.length) { if (noteEl) noteEl.style.display = "none"; return; }
+
+        const labels = months.map(m => {
+          const [y, mo] = m.month.split("-");
+          return new Date(+y, +mo - 1, 1).toLocaleString("default", { month: "short", year: "2-digit" });
+        });
+
+        let datasets;
+        if (isCreditCard) {
+          if (noteEl) noteEl.style.display = "none";
+          datasets = [
+            { label: "Charges",  data: months.map(m => m.charges  || 0), backgroundColor: "#f87171", borderRadius: 5, barPercentage: 0.55 },
+            { label: "Payments", data: months.map(m => m.payments || 0), backgroundColor: "#1f5f55", borderRadius: 5, barPercentage: 0.55 },
+          ];
+        } else {
+          const incomeVals = months.map(m => m.income).filter(v => v > 0);
+          const isFlat = incomeVals.length > 1 && incomeVals.every(v => v === incomeVals[0]);
+          if (noteEl) noteEl.style.display = isFlat ? "" : "none";
+          datasets = [
+            { label: "Income",   data: months.map(m => m.income),   backgroundColor: "#1f5f55", borderRadius: 5, barPercentage: 0.55 },
+            { label: "Expenses", data: months.map(m => m.expenses), backgroundColor: "#f87171", borderRadius: 5, barPercentage: 0.55 },
+          ];
+        }
+
+        _monthlyChartInstance = new Chart(canvas, {
+          type: "bar",
+          data: { labels, datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: {
+              duration: 800, easing: "easeOutCubic",
+              delay(ctx) { return ctx.type === "data" ? ctx.dataIndex * 30 : 0; },
+            },
+            plugins: {
+              legend: { position: "top", labels: { font: { size: 12, family: "Inter" }, boxWidth: 10, padding: 14 } },
+              tooltip: {
+                backgroundColor: "#fff", titleColor: "#111", bodyColor: "#444",
+                borderColor: "#e5e7eb", borderWidth: 1, padding: 10,
+                callbacks: { label: ctx => ` ${ctx.dataset.label}: $${ctx.parsed.y.toLocaleString()}` },
+              },
+            },
+            scales: {
+              x: { grid: { display: false }, ticks: { font: { size: 11 }, color: "#9ca3af" } },
+              y: {
+                border: { display: false }, grid: { color: "#f3f4f6" },
+                ticks: { font: { size: 11 }, color: "#9ca3af",
+                         callback: v => "$" + (v >= 1000 ? (v / 1000).toFixed(0) + "k" : v) },
+              },
+            },
+          },
+        });
+      }
+
+      // ── Category donut ────────────────────────────────────────────────
+      function _renderCategoryDonut(ins, fmt) {
+        const _SKIP_CATS = new Set(["Income", "Transfer", "Debt Payments"]);
+        const cats = (ins.by_category || [])
+          .filter(c => c.total > 0 && !_SKIP_CATS.has(c.category))
+          .sort((a, b) => b.total - a.total);
+        const topCats = cats.slice(0, 8);
+        if (_donutChartInstance) { _donutChartInstance.destroy(); _donutChartInstance = null; }
+        const donutCanvas = document.getElementById("donutChart");
+        if (!topCats.length) { document.getElementById("donutLegend").innerHTML = ""; return; }
+
+        _donutChartInstance = new Chart(donutCanvas, {
+          type: "doughnut",
+          data: {
+            labels: topCats.map(c => c.category),
+            datasets: [{ data: topCats.map(c => c.total), backgroundColor: DONUT_COLORS.slice(0, topCats.length), borderWidth: 0, hoverOffset: 6 }],
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false, cutout: "72%",
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: "#fff", titleColor: "#111", bodyColor: "#444",
+                borderColor: "#e5e7eb", borderWidth: 1, padding: 10,
+                callbacks: {
+                  title: items => items[0] ? items[0].label : "",
+                  label: ctx => {
+                    const total = ctx.dataset.data.reduce((s, v) => s + v, 0);
+                    return `Amount: ${fmt(ctx.parsed)} · ${((ctx.parsed / total) * 100).toFixed(1)}%`;
+                  },
+                },
+              },
+            },
+          },
+        });
+        const catTotal = topCats.reduce((s, c) => s + c.total, 0);
+        document.getElementById("donutLegend").innerHTML = topCats.map((c, i) =>
+          `<div class="donut-legend-row">
+             <span class="donut-legend-dot" style="background:${DONUT_COLORS[i]}"></span>
+             <span class="donut-legend-label">${c.category}</span>
+             <span class="donut-legend-pct">${((c.total / catTotal) * 100).toFixed(0)}%</span>
+           </div>`
+        ).join("");
+      }
+
+      // ── Top merchants ─────────────────────────────────────────────────
+      function _renderTopMerchants(ins, fmt) {
+        const _SKIP_CATS = new Set(["Income", "Transfer", "Debt Payments"]);
+        const cats = (ins.by_category || []).filter(c => !_SKIP_CATS.has(c.category));
+        const allMerchants = (ins.top_merchants && ins.top_merchants.length
+          ? ins.top_merchants
+          : cats.slice(0, 10).map(c => ({ name: c.category, total: c.total }))
+        ).slice(0, 10);
+        const maxM  = allMerchants.reduce((mx, m) => Math.max(mx, m.total), 0) || 1;
+        const topEl = document.getElementById("insightsTopMerchants");
+        if (!allMerchants.length) {
+          topEl.innerHTML = '<p class="insights-empty">No data.</p>';
+        } else {
+          topEl.innerHTML = allMerchants.map((m, i) => {
+            const barPct = Math.max(4, Math.round((m.total / maxM) * 100));
+            return `<div class="insights-merchant-row">
+              <span class="insights-merchant-rank${i < 3 ? " top" : ""}">${i + 1}</span>
+              <span class="insights-merchant-name">${m.name}</span>
+              <div class="insights-merchant-bar-wrap"><div class="insights-merchant-bar-fill" style="width:${barPct}%"></div></div>
+              <span class="insights-merchant-amount">${fmt(m.total)}</span>
+            </div>`;
+          }).join("");
+        }
+      }
+
+      // ── Accounts ─────────────────────────────────────────────────────
+      function _timeAgo(isoStr) {
+        if (!isoStr) return "never";
+        const diff = (Date.now() - new Date(isoStr)) / 1000;
+        if (diff < 60)   return "just now";
+        if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+        if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+        return `${Math.floor(diff / 86400)}d ago`;
+      }
+
+      // ── Account card helpers ──────────────────────────────────────
+
+      // Canonical bank/domain map used for logo lookup.
+      const BANK_DOMAINS = {
+        boa:          "bankofamerica.com",
+        bankofamerica:"bankofamerica.com",
+        capitalone:   "capitalone.com",
+        capital_one:  "capitalone.com",
+        discover:     "discover.com",
+        chase:        "chase.com",
+        wellsfargo:   "wellsfargo.com",
+        wells_fargo:  "wellsfargo.com",
+        citi:         "citi.com",
+        citibank:     "citi.com",
+        usbank:       "usbank.com",
+        ally:         "ally.com",
+        schwab:       "schwab.com",
+        fidelity:     "fidelity.com",
+        amex:         "americanexpress.com",
+        americanexpress: "americanexpress.com",
+        td:           "td.com",
+        pnc:          "pnc.com",
+        sofi:         "sofi.com",
+      };
+
+      const BANK_LOCAL_LOGOS = {
+        boa: "/assets/bank-logos/bank-of-america.svg",
+        bankofamerica: "/assets/bank-logos/bank-of-america.svg",
+        chase: "/assets/bank-logos/chase.svg",
+        discover: "/assets/bank-logos/discover.svg",
+        capital_one: "/assets/bank-logos/capital-one.svg",
+        capitalone: "/assets/bank-logos/capital-one.svg",
+      };
+
+      const BANK_NAME_ALIASES = {
+        "bank of america": "boa",
+        "bofa": "boa",
+        "chase": "chase",
+        "jpmorgan chase": "chase",
+        "capital one": "capital_one",
+        "discover": "discover",
+        "wells fargo": "wells_fargo",
+        "citi": "citi",
+        "citibank": "citi",
+        "american express": "amex",
+        "amex": "amex",
+        "u.s. bank": "usbank",
+        "us bank": "usbank",
+        "ally": "ally",
+        "charles schwab": "schwab",
+        "schwab": "schwab",
+        "fidelity": "fidelity",
+        "td bank": "td",
+        "pnc": "pnc",
+        "sofi": "sofi",
+      };
+
+      // Fallback initials + gradient when logo unavailable
+      const BANK_FB_COLORS = {
+        boa:         { bg: "linear-gradient(135deg,#dbeafe,#bfdbfe)", fg: "#1d4ed8" },
+        capital_one: { bg: "linear-gradient(135deg,#fee2e2,#fca5a5)", fg: "#991b1b" },
+        discover:    { bg: "linear-gradient(135deg,#fef3c7,#fde68a)", fg: "#92400e" },
+        chase:       { bg: "linear-gradient(135deg,#d1fae5,#a7f3d0)", fg: "#065f46" },
+        wells_fargo: { bg: "linear-gradient(135deg,#fce7f3,#fbcfe8)", fg: "#9d174d" },
+        amex:        { bg: "linear-gradient(135deg,#e0e7ff,#c7d2fe)", fg: "#3730a3" },
+      };
+      const BANK_ABBRS = {
+        boa: "BofA", capital_one: "C1", amex: "Amex",
+        wells_fargo: "WF", discover: "DISC",
+      };
+
+      function _normalizeBankLogoName(name) {
+        return String(name || "")
+          .replace(/\s*\(sandbox\)\s*/ig, " ")
+          .replace(/\s*sandbox\s*/ig, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function _resolveBankLogoKey(name, bankKey) {
+        if (bankKey && BANK_DOMAINS[bankKey]) return bankKey;
+
+        const normalized = _normalizeBankLogoName(name).toLowerCase();
+        if (BANK_NAME_ALIASES[normalized]) return BANK_NAME_ALIASES[normalized];
+
+        for (const [alias, canonical] of Object.entries(BANK_NAME_ALIASES)) {
+          if (normalized.includes(alias)) return canonical;
+        }
+
+        const compact = normalized.replace(/[^a-z0-9]/g, "");
+        if (BANK_DOMAINS[compact]) return compact;
+        return bankKey || "";
+      }
+
+      function _bankLogoFallbackHTML(displayName, resolvedKey, fallbackStyle) {
+        const abbr = BANK_ABBRS[resolvedKey] || _normalizeBankLogoName(displayName || "?").slice(0, 4).toUpperCase();
+        return `<div class="acct-bank-logo-fb" style="${fallbackStyle}">${abbr}</div>`;
+      }
+
+      function _showBankLogoFallback(imgEl) {
+        const wrap = imgEl && imgEl.closest(".acct-bank-logo");
+        if (!wrap) return;
+        imgEl.remove();
+        const fallback = wrap.querySelector(".acct-bank-logo-fb");
+        if (fallback) fallback.style.display = "flex";
+      }
+
+      function _tryRemoteBankLogo(imgEl) {
+        const wrap = imgEl && imgEl.closest(".acct-bank-logo");
+        if (!wrap) return;
+        const domain = wrap.dataset.bankDomain;
+        if (!domain || imgEl.dataset.remoteTried === "1") {
+          _showBankLogoFallback(imgEl);
+          return;
+        }
+        imgEl.dataset.remoteTried = "1";
+        imgEl.src = `https://logo.clearbit.com/${domain}`;
+      }
+
+      function _bankLogo(name, bankKey) {
+        const resolvedKey = _resolveBankLogoKey(name, bankKey);
+        const domain = BANK_DOMAINS[resolvedKey];
+        const localLogo = BANK_LOCAL_LOGOS[resolvedKey];
+        const fc     = BANK_FB_COLORS[resolvedKey] || { bg: "linear-gradient(135deg,#f3f4f6,#e5e7eb)", fg: "#374151" };
+        const fbStyle = `background:${fc.bg};color:${fc.fg}`;
+        const normalizedName = _normalizeBankLogoName(name);
+        const fallbackHTML = _bankLogoFallbackHTML(normalizedName, resolvedKey, fbStyle);
+
+        if (localLogo || domain) {
+          const primarySrc = localLogo || `https://logo.clearbit.com/${domain}`;
+          const onErrorHandler = localLogo ? "_tryRemoteBankLogo(this)" : "_showBankLogoFallback(this)";
+          return `
+            <div class="acct-bank-logo" data-bank-name="${normalizedName}" data-bank-key="${resolvedKey}" data-bank-domain="${domain}">
+              <img
+                class="acct-bank-logo-img"
+                src="${primarySrc}"
+                alt="${normalizedName} logo"
+                loading="lazy"
+                referrerpolicy="no-referrer"
+                onload="this.closest('.acct-bank-logo')?.setAttribute('data-logo-loaded','true')"
+                onerror="${onErrorHandler}"
+              />
+              ${fallbackHTML.replace('style="', 'style="display:none;')}
+            </div>`;
+        }
+        return `<div class="acct-bank-logo" data-bank-name="${normalizedName}" data-bank-key="${resolvedKey}">
+                  ${fallbackHTML}
+                </div>`;
+      }
+
+      function _toggleOverflow(event, btn) {
+        event.stopPropagation();
+        const menu = btn.nextElementSibling;
+        const isOpen = menu.style.display === "block";
+        document.querySelectorAll(".acct-overflow-menu").forEach(m => m.style.display = "none");
+        if (!isOpen) menu.style.display = "block";
+      }
+
+      function startBalanceEdit(displayEl, accountId) {
+        const input = displayEl.nextElementSibling;
+        displayEl.style.display = "none";
+        input.style.display = "block";
+        input.focus(); input.select();
+      }
+
+      function saveBalance(input, accountId) {
+        const display = input.previousElementSibling;   // .acct-balance-display
+        const label   = input.nextElementSibling;        // .acct-card-balance-label
+        const val = input.value.trim();
+        display.style.display = "";
+        input.style.display = "none";
+        if (val) {
+          display.innerHTML = `${val}<span class="acct-balance-pencil"> ✎</span>`;
+          display.classList.remove("acct-balance-empty");
+          if (label) label.style.display = "";
+        } else {
+          display.innerHTML = `<span class="acct-balance-empty-text">Add balance</span>`;
+          display.classList.add("acct-balance-empty");
+          if (label) label.style.display = "none";
+        }
+        setAccountBalance(accountId, val);
+      }
+
+      function cancelBalanceEdit(input) {
+        input.previousElementSibling.style.display = "";
+        input.style.display = "none";
+      }
+
+      function _renderAccountCard(acct) {
+        const s          = acct.status || "connected";
+        const isReauth   = s === "reauth_required" || s === "broken" || s === "otp_required" || !!acct.needs_login;
+        const isPending  = !acct.last_synced_at || !acct.tx_count;
+        const isCreditAcct = acct.account_type === "credit";
+
+        const badgeClass = isReauth ? "status-disconnected" : (isPending || s === "refreshing") ? "status-attention" : "status-connected";
+        const statusText = isReauth ? "Disconnected" : isPending ? "Needs attention" : "Connected";
+
+        const hint    = acct.account_hint || "";
+        const synced  = acct.last_synced_at ? _timeAgo(acct.last_synced_at) : "Never";
+        const balVal  = acct.account_balance || "";
+        const balLabel = isCreditAcct ? "Balance due" : "Balance";
+        const helperAction = isReauth
+          ? `<button class="acct-secondary-action" onclick="reloginAccount(event,${acct.id})">Reconnect</button>`
+          : isPending
+            ? `<button class="acct-secondary-action" onclick="syncAccount(event,${acct.id})">Complete setup</button>`
+            : "";
+
+        const intervalOptions = [2, 6, 12, 24].map(h =>
+          `<option value="${h}"${acct.sync_interval_hours == h ? " selected" : ""}>${h}h</option>`
+        ).join("");
+
+        const cardClass = ["account-card", isReauth ? "acct-disconnected" : isPending ? "acct-pending" : ""].filter(Boolean).join(" ");
+
+        return `
+          <div class="${cardClass}" data-id="${acct.id}" onclick="loadAccountTransactions(${acct.id})">
+            <div class="acct-card-header">
+              ${_bankLogo(acct.display_name, acct.bank_key)}
+              <div class="acct-overflow">
+                <button class="acct-overflow-btn" onclick="_toggleOverflow(event,this)">···</button>
+                <div class="acct-overflow-menu">
+                  <button onclick="syncAccount(event,${acct.id})">↻ Sync now</button>
+                  <button onclick="reloginAccount(event,${acct.id})">↩ Re-login</button>
+                  <button onclick="recategorizeAccount(event,${acct.id})">⟳ Fix Categories</button>
+                  <button class="acct-overflow-del" onclick="deleteAccount(event,${acct.id})">✕ Remove</button>
+                  <div class="acct-overflow-autosync" onclick="event.stopPropagation()">
+                    <label class="toggle-switch">
+                      <input type="checkbox" ${acct.auto_sync ? "checked" : ""}
+                        onchange="setAutoSync(${acct.id},this.checked,this.closest('.acct-overflow-autosync').querySelector('select').value)">
+                      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                    </label>
+                    <span>Auto every</span>
+                    <select class="autosync-interval"
+                      onchange="setAutoSync(${acct.id},this.closest('.acct-overflow-autosync').querySelector('input[type=checkbox]').checked,this.value)">
+                      ${intervalOptions}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="acct-card-identity">
+              <span class="acct-name">${acct.display_name}</span>
+              ${hint ? `<span class="acct-card-hint">${hint}</span>` : ""}
+            </div>
+            <div class="acct-card-balance-wrap" onclick="event.stopPropagation()">
+              <div class="acct-balance-display${balVal ? "" : " acct-balance-empty"}"
+                   onclick="startBalanceEdit(this,${acct.id})" title="Click to edit balance">
+                ${balVal ? `${balVal}<span class="acct-balance-pencil"> ✎</span>` : `<span class="acct-balance-empty-text">Add balance</span>`}
+              </div>
+              <input class="acct-balance-input" type="text" value="${balVal}"
+                     placeholder="$0.00" style="display:none"
+                     onblur="saveBalance(this,${acct.id})"
+                     onkeydown="if(event.key==='Enter')this.blur();if(event.key==='Escape')cancelBalanceEdit(this)" />
+              <div class="acct-card-balance-label" ${balVal ? "" : 'style="display:none"'}>${balLabel}</div>
+            </div>
+            <div class="acct-card-footer-row">
+              <div class="acct-card-footer-meta">
+                <span class="acct-status-badge ${badgeClass}">
+                  <span class="acct-status-dot-sm"></span>${statusText}
+                </span>
+                <span class="acct-card-synced">${synced}</span>
+              </div>
+            </div>
+            ${helperAction ? `<div class="acct-card-action-row" onclick="event.stopPropagation()">${helperAction}</div>` : ""}
+          </div>`;
+      }
+
+      async function loadAccounts() {
+        try {
+          const resp = await fetch("/api/accounts");
+          const accounts = await resp.json();
+          const list = document.getElementById("accountsList");
+          const empty = document.getElementById("accountsEmpty");
+          // Clear existing cards and groups
+          list.querySelectorAll(".acct-group, .account-card").forEach(el => el.remove());
+          if (!accounts.length) {
+            empty.style.display = "";
+            return;
+          }
+          empty.style.display = "none";
+
+          const _isReauth = a => { const s = a.status || "connected"; return s === "reauth_required" || s === "broken" || s === "otp_required" || !!a.needs_login; };
+          const active       = accounts.filter(a => !_isReauth(a) && a.last_synced_at && a.tx_count > 0);
+          const attention    = accounts.filter(a => !_isReauth(a) && (!a.last_synced_at || !a.tx_count || (a.status || "connected") === "refreshing"));
+          const disconnected = accounts.filter(a => _isReauth(a));
+
+          const groups = [
+            { label: "Active",           items: active },
+            { label: "Needs Attention",  items: attention },
+            { label: "Disconnected",     items: disconnected },
+          ].filter(g => g.items.length > 0);
+
+          const showLabels = groups.length > 1;
+          groups.forEach(group => {
+            const wrapper = document.createElement("div");
+            wrapper.className = "acct-group";
+            wrapper.innerHTML = (showLabels ? `<div class="acct-group-label">${group.label}</div>` : "")
+              + `<div class="acct-group-cards">${group.items.map(_renderAccountCard).join("")}</div>`;
+            list.appendChild(wrapper);
+          });
+        } catch (_) {}
+      }
+
+      async function loadAccountTransactions(accountId) {
+        currentAccountId = accountId;
+        // Highlight selected card
+        document.querySelectorAll(".account-card").forEach(c => c.classList.remove("is-active"));
+        const card = document.querySelector(`.account-card[data-id="${accountId}"]`);
+        if (card) card.classList.add("is-active");
+
+        // Reset period filter to "All"
+        document.querySelectorAll("#periodFilterRow .period-btn").forEach((b) => b.classList.remove("is-active"));
+        const allBtn = document.querySelector('#periodFilterRow .period-btn[data-period="all"]');
+        if (allBtn) allBtn.classList.add("is-active");
+        document.getElementById("periodFilterRow").style.display = "";
+
+        const acctResp = await fetch(`/api/accounts/${accountId}/transactions?period=all`);
+        const txns = await acctResp.json();
+        const accounts = await (await fetch("/api/accounts")).json();
+        const acctMeta = accounts.find(a => a.id === accountId) || null;
+        _renderLiveTransactions(txns, card ? (card.querySelector(".acct-name") || card.querySelector(".account-card-name"))?.textContent?.trim() || "Account" : "Account", acctMeta);
+      }
+
+      function _renderLiveTransactions(txns, label, acctMeta) {
+        // Map DB format → the format renderTransactions expects
+        const mapped = txns.map(t => ({
+          date: t.date || "",
+          merchant_clean: t.merchant_clean || t.description || "",
+          raw_description: t.description || "",
+          amount: t.amount || "",
+          txn_type: (t.amount_type || t.type) === "credit" ? "credit" : "withdrawals",
+          category: t.category || "Uncategorized",
+        }));
+
+        const fmt = v => "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const acctBalance = acctMeta ? (acctMeta.account_balance || "") : "";
+        const currentBalNum = acctBalance ? parseAmount(acctBalance) : null;
+        const isCreditCard = acctMeta && (acctMeta.account_type === "credit");
+
+        // Compute income / expenses for the summary cards.
+        // Credit cards: use amount sign (positive = charge, negative = payment/refund)
+        // Checking: use amount_type field
+        let totalIncome = 0, totalExpenses = 0;
+        txns.forEach(t => {
+          const n = parseAmount(t.amount);
+          if (n === null) return;
+          if (isCreditCard) {
+            if (n < 0) totalIncome += Math.abs(n);   // payment or refund
+            else totalExpenses += n;                  // charge
+          } else {
+            const atype = (t.amount_type || t.type || "").toLowerCase();
+            const isCredit = atype === "credit" || (atype === "" && n > 0);
+            if (isCredit) totalIncome += Math.abs(n);
+            else totalExpenses += Math.abs(n);
+          }
+        });
+        const netChange = totalIncome - totalExpenses;
+
+        // Build summary cards.
+        // Credit cards: Balance Due / Money Out (charges) / Money In (payments+refunds)
+        // Checking: Starting Balance / Money In / Money Out / Ending Balance
+        // For credit cards, balance due = net owed = charges - payments
+        const computedBalance = totalExpenses - totalIncome;
+        let summaryCards;
+        if (isCreditCard) {
+          summaryCards = [
+            { label: "Balance Due",  amount: fmt(computedBalance),    color: "negative" },
+            { label: "Money Out",    amount: "-" + fmt(totalExpenses), color: "negative" },
+            { label: "Money In",     amount: "+" + fmt(totalIncome),   color: totalIncome > 0 ? "positive" : "" },
+          ];
+        } else if (!isCreditCard && currentBalNum !== null) {
+          // Checking/savings with known balance: show starting → ending
+          const startingBal = currentBalNum - netChange;
+          summaryCards = [
+            { label: "Starting Balance", amount: fmt(startingBal),      color: "" },
+            { label: "Money In",         amount: "+" + fmt(totalIncome), color: "positive" },
+            { label: "Money Out",        amount: "-" + fmt(totalExpenses), color: "negative" },
+            { label: "Ending Balance",   amount: fmt(currentBalNum),    color: currentBalNum >= 0 ? "positive" : "negative" },
+          ];
+        } else {
+          summaryCards = [
+            { label: "Money In",   amount: "+" + fmt(totalIncome),   color: "positive" },
+            { label: "Money Out",  amount: "-" + fmt(totalExpenses),  color: "negative" },
+            { label: "Net Change", amount: (netChange >= 0 ? "+" : "-") + fmt(Math.abs(netChange)), color: netChange >= 0 ? "positive" : "negative" },
+          ];
+        }
+
+        const payload = {
+          transactions: mapped,
+          summary_cards: summaryCards,
+          _creditBalanceNum: isCreditCard ? computedBalance : null,
+          _isCreditCard: isCreditCard,
+        };
+
+        setDemoMode("account");
+        lastPayload = payload;
+        activeCategory = "All";
+        activeDirectionFilter = null;
+        document.getElementById("accountColHeader").style.display = "none";
+        document.getElementById("periodFilterRow").style.display = "";
+        categoryBlock.style.display = "";
+        // Show tab bar and switch to transactions tab
+        document.getElementById("resultsTabs").style.display = "";
+        if (activeTab === "insights") { switchTab("transactions"); }
+        document.getElementById("insightsPane").style.display = "none";
+        document.querySelector(".results-table-wrap").style.display = "";
+        renderSummary(payload);
+        renderTransactions(payload, "All");
+        // For credit cards, update the account card balance display with the computed value
+        if (isCreditCard && acctMeta) {
+          const balDisplay = document.querySelector(`.account-card[data-id="${acctMeta.id}"] .acct-balance-display`);
+          if (balDisplay) {
+            balDisplay.innerHTML = fmt(computedBalance) + ' <span class="acct-balance-pencil"> ✎</span>';
+            balDisplay.classList.remove("acct-balance-empty");
+          }
+        }
+        // Friendly heading: "Chase Checking · 192 transactions"
+        const cleanLabel = label.replace(/\s*\(Sandbox\)\s*/i, "").replace(/\s*Sandbox\s*/i, "").trim();
+        document.getElementById("resultsHeading").textContent = cleanLabel;
+        resultsInfo.textContent = `${txns.length} transactions`;
+        results.hidden = false;
+      }
+
+      async function setAccountBalance(accountId, balanceStr) {
+        try {
+          await fetch(`/api/accounts/${accountId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ account_balance: balanceStr }),
+          });
+          // If this account is currently displayed, refresh the summary
+          if (currentAccountId === accountId && lastPayload) {
+            await loadAccountTransactions(accountId);
+          }
+        } catch (_) {}
+      }
+
+      async function setAutoSync(accountId, enabled, intervalHours) {
+        try {
+          await fetch(`/api/accounts/${accountId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              auto_sync: enabled ? 1 : 0,
+              sync_interval_hours: parseInt(intervalHours, 10),
+            }),
+          });
+        } catch (_) {}
+      }
+
+      async function syncAccount(event, accountId) {
+        event.stopPropagation();
+        const btn = event.currentTarget;
+        btn.disabled = true;
+        btn.textContent = "…";
+        const status = document.getElementById("connectBankStatus");
+        status.style.display = "block";
+        const card = document.querySelector(`.account-card[data-id="${accountId}"]`);
+        const needsLogin = card && card.classList.contains("needs-login");
+        status.textContent = needsLogin
+          ? "Opening browser to re-authenticate — log in to refresh the session…"
+          : "Opening browser — log in to sync your account…";
+        try {
+          const resp = await fetch(`/api/accounts/${accountId}/sync`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || "Sync failed");
+          status.textContent = `Synced — ${data.count} transaction${data.count !== 1 ? "s" : ""} fetched`;
+          await loadAccounts();
+          await loadAccountTransactions(accountId);
+        } catch (err) {
+          status.textContent = `Error: ${err.message}`;
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "↻";
+        }
+      }
+
+      async function reloginAccount(event, accountId) {
+        event.stopPropagation();
+        const btn = event.currentTarget;
+        btn.disabled = true;
+        btn.textContent = "Opening browser…";
+        const status = document.getElementById("connectBankStatus");
+        status.style.display = "block";
+        status.textContent = "Opening browser — log in and complete OTP. Transactions will sync automatically when the browser closes.";
+        try {
+          const resp = await fetch(`/api/accounts/${accountId}/relogin`, { method: "POST" });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || data.detail || "Re-login failed");
+          const newTx = data.count || 0;
+          status.textContent = `Re-login successful — ${newTx} new transaction${newTx !== 1 ? "s" : ""} added.`;
+          await loadAccounts();
+          await loadAccountTransactions(accountId);
+        } catch (err) {
+          status.textContent = `Error: ${err.message}`;
+          btn.disabled = false;
+          btn.textContent = "Re-login →";
+        }
+      }
+
+      async function recategorizeAccount(event, accountId) {
+        event.stopPropagation();
+        const btn = event.currentTarget;
+        btn.disabled = true;
+        btn.textContent = "Categorizing…";
+        const status = document.getElementById("connectBankStatus");
+        status.style.display = "block";
+        status.textContent = "Re-running categorizer on all transactions — this may take a moment…";
+        try {
+          const resp = await fetch(`/api/accounts/${accountId}/recategorize`, { method: "POST" });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || "Recategorize failed");
+          status.textContent = `Done — ${data.updated} transaction${data.updated !== 1 ? "s" : ""} categorized`;
+          await loadAccountTransactions(accountId);
+        } catch (err) {
+          status.textContent = `Error: ${err.message}`;
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "⟳ Fix Categories";
+        }
+      }
+
+      async function deleteAccount(event, accountId) {
+        event.stopPropagation();
+        if (!confirm("Remove this account and all its stored transactions?")) return;
+        await fetch(`/api/accounts/${accountId}`, { method: "DELETE" });
+        await loadAccounts();
+        results.hidden = true;
+        setDemoMode("default");
+        document.getElementById("connectBankStatus").style.display = "none";
+      }
+
+      // ── Connect via Plaid sandbox (no CDN needed) ────────────────────
+      async function connectViaPlaIdSandbox() {
+        document.getElementById("bankPickerOverlay").style.display = "none";
+        const status = document.getElementById("connectBankStatus");
+        status.style.display = "block";
+        status.textContent = "Connecting Plaid sandbox account — fetching test transactions…";
+        try {
+          const data = await fetch("/api/plaid/sandbox-connect", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+          }).then(r => r.json());
+          if (data.error) throw new Error(data.error);
+          status.textContent = `${data.account.display_name} connected — ${data.count} transaction${data.count !== 1 ? "s" : ""} stored.`;
+          await loadAccounts();
+          _renderLiveTransactions(data.transactions, data.account.display_name, data.account);
+          currentAccountId = data.account.id;
+          document.getElementById("periodFilterRow").style.display = "";
+        } catch (err) {
+          status.textContent = `Error: ${err.message}`;
+        }
+      }
+
+      // ── Connect bank via Plaid Link ───────────────────────────────────
+      function _loadPlaidScript() {
+        return new Promise((resolve, reject) => {
+          if (window.Plaid) { resolve(); return; }
+          const s = document.createElement("script");
+          s.src = "https://cdn.plaid.com/link/v3/stable/link-initialize.js";
+          s.onload = resolve;
+          s.onerror = () => reject(new Error("Failed to load Plaid Link script. Check your internet connection."));
+          document.head.appendChild(s);
+        });
+      }
+
+      async function connectViaPlaid() {
+        document.getElementById("bankPickerOverlay").style.display = "none";
+        const status = document.getElementById("connectBankStatus");
+        status.style.display = "block";
+        status.textContent = "Opening Plaid Link…";
+
+        try {
+          await _loadPlaidScript();
+          const { link_token, error } = await fetch("/api/plaid/create-link-token", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+          }).then(r => r.json());
+          if (error) throw new Error(error);
+
+          const handler = Plaid.create({
+            token: link_token,
+            onSuccess: async (public_token, metadata) => {
+              status.textContent = "Fetching your transactions — this may take a moment…";
+              try {
+                const data = await fetch("/api/plaid/exchange-token", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    public_token,
+                    institution_name: metadata.institution?.name || "Plaid Account",
+                  }),
+                }).then(r => r.json());
+                if (data.error) throw new Error(data.error);
+                status.textContent = `${data.account.display_name} connected — ${data.count} transaction${data.count !== 1 ? "s" : ""} stored.`;
+                await loadAccounts();
+                _renderLiveTransactions(data.transactions, data.account.display_name, data.account);
+                currentAccountId = data.account.id;
+                document.getElementById("periodFilterRow").style.display = "";
+              } catch (err) {
+                status.textContent = `Error: ${err.message}`;
+              }
+            },
+            onExit: (err) => {
+              if (err) {
+                status.textContent = `Plaid error: ${err.display_message || err.error_code || "Unknown error"}`;
+              } else {
+                status.style.display = "none";
+              }
+            },
+          });
+          handler.open();
+        } catch (err) {
+          status.textContent = `Error: ${err.message}`;
+        }
+      }
+
+      // ── Connect bank (add new account, store in DB) ───────────────────
+      async function connectBank(bankKey) {
+        document.getElementById("bankPickerOverlay").style.display = "none";
+
+        const status = document.getElementById("connectBankStatus");
+        status.style.display = "block";
+        status.textContent = "Opening browser — log in and complete MFA, then navigate to your Transactions page. Transactions will appear as soon as the browser closes.";
+
+        try {
+          const resp = await fetch("/api/accounts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ bank: bankKey, period: "1y" }),
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.detail || data.error || "Connection failed");
+
+          status.textContent = `${data.account.display_name} connected — ${data.count} transaction${data.count !== 1 ? "s" : ""} stored.`;
+          await loadAccounts();
+          _renderLiveTransactions(data.transactions, data.account.display_name, data.account);
+          currentAccountId = data.account.id;
+          document.getElementById("periodFilterRow").style.display = "";
+        } catch (err) {
+          status.textContent = `Error: ${err.message}`;
+        }
+      }
+
+      // Close overflow menus when clicking anywhere outside
+      document.addEventListener("click", () => {
+        document.querySelectorAll(".acct-overflow-menu").forEach(m => m.style.display = "none");
+      });
+
+      // Load accounts on page start
+      loadAccounts();
     </script>
+  <!-- Modals live outside all content containers so display:none on parents never hides them -->
+  <div id="bankPickerOverlay" class="bank-picker-overlay" style="display:none" onclick="closeBankPicker(event)">
+    <div class="bank-picker-modal">
+      <div class="bank-picker-title">Select your bank</div>
+      <div class="bank-picker-list">
+        <button class="bank-option bank-option-plaid" onclick="connectViaPlaIdSandbox()">
+          <span class="bank-name">🏦 Connect via Plaid (Sandbox)</span>
+          <span class="bank-soon" style="color:#1f5f55;font-weight:600">Test data</span>
+        </button>
+        <div class="bank-picker-divider">— or use browser scraper —</div>
+        <div class="bank-option-row">
+          <button class="bank-option" onclick="connectBank('boa')">
+            <span class="bank-name">Bank of America</span>
+          </button>
+          <button class="bank-import-btn" onclick="openBookmarkletSetup('boa')" title="Import from your browser">⬆ Import</button>
+        </div>
+        <div class="bank-option-row">
+          <button class="bank-option" onclick="connectBank('capital_one')">
+            <span class="bank-name">Capital One</span>
+          </button>
+          <button class="bank-import-btn" onclick="openBookmarkletSetup('capital_one')" title="Import from your browser">⬆ Import</button>
+        </div>
+        <div class="bank-option-row">
+          <button class="bank-option" onclick="connectBank('discover')">
+            <span class="bank-name">Discover</span>
+          </button>
+          <button class="bank-import-btn" onclick="openBookmarkletSetup('discover')" title="Import from your browser">⬆ Import</button>
+        </div>
+      </div>
+      <button class="bank-picker-cancel" onclick="closeBankPicker()">Cancel</button>
+    </div>
+  </div>
+
+  <div id="bookmarkletOverlay" class="bank-picker-overlay" style="display:none" onclick="closeBookmarkletModal(event)">
+    <div class="bank-picker-modal bookmarklet-modal">
+      <div class="bank-picker-title">Import from <span id="bookmarkletBankName">Bank</span></div>
+      <p class="bookmarklet-intro">Use your real browser — no automation, no special icons.</p>
+      <ol class="bookmarklet-steps">
+        <li class="bookmarklet-step">
+          <strong>Drag this button to your bookmarks bar:</strong>
+          <a id="bookmarkletLink" class="bookmarklet-btn" href="#">FIFO Import ★</a>
+          <span class="bookmarklet-drag-hint">(drag the button above to your toolbar)</span>
+        </li>
+        <li class="bookmarklet-step">
+          <strong>Open your bank in a new tab:</strong>
+          <button id="openBankBtn" class="open-bank-btn" onclick="openBankInBrowser()">Open Bank →</button>
+        </li>
+        <li class="bookmarklet-step">
+          Log in and navigate to your <strong>Transactions</strong> page.
+          Scroll down to load as many transactions as you want.
+        </li>
+        <li class="bookmarklet-step">
+          Click <strong>FIFO Import ★</strong> in your bookmarks bar.
+          Transactions will be imported here automatically.
+        </li>
+      </ol>
+      <p class="bookmarklet-note">
+        ⚠ If you see a CORS error, your bank blocks requests to localhost.
+        Use the automated login option instead.
+      </p>
+      <button class="bank-picker-cancel" onclick="closeBookmarkletModal()">Close</button>
+    </div>
+  </div>
   </body>
 </html>

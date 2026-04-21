@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Capital One logo badge">
+  <rect x="1.5" y="1.5" width="61" height="61" rx="16" fill="#ffffff" stroke="#f1d7da" stroke-width="1.5"/>
+  <text x="32" y="30" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="8" font-weight="800" fill="#1f2937">CAPITAL</text>
+  <text x="32" y="40" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="8" font-weight="800" fill="#1f2937">ONE</text>
+  <path d="M15 22c10-7 23-8 35-3" fill="none" stroke="#dc2626" stroke-width="3.2" stroke-linecap="round"/>
+</svg>
