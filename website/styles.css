@@ -1112,6 +1112,23 @@ main {
   .insights-chart-grid {
     grid-template-columns: 1fr;
   }
+
+  .demo-shell {
+    padding-top: 18px;
+  }
+
+  .results-summary,
+  .category-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .acct-group-cards {
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
+
+  .results-table {
+    min-width: 560px;
+  }
 }
 
 @media (max-width: 600px) {
@@ -1134,6 +1151,161 @@ main {
   .ghost {
     width: 100%;
     text-align: center;
+  }
+
+  .demo-title {
+    margin-bottom: 14px;
+  }
+
+  .demo-title h2 {
+    font-size: clamp(2rem, 10vw, 2.5rem);
+    line-height: 1.05;
+  }
+
+  .demo-simple {
+    gap: 10px;
+    margin-top: 4px;
+  }
+
+  .upload,
+  .upload-cta,
+  .connect-bank-btn,
+  .add-account-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .accounts-section {
+    margin-bottom: 24px;
+  }
+
+  .accounts-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .accounts-title {
+    text-align: left;
+  }
+
+  .accounts-list {
+    gap: 18px;
+  }
+
+  .acct-group-cards {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .account-card {
+    min-height: 0;
+    padding: 18px 16px 16px;
+  }
+
+  .acct-card-header {
+    margin-bottom: 12px;
+  }
+
+  .acct-name {
+    font-size: 15px;
+  }
+
+  .acct-balance-display {
+    font-size: clamp(28px, 10vw, 34px);
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .acct-card-footer-row,
+  .acct-card-footer-meta {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .acct-card-synced {
+    margin-left: 0;
+    text-align: left;
+  }
+
+  .results {
+    gap: 14px;
+  }
+
+  .results-head h3 {
+    font-size: 1.2rem;
+  }
+
+  .results-summary,
+  .category-summary {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .result-card {
+    padding: 12px;
+  }
+
+  .result-value,
+  #resultsSummary .result-value,
+  .category-summary .result-value {
+    font-size: 20px;
+  }
+
+  .results-tabs,
+  .period-filter-row,
+  .insights-period-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .results-tab,
+  .period-btn,
+  .insights-period-btn {
+    flex: 1 1 calc(50% - 8px);
+    text-align: center;
+    justify-content: center;
+  }
+
+  .results-table-wrap {
+    border-radius: 12px;
+  }
+
+  .results-table {
+    min-width: 520px;
+  }
+
+  .results-table th,
+  .results-table td {
+    padding: 9px 10px;
+  }
+
+  .insights-chart-card,
+  .insights-merchants-card,
+  .insights-metric-card,
+  .insights-runway-card,
+  .payment-health-card {
+    padding: 18px 16px;
+    border-radius: 16px;
+  }
+
+  .insights-chart-wrap {
+    height: 200px;
+  }
+
+  .donut-wrap {
+    height: 190px;
+  }
+
+  .insights-merchant-row {
+    gap: 10px;
+  }
+
+  .insights-merchant-bar-wrap {
+    max-width: 90px;
+    min-width: 44px;
   }
 
   .hero {
