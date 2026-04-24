@@ -2275,6 +2275,69 @@ body.demo-page::after {
   flex-shrink: 0;
 }
 
+/* ── Re-auth / session expired indicators ─────────────────────────── */
+.sidebar-reauth-badge {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ef4444;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sidebar-account-item.needs-reauth .sidebar-acct-meta {
+  color: #ef4444;
+  font-weight: 500;
+}
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.5; transform: scale(1.3); }
+}
+.sidebar-acct-dot.dot-pulse {
+  animation: dot-pulse 1.8s ease-in-out infinite;
+}
+
+/* ── Re-auth banner (inside .demo-main, above content) ────────────── */
+.reauth-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  background: #fef2f2;
+  border-bottom: 1px solid #fecaca;
+  flex-shrink: 0;
+}
+.reauth-banner-icon {
+  font-size: 15px;
+  color: #ef4444;
+  flex-shrink: 0;
+}
+.reauth-banner-text {
+  flex: 1;
+  font-size: 13px;
+  color: #7f1d1d;
+  line-height: 1.4;
+}
+.reauth-banner-text strong { color: #b91c1c; }
+.reauth-banner-dismiss {
+  background: none;
+  border: none;
+  font-size: 13px;
+  color: #b91c1c;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+.reauth-banner-dismiss:hover { opacity: 1; background: rgba(239,68,68,0.1); }
+
 .sidebar-footer {
   padding: 20px 28px 26px;
   border-top: 1px solid rgba(208, 198, 182, 0.68);

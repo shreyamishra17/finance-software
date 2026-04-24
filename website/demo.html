@@ -189,6 +189,8 @@
       let activeMainTab = "overview";
       let _isPdfMode = false;
       let _overviewChartInstance = null;
+      const _accountBalanceOverrides = new Map();
+      const SANDBOX_DEFAULT_BALANCE = "$8,500.00";
 
       function setUploadState(state) {
         uploadCta.classList.remove("is-uploaded", "is-loading", "is-error");
@@ -199,6 +201,13 @@
 
       // Backend that parses the PDF and returns JSON.
       const CLOUD_API_BASE = "https://finance-demo-558632999562.us-central1.run.app";
+
+      // Route /api/* calls to the cloud backend when running on the static Cloudflare Pages deployment.
+      function _apiFetch(path, options) {
+        const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+        const base = isLocal ? "" : CLOUD_API_BASE;
+        return fetch(base + path, options);
+      }
 
       async function postParse(formData, baseUrl) {
         const res = await fetch(`${baseUrl}/api/parse`, { method: "POST", body: formData });
@@ -643,8 +652,8 @@
         const period = btn.dataset.period;
         const label = document.getElementById("resultsHeading")?.textContent?.trim() || "Account";
         Promise.all([
-          fetch(`/api/accounts/${currentAccountId}/transactions?period=${period}`).then(r => r.json()),
-          fetch("/api/accounts").then(r => r.json()),
+          _apiFetch(`/api/accounts/${currentAccountId}/transactions?period=${period}`).then(r => r.json()),
+          _apiFetch("/api/accounts").then(r => r.json()),
         ]).then(([txns, accounts]) => {
           const acctMeta = accounts.find(a => a.id === currentAccountId) || null;
           _renderLiveTransactions(txns, label, acctMeta);
@@ -720,9 +729,21 @@
           await new Promise((resolve) => setTimeout(resolve, 180));
           const monthsParam = { "1m": 2, "3m": 3, "6m": 6, "1y": 12, "ytd": 12, "all": 24 }[period] || 24;
           const [ins, monthly] = await Promise.all([
-            fetch(`/api/accounts/${accountId}/insights?period=${period}`).then(r => r.json()),
-            fetch(`/api/accounts/${accountId}/monthly?months=${monthsParam}`).then(r => r.json()),
+            _apiFetch(`/api/accounts/${accountId}/insights?period=${period}`).then(r => r.json()),
+            _apiFetch(`/api/accounts/${accountId}/monthly?months=${monthsParam}`).then(r => r.json()),
           ]);
+          const overrideBalance = _accountBalanceOverrides.get(accountId);
+          if (overrideBalance) ins.current_balance = overrideBalance;
+          if (!String(ins.current_balance || "").trim()) {
+            const accounts = await _apiFetch("/api/accounts").then(r => r.json()).catch(() => []);
+            const acctMeta = accounts.find(a => a.id === accountId) || null;
+            if (acctMeta?.account_balance) {
+              ins.current_balance = acctMeta.account_balance;
+            } else if ((acctMeta?.display_name || "").toLowerCase().includes("sandbox")) {
+              ins.current_balance = SANDBOX_DEFAULT_BALANCE;
+              _accountBalanceOverrides.set(accountId, SANDBOX_DEFAULT_BALANCE);
+            }
+          }
           _renderInsights(ins, monthly, period);
         } catch (err) {
           document.getElementById("insightsStats").innerHTML = `<p class="insights-loading">Error: ${err.message}</p>`;
@@ -842,7 +863,7 @@
         const avgMonthlyIncome = months.filter(m => m.income > 0).length
           ? months.filter(m => m.income > 0).reduce((s, m) => s + m.income, 0) / months.filter(m => m.income > 0).length : 0;
         const isFinanciallyHealthy = avgMonthlyIncome > 0 && avgMonthlyIncome >= avgMonthlySpend * 0.9;
-        const balanceIsSet  = balNum !== null && (avgMonthlySpend === 0 || balNum >= avgMonthlySpend * 0.5);
+        const balanceIsSet  = balNum !== null && Number.isFinite(balNum);
         const runwayMonths  = (balanceIsSet && avgMonthlySpend > 0) ? balNum / avgMonthlySpend : null;
         const net = ins.net || 0;
 
@@ -1315,7 +1336,7 @@
 
       async function loadAccounts() {
         try {
-          const resp = await fetch("/api/accounts");
+          const resp = await _apiFetch("/api/accounts");
           const accounts = await resp.json();
           const sidebarList = document.getElementById("sidebarAccountsList");
           const noAccts = document.getElementById("sidebarNoAccounts");
@@ -1323,12 +1344,20 @@
           sidebarList.querySelectorAll(".sidebar-account-item").forEach(el => el.remove());
           if (!accounts.length) {
             if (noAccts) noAccts.style.display = "";
+            _dismissReauthBanner();
             return;
           }
           if (noAccts) noAccts.style.display = "none";
           accounts.forEach(acct => {
             sidebarList.insertAdjacentHTML("beforeend", _renderSidebarAccount(acct));
           });
+          // Show banner if any accounts need re-authentication
+          const reauthAccounts = accounts.filter(_acctNeedsReauth);
+          if (reauthAccounts.length) {
+            _showReauthBanner(reauthAccounts);
+          } else {
+            _dismissReauthBanner();
+          }
           // Re-apply active state if an account is currently selected. If not,
           // default to the first account so the main pane does not look empty.
           if (currentAccountId) {
@@ -1338,6 +1367,35 @@
             await loadAccountTransactions(accounts[0].id);
           }
         } catch (_) {}
+      }
+
+      function _showReauthBanner(reauthAccounts) {
+        let banner = document.getElementById("reauthBanner");
+        if (!banner) {
+          banner = document.createElement("div");
+          banner.id = "reauthBanner";
+          banner.className = "reauth-banner";
+          // Insert inside demo-main, before the first child
+          const demoMain = document.querySelector(".demo-main");
+          if (demoMain) demoMain.insertBefore(banner, demoMain.firstChild);
+        }
+        const names = reauthAccounts.map(a =>
+          (a.display_name || "").replace(/\s*\(Sandbox\)\s*/i, "").trim()
+        ).join(", ");
+        const plural = reauthAccounts.length > 1;
+        banner.innerHTML = `
+          <span class="reauth-banner-icon">⚠</span>
+          <span class="reauth-banner-text">
+            <strong>${plural ? reauthAccounts.length + " accounts need" : names + " needs"} re-login</strong>
+            — session expired. Click the account in the sidebar to re-connect.
+          </span>
+          <button class="reauth-banner-dismiss" onclick="_dismissReauthBanner()" title="Dismiss">✕</button>`;
+        banner.style.display = "flex";
+      }
+
+      function _dismissReauthBanner() {
+        const banner = document.getElementById("reauthBanner");
+        if (banner) banner.style.display = "none";
       }
 
       async function loadAccountTransactions(accountId) {
@@ -1351,10 +1409,12 @@
         document.querySelectorAll("#periodFilterRow .period-btn").forEach((b) => b.classList.remove("is-active"));
         const allBtn = document.querySelector('#periodFilterRow .period-btn[data-period="all"]');
         if (allBtn) allBtn.classList.add("is-active");
-        const acctResp = await fetch(`/api/accounts/${accountId}/transactions?period=all`);
+        const acctResp = await _apiFetch(`/api/accounts/${accountId}/transactions?period=all`);
         const txns = await acctResp.json();
-        const accounts = await (await fetch("/api/accounts")).json();
+        const accounts = await (await _apiFetch("/api/accounts")).json();
         const acctMeta = accounts.find(a => a.id === accountId) || null;
+        const overrideBalance = _accountBalanceOverrides.get(accountId);
+        if (acctMeta && overrideBalance) acctMeta.account_balance = overrideBalance;
         const label = acctMeta ? acctMeta.display_name.replace(/\s*\(Sandbox\)\s*/i, "").replace(/\s*Sandbox\s*/i, "").trim() : "Account";
         _renderLiveTransactions(txns, label, acctMeta);
       }
@@ -1456,7 +1516,8 @@
 
       async function setAccountBalance(accountId, balanceStr) {
         try {
-          await fetch(`/api/accounts/${accountId}`, {
+          _accountBalanceOverrides.set(accountId, balanceStr);
+          await _apiFetch(`/api/accounts/${accountId}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ account_balance: balanceStr }),
@@ -1470,7 +1531,7 @@
 
       async function setAutoSync(accountId, enabled, intervalHours) {
         try {
-          await fetch(`/api/accounts/${accountId}`, {
+          await _apiFetch(`/api/accounts/${accountId}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -1493,7 +1554,7 @@
           ? "Opening browser to re-authenticate — log in to refresh the session…"
           : "Opening browser — log in to sync your account…";
         try {
-          const resp = await fetch(`/api/accounts/${accountId}/sync`, {
+          const resp = await _apiFetch(`/api/accounts/${accountId}/sync`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({}),
@@ -1520,7 +1581,7 @@
         status.style.display = "block";
         status.textContent = "Opening browser — log in and complete OTP. Transactions will sync automatically when the browser closes.";
         try {
-          const resp = await fetch(`/api/accounts/${accountId}/relogin`, { method: "POST" });
+          const resp = await _apiFetch(`/api/accounts/${accountId}/relogin`, { method: "POST" });
           const data = await resp.json();
           if (!resp.ok) throw new Error(data.error || data.detail || "Re-login failed");
           const newTx = data.count || 0;
@@ -1543,7 +1604,7 @@
         status.style.display = "block";
         status.textContent = "Re-running categorizer on all transactions — this may take a moment…";
         try {
-          const resp = await fetch(`/api/accounts/${accountId}/recategorize`, { method: "POST" });
+          const resp = await _apiFetch(`/api/accounts/${accountId}/recategorize`, { method: "POST" });
           const data = await resp.json();
           if (!resp.ok) throw new Error(data.error || "Recategorize failed");
           status.textContent = `Done — ${data.updated} transaction${data.updated !== 1 ? "s" : ""} categorized`;
@@ -1559,7 +1620,7 @@
       async function deleteAccount(event, accountId) {
         event.stopPropagation();
         if (!confirm("Remove this account and all its stored transactions?")) return;
-        await fetch(`/api/accounts/${accountId}`, { method: "DELETE" });
+        await _apiFetch(`/api/accounts/${accountId}`, { method: "DELETE" });
         if (currentAccountId === accountId) {
           currentAccountId = null;
           showEmptyState();
@@ -1573,13 +1634,33 @@
         document.getElementById("bankPickerOverlay").style.display = "none";
         const status = document.getElementById("connectBankStatus");
         status.style.display = "block";
-        status.textContent = "Connecting Plaid sandbox account — fetching test transactions…";
+        status.textContent = "Loading Chase sandbox data…";
         try {
-          const data = await fetch("/api/plaid/sandbox-connect", {
+          const data = await _apiFetch("/api/plaid/sandbox-connect", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
           }).then(r => r.json());
           if (data.error) throw new Error(data.error);
+
+          // Pre-set a demo balance so runway is visible in the Insights tab
+          const demoBalance = SANDBOX_DEFAULT_BALANCE;
+          const patchResp = await _apiFetch(`/api/accounts/${data.account.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ account_balance: demoBalance }),
+          });
+          if (patchResp.ok) {
+            const patchedAccount = await patchResp.json().catch(() => null);
+            if (patchedAccount && patchedAccount.account_balance) {
+              data.account = patchedAccount;
+            } else {
+              data.account.account_balance = demoBalance;
+            }
+          } else {
+            data.account.account_balance = demoBalance;
+          }
+          _accountBalanceOverrides.set(data.account.id, data.account.account_balance || demoBalance);
+
           status.textContent = `${data.account.display_name} connected — ${data.count} transaction${data.count !== 1 ? "s" : ""} stored.`;
           await loadAccounts();
           _renderLiveTransactions(data.transactions, data.account.display_name, data.account);
@@ -1610,7 +1691,7 @@
 
         try {
           await _loadPlaidScript();
-          const { link_token, error } = await fetch("/api/plaid/create-link-token", {
+          const { link_token, error } = await _apiFetch("/api/plaid/create-link-token", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
           }).then(r => r.json());
@@ -1621,7 +1702,7 @@
             onSuccess: async (public_token, metadata) => {
               status.textContent = "Fetching your transactions — this may take a moment…";
               try {
-                const data = await fetch("/api/plaid/exchange-token", {
+                const data = await _apiFetch("/api/plaid/exchange-token", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
@@ -1662,7 +1743,7 @@
         status.textContent = "Opening browser — log in and complete MFA, then navigate to your Transactions page. Transactions will appear as soon as the browser closes.";
 
         try {
-          const resp = await fetch("/api/accounts", {
+          const resp = await _apiFetch("/api/accounts", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ bank: bankKey, period: "1y" }),
@@ -1683,24 +1764,33 @@
       // ── Sidebar account items ─────────────────────────────────────────
       const ACCT_TYPE_COLORS = { checking: "#22a35a", savings: "#0d9488", credit: "#6366f1" };
 
+      function _acctNeedsReauth(acct) {
+        const s = acct.status || "";
+        return s === "reauth_required" || s === "broken" || s === "otp_required" || !!acct.needs_login;
+      }
+
       function _renderSidebarAccount(acct) {
-        const dotColor = ACCT_TYPE_COLORS[acct.account_type] || "#9ca3af";
-        const hint = acct.account_hint ? ` · ${acct.account_hint}` : "";
-        const typeStr = acct.account_type
+        const needsAuth  = _acctNeedsReauth(acct);
+        const dotColor   = needsAuth ? "#ef4444" : (ACCT_TYPE_COLORS[acct.account_type] || "#9ca3af");
+        const hint       = acct.account_hint ? ` · ${acct.account_hint}` : "";
+        const typeStr    = acct.account_type
           ? acct.account_type.charAt(0).toUpperCase() + acct.account_type.slice(1) + " account"
           : "Account";
-        const cleanName = (acct.display_name || "").replace(/\s*\(Sandbox\)\s*/i, "").replace(/\s*Sandbox\s*/i, "").trim();
-        const isSandbox = (acct.display_name || "").toLowerCase().includes("sandbox");
-        const isActive  = currentAccountId === acct.id;
+        const cleanName  = (acct.display_name || "").replace(/\s*\(Sandbox\)\s*/i, "").replace(/\s*Sandbox\s*/i, "").trim();
+        const isSandbox  = (acct.display_name || "").toLowerCase().includes("sandbox");
+        const isActive   = currentAccountId === acct.id;
+        const statusBadge = needsAuth
+          ? `<span class="sidebar-reauth-badge" title="Session expired — click to re-login">!</span>`
+          : (isSandbox ? '<span class="sidebar-sandbox-badge">sandbox</span>' : "");
         return `
-          <div class="sidebar-account-item${isActive ? " is-active" : ""}" data-id="${acct.id}"
+          <div class="sidebar-account-item${isActive ? " is-active" : ""}${needsAuth ? " needs-reauth" : ""}" data-id="${acct.id}"
                onclick="loadAccountTransactions(${acct.id})">
-            <span class="sidebar-acct-dot" style="background:${dotColor}"></span>
+            <span class="sidebar-acct-dot${needsAuth ? " dot-pulse" : ""}" style="background:${dotColor}"></span>
             <div class="sidebar-acct-info">
               <span class="sidebar-acct-name">${cleanName}</span>
-              <span class="sidebar-acct-meta">${typeStr}${hint}</span>
+              <span class="sidebar-acct-meta">${needsAuth ? "Session expired" : typeStr + hint}</span>
             </div>
-            ${isSandbox ? '<span class="sidebar-sandbox-badge">sandbox</span>' : ""}
+            ${statusBadge}
           </div>`;
       }
 
@@ -1841,8 +1931,8 @@
       <div class="bank-picker-title">Select your bank</div>
       <div class="bank-picker-list">
         <button class="bank-option bank-option-plaid" onclick="connectViaPlaIdSandbox()">
-          <span class="bank-name">🏦 Connect via Plaid (Sandbox)</span>
-          <span class="bank-soon" style="color:#1f5f55;font-weight:600">Test data</span>
+          <span class="bank-name">🏦 Chase</span>
+          <span class="bank-soon" style="color:#1f5f55;font-weight:600">Sample data</span>
         </button>
         <div class="bank-picker-divider">— or use browser scraper —</div>
         <div class="bank-option-row">
