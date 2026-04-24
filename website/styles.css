@@ -357,6 +357,137 @@ main {
   perspective: 1400px;
 }
 
+.hero-preview {
+  position: relative;
+  transform: rotateY(-14deg) rotateX(7deg) rotateZ(-2deg);
+  transform-style: preserve-3d;
+  background: #fff;
+  border-radius: 22px;
+  box-shadow: 0 32px 80px rgba(20,24,28,0.18), 0 2px 8px rgba(20,24,28,0.08);
+  overflow: hidden;
+  width: 100%;
+  max-width: 480px;
+}
+.hero-preview::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 22px;
+  border: 1px solid rgba(255,255,255,0.72);
+  pointer-events: none;
+  z-index: 2;
+}
+.hero-preview::after {
+  content: "INSIGHTS DASHBOARD";
+  position: absolute;
+  top: 18px;
+  right: 22px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #b0b7c3;
+}
+.hero-preview-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 18px 10px;
+}
+.hero-preview-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #e5e7eb;
+}
+.hero-preview-chip {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  background: #f3f4f6;
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+.hero-preview-body {
+  padding: 0 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.hero-preview-card {
+  background: #f9fafb;
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.hero-preview-card-wide {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+}
+.hero-preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.hero-preview-grid .hero-preview-card:first-child { background: #f0fdf4; }
+.hero-preview-grid .hero-preview-card:last-child  { background: #fff1f2; }
+.hero-preview-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #9ca3af;
+}
+.hero-preview-card-wide .hero-preview-label,
+.hero-preview-card-wide .hero-preview-sub { color: rgba(255,255,255,0.75); }
+.hero-preview-number {
+  font-size: 22px;
+  font-weight: 700;
+  color: #111827;
+  line-height: 1.2;
+}
+.hero-preview-card-wide .hero-preview-number { color: #fff; }
+.hero-preview-grid .hero-preview-card:first-child .hero-preview-number { color: #15803d; }
+.hero-preview-grid .hero-preview-card:last-child  .hero-preview-number { color: #be123c; }
+.hero-preview-sub {
+  font-size: 12px;
+  color: #9ca3af;
+}
+.hero-preview-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 80px;
+  padding: 8px 0 0;
+}
+.hero-bar {
+  flex: 1;
+  height: var(--bar-height, 50%);
+  border-radius: 4px 4px 0 0;
+  background: linear-gradient(180deg,#c7d2fe,#e0e7ff);
+}
+.hero-bar:nth-child(2) { background: linear-gradient(180deg,#fbcfe8,#fce7f3); }
+.hero-bar:nth-child(3) { background: linear-gradient(180deg,#fed7aa,#fff7ed); }
+.hero-bar:nth-child(4) { background: linear-gradient(180deg,#a7f3d0,#d1fae5); }
+.hero-bar:nth-child(5) { background: #e5e7eb; }
+.hero-bar-accent {
+  background: linear-gradient(180deg,#6a11cb 0%,#2575fc 100%);
+  box-shadow: 0 8px 18px rgba(58,103,230,0.24);
+}
+.hero-preview-list {
+  display: grid;
+  gap: 10px;
+}
+.hero-preview-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 2px;
+  font-size: 14px;
+}
+
 .stats-bar {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1335,6 +1466,19 @@ body.demo-page::after {
   .stats-bar-value {
     font-size: clamp(34px, 12vw, 44px);
   }
+
+  /* Flatten the 3D dashboard mockup on mobile — it clips on small screens */
+  .hero-preview {
+    transform: none;
+    max-width: 100%;
+    border-radius: 16px;
+  }
+  .hero-visual {
+    display: flex;
+    justify-content: center;
+  }
+  .hero-preview-number { font-size: 18px; }
+  .hero-preview-chart  { height: 60px; }
 
   .pillar,
   .product-card,
