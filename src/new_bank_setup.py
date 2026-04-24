@@ -14,7 +14,41 @@ except ModuleNotFoundError:
     from src.parse_bank import extract_text
 
 
-DATE_ANCHOR_RE = re.compile(r"^(0?[1-9]|1[0-2])/(0?[1-9]|[12]\d|3[01])(?:/\d{2})?\b")
+_MONTH_ABBRS: frozenset = frozenset({
+    "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+    "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+})
+_US_STATE_ABBRS: frozenset = frozenset({
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+    "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+    "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+    "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+    "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC",
+})
+
+
+def _is_noise_token(tok: str) -> bool:
+    """Return True if tok is a date/location token that should not be a merchant marker."""
+    if tok in _MONTH_ABBRS:
+        return True
+    if tok in _US_STATE_ABBRS:
+        return True
+    # Merged city+state with no space, e.g. DIEGOCA, JOLLACA
+    if len(tok) > 4 and tok[-2:] in _US_STATE_ABBRS and tok[:-2].isalpha():
+        return True
+    return False
+
+
+DATE_ANCHOR_RE = re.compile(
+    r"^(?:"
+    r"(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12]\d|3[01])(?:/\d{2})?"  # MM/DD[/YY]
+    r"|"
+    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +\d{1,2}"  # MMM DD
+    r")"
+    r"(?:\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +\d{1,2})?"  # optional post-date
+    r"\b",
+    re.IGNORECASE,
+)
 
 
 def _load_json(path: Path) -> dict:
@@ -41,17 +75,31 @@ def _detect_existing_config(lines: list[str], config_dir: Path) -> Optional[Path
 
 def _guess_bank_name(lines: list[str]) -> str:
     candidates = []
-    patterns = [
+    # Capturing patterns: match group 1 is the bank name.
+    capturing = [
         re.compile(r"\b([A-Z][A-Za-z&.\- ]{2,40}\bBANK(?: OF [A-Z][A-Za-z]+)?)\b"),
         re.compile(r"\b([A-Z][A-Za-z&.\- ]{2,40}\bCREDIT UNION)\b"),
         re.compile(r"\b([A-Z][A-Za-z&.\- ]{2,40}\bFINANCIAL)\b"),
     ]
+    # Non-capturing patterns for known card issuers that don't use BANK/CU/FINANCIAL.
+    # These return the match text directly.
+    named = [
+        (re.compile(r"\bCapital One\b", re.IGNORECASE), "Capital One"),
+        (re.compile(r"\bAmerican Express\b", re.IGNORECASE), "American Express"),
+        (re.compile(r"\bDiscover\b", re.IGNORECASE), "Discover"),
+        (re.compile(r"\bChase\b", re.IGNORECASE), "Chase"),
+        (re.compile(r"\bCiti(?:bank)?\b", re.IGNORECASE), "Citi"),
+        (re.compile(r"\bWells Fargo\b", re.IGNORECASE), "Wells Fargo"),
+    ]
     for line in lines[:120]:
-        for pat in patterns:
+        for pat in capturing:
             for m in pat.finditer(line):
                 val = re.sub(r"\s+", " ", m.group(1)).strip(" -:")
                 if len(val) >= 4:
                     candidates.append(val)
+        for pat, name in named:
+            if pat.search(line):
+                candidates.append(name)
     if candidates:
         return Counter(candidates).most_common(1)[0][0]
     return "Unknown Bank"
@@ -93,12 +141,25 @@ def _config_basename(bank_name: str) -> str:
 def _extract_section_hints(lines: list[str]) -> dict[str, list[str]]:
     joined = "\n".join(lines).lower()
     sections: dict[str, list[str]] = {}
+
     if "deposit" in joined or "addition" in joined:
         sections["deposits"] = ["deposits", "additions"]
+
     if "withdrawal" in joined or "subtraction" in joined:
+        # Debit-style statement (BOA checking, etc.)
         sections["withdrawals"] = ["withdrawals", "subtractions"]
+    elif "trans date" in joined and "transactions" in joined:
+        # Credit card format: charges live in a "Transactions" section, not "Withdrawals".
+        # "trans date" (from the Trans Date / Post Date column header) is the reliable signal.
+        sections["withdrawals"] = ["transactions"]
+        if "payments, credits" in joined or "credits and adjustments" in joined:
+            sections["deposits"] = ["payments, credits and adjustments", "payments and credits"]
+        elif "payments" in joined or "credits" in joined:
+            sections["deposits"] = ["payments", "credits"]
+
     if "service fee" in joined or "fees" in joined:
         sections["fees"] = ["service fees", "fees"]
+
     return sections
 
 
@@ -139,8 +200,37 @@ def _build_bootstrap_config(bank_name: str, lines: list[str]) -> dict:
             "SQ": {"type": "square", "action": "extract_after"},
             "AMZN": {"type": "amazon", "canonical": "Amazon"},
         },
-        "merchant_markers": [],
-        "p2p_rules": [],
+        "merchant_markers": [
+            {"match": "contains", "value": "APPLE.COM/BILL", "action": "canonical", "canonical": "Apple"},
+            {"match": "contains", "value": "AMZN", "action": "canonical", "canonical": "Amazon"},
+            {"match": "contains", "value": "AMAZON", "action": "canonical", "canonical": "Amazon"},
+            {"match": "prefix", "value": "VENMO", "action": "extract_after", "include_marker": True, "max_tokens": 2, "stop_tokens": ["VISA", "DIRECT"]},
+            {"match": "token", "value": "VENMO", "action": "extract_after", "include_marker": True, "max_tokens": 2, "stop_tokens": ["VISA", "DIRECT"]},
+            {"match": "prefix", "value": "TST*", "action": "extract_after"},
+            {"match": "token", "value": "SQ", "action": "extract_after"},
+            {"match": "prefix", "value": "SQ*", "action": "extract_after"},
+            {"match": "prefix", "value": "DD*", "action": "extract_after"},
+        ],
+        "p2p_rules": [
+            {
+                "match_tokens": ["ZELLE"],
+                "prefix": "Zelle payment",
+                "direction_tokens": ["FROM", "TO"],
+                "memo_token": "FOR",
+                "stop_tokens": ["CONF#", "CONF", "ID:", "PPD", "WEB", "VISA", "DIRECT", "CONTINUED"],
+                "max_name_tokens": 6,
+                "min_name_tokens": 1,
+            },
+            {
+                "match_tokens": ["VENMO", "VENMO*"],
+                "prefix": "Venmo payment",
+                "direction_tokens": ["FROM", "TO"],
+                "memo_token": "FOR",
+                "stop_tokens": ["CONF#", "CONF", "ID:", "PPD", "WEB", "VISA", "DIRECT", "CONTINUED"],
+                "max_name_tokens": 6,
+                "min_name_tokens": 1,
+            },
+        ],
         "stop_phrases": [
             "continued on the next page",
             "date description amount",
@@ -200,6 +290,8 @@ def _build_suggestion_report(lines: list[str]) -> dict:
         tokens = re.findall(r"[A-Z][A-Z0-9/*.-]{1,20}", upper)
         for tok in tokens[:8]:
             if tok in {"MOBILE", "PURCHASE", "CHECKCARD", "DATE", "DESCRIPTION", "AMOUNT"}:
+                continue
+            if _is_noise_token(tok):
                 continue
             marker_counter[tok] += 1
 

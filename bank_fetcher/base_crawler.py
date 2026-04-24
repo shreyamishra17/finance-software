@@ -193,6 +193,109 @@ class BankCrawler:
             time.sleep(6)
             self._page.wait_for_load_state("networkidle", timeout=t["page_load"])
 
+        elif action == "wait_for_transactions":
+            # Poll until transaction rows appear on the page — works for SPAs
+            # where clicking an account doesn't trigger a full page navigation.
+            timeout_ms = step.get("timeout", 300000)
+            deadline = time.time() + timeout_ms / 1000
+            poll_interval = 2
+            found_sel = None
+            poll_count = 0
+            bank_key = self._cfg.get("bank_key", "bank")
+            print("  [wait] Waiting for transactions — click your credit card account now…", flush=True)
+            while time.time() < deadline:
+                poll_count += 1
+                try:
+                    self._page.wait_for_load_state("networkidle", timeout=3000)
+                except Exception:
+                    pass
+
+                # Every 10 polls (~20s) print diagnostics
+                if poll_count % 10 == 1:
+                    try:
+                        url = self._page.url
+                        print(f"  [wait] poll#{poll_count} url={url}", flush=True)
+                    except Exception:
+                        pass
+
+                try:
+                    found_sel = self._auto_discover_row_selector(timeout_ms=2000)
+                except Exception as disc_exc:
+                    print(f"  [wait] discovery error: {disc_exc}", flush=True)
+                    found_sel = None
+
+                if found_sel:
+                    # Don't scrape the accounts overview — require a URL change away
+                    # from the login/overview page AND at least a handful of rows.
+                    try:
+                        cur_url = self._page.url
+                        row_count = len(self._page.query_selector_all(found_sel))
+                    except Exception:
+                        cur_url, row_count = "", 0
+
+                    # Selectors that explicitly name "transaction" or "activity" are safe
+                    # with just 1+ row; generic selectors need a higher bar.
+                    is_txn_sel = any(k in found_sel.lower() for k in ("transaction", "activity", "purchase"))
+                    min_rows = 1 if is_txn_sel else step.get("min_rows", 3)
+                    on_login = any(k in cur_url for k in ("auth/signin", "auth/login", "login", "signin"))
+                    print(f"  [wait] found sel={found_sel!r} rows={row_count} min={min_rows} url={cur_url}", flush=True)
+
+                    if row_count >= min_rows and not on_login:
+                        self._cfg.setdefault("transactions_config", {})["row_selector"] = found_sel
+                        self._cfg["auto_discover_rows"] = False
+                        print(f"  [wait] Confirmed {row_count} rows — starting scrape!", flush=True)
+                        # Save a debug snapshot so we can inspect the see-more button etc.
+                        try:
+                            debug_dir = Path(__file__).resolve().parent.parent / "data" / "debug"
+                            debug_dir.mkdir(parents=True, exist_ok=True)
+                            snap = debug_dir / f"{bank_key}_confirmed.html"
+                            snap.write_text(self._page.content(), encoding="utf-8")
+                            print(f"  [wait] Page snapshot → {snap}", flush=True)
+                        except Exception:
+                            pass
+                        self._update_banner("FIFO: Transactions found — scraping now…")
+                        break
+                    else:
+                        print(f"  [wait] Skipping — on_login={on_login} rows={row_count} < min={min_rows}", flush=True)
+
+                # Scroll down every 3 polls to trigger lazy-loaded transactions
+                if poll_count % 3 == 0:
+                    try:
+                        cur_url = self._page.url
+                        if not any(k in cur_url for k in ("auth/signin", "auth/login", "login", "signin")):
+                            self._page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    except Exception:
+                        pass
+
+                time.sleep(poll_interval)
+
+            if not found_sel:
+                # Save screenshot + HTML for debugging
+                debug_dir = Path(__file__).resolve().parent.parent / "data" / "debug"
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                shot_path = debug_dir / f"{bank_key}_timeout.png"
+                html_path = debug_dir / f"{bank_key}_timeout.html"
+                try:
+                    self._page.screenshot(path=str(shot_path), full_page=True)
+                    print(f"  [wait] Screenshot: {shot_path}", flush=True)
+                except Exception as e:
+                    print(f"  [wait] Screenshot failed: {e}", flush=True)
+                try:
+                    html_path.write_text(self._page.content(), encoding="utf-8")
+                    print(f"  [wait] HTML: {html_path}", flush=True)
+                except Exception as e:
+                    print(f"  [wait] HTML save failed: {e}", flush=True)
+                try:
+                    url = self._page.url
+                except Exception:
+                    url = "unknown"
+                raise RuntimeError(
+                    f"Timed out waiting for transaction rows.\n"
+                    f"URL when timeout occurred: {url}\n"
+                    f"Make sure you clicked on your specific credit card account.\n"
+                    f"Debug files saved to {debug_dir}"
+                )
+
         elif action == "sleep":
             time.sleep(step.get("seconds", 2))
 
@@ -253,6 +356,9 @@ class BankCrawler:
         and skips logout so the session stays valid.
         """
         transactions_url: str | None = None
+        bank_key = self._cfg.get("bank_key", "unknown")
+        first_url = (self._cfg.get("interactive_login_steps") or [{}])[0].get("url", "N/A")
+        print(f"[run_scrape] bank_key={bank_key!r}  first_url={first_url!r}", flush=True)
         try:
             self._launch_browser()
             interactive_steps = self._cfg.get("interactive_login_steps")
@@ -264,17 +370,39 @@ class BankCrawler:
             pages = self._context.pages
             if len(pages) > 1:
                 self._page = pages[-1]
-            try:
-                self._run_steps(self._cfg.get("transactions_steps", []))
-            except PWTimeoutError:
-                bank = self._cfg.get("bank_display_name", self._cfg.get("bank_key", "bank"))
-                row_sel = self._cfg.get("transactions_config", {}).get("row_selector", "")
-                raise RuntimeError(
-                    f"{bank}: could not find transaction rows on this page.\n"
-                    f"Selector tried: {row_sel}\n"
-                    f"Make sure you navigated to the full transactions list (not just the account overview). "
-                    f"Run the DOM discovery script in the browser console to find the correct selector."
-                ) from None
+
+            txn_cfg = self._cfg.get("transactions_config", {})
+            configured_sel = txn_cfg.get("row_selector", "")
+
+            if not configured_sel:
+                # No selector yet — wait_for_transactions step should have set it.
+                # If it didn't (bank config doesn't use that step), try discovery now.
+                discovered = self._auto_discover_row_selector()
+                if discovered:
+                    self._cfg.setdefault("transactions_config", {})["row_selector"] = discovered
+                else:
+                    bank = self._cfg.get("bank_display_name", self._cfg.get("bank_key", "bank"))
+                    raise RuntimeError(
+                        f"{bank}: could not find any transaction rows on this page.\n"
+                        f"Debug HTML saved to /tmp/{self._cfg.get('bank_key','bank')}_debug.html\n"
+                        f"Make sure you clicked on a specific account and the transactions list is visible."
+                    )
+            else:
+                # Configured selector exists — run transactions_steps as normal
+                try:
+                    self._run_steps(self._cfg.get("transactions_steps", []))
+                except PWTimeoutError:
+                    print(f"  Configured selector timed out, trying auto-discovery…")
+                    discovered = self._auto_discover_row_selector()
+                    if discovered:
+                        self._cfg["transactions_config"]["row_selector"] = discovered
+                    else:
+                        bank = self._cfg.get("bank_display_name", self._cfg.get("bank_key", "bank"))
+                        raise RuntimeError(
+                            f"{bank}: could not find transaction rows on this page.\n"
+                            f"Debug HTML saved to /tmp/{self._cfg.get('bank_key','bank')}_debug.html\n"
+                            f"Make sure you navigated to the full transactions list."
+                        ) from None
 
             # Capture URL before scraping — needed for headless replay later
             transactions_url = self._page.url
@@ -282,8 +410,14 @@ class BankCrawler:
                 session_save_path.parent.mkdir(parents=True, exist_ok=True)
                 self._context.storage_state(path=str(session_save_path))
 
+            # Grab account balance from the page header (e.g. Capital One hero widget)
+            page_balance = self._read_page_balance()
+
             self._update_banner("FIFO: Gathering your transactions — please keep this window open…")
             records = self._scrape_transactions(since_date)
+            # Use the page-level balance if the row-level balance wasn't captured
+            if page_balance and not self._ending_balance:
+                self._ending_balance = page_balance
             self._update_banner(
                 f"✓ Done! {len(records)} transaction{'s' if len(records) != 1 else ''} saved."
                 " Closing window…"
@@ -362,12 +496,43 @@ class BankCrawler:
                 new_rows = rows[len(records):]
 
                 for row in new_rows:
-                    date_text = _text(row, col_cfg.get("date", "")).strip()
+                    date_text = " ".join(_text(row, col_cfg.get("date", "")).split())
                     description = _text(row, col_cfg.get("description", ""))
                     amount_raw = _text(row, col_cfg.get("amount", ""))
+                    # Strip any trailing junk after the dollar amount (e.g. Capital One
+                    # appends "Shreya M. ...2365" after "$7.19" in the amount cell)
+                    if amount_raw:
+                        m = _AMOUNT_RE.search(amount_raw)
+                        if m:
+                            amount_raw = m.group(0)
+                    # Capital One appends the category as the last word of the description
+                    # e.g. "Whole Foods Market Grocery" → strip trailing known category words
+                    if description:
+                        _C1_CATS = {
+                            "grocery","groceries","dining","healthcare","merchandise",
+                            "automotive","entertainment","travel","gas","services",
+                            "shopping","education","utilities","other","restaurant",
+                            "transportation","airfare","hotel","pharmacy","personal",
+                        }
+                        parts = description.split()
+                        if parts and parts[-1].lower() in _C1_CATS:
+                            description = " ".join(parts[:-1]).strip()
+
+                    # If CSS selectors returned nothing useful, fall back to regex on full text
+                    if not (date_text and description and amount_raw):
+                        full_text = (row.inner_text() or "").strip()
+                        if full_text:
+                            rx_date, rx_amount, rx_desc = _extract_from_row_text(full_text)
+                            date_text = date_text or rx_date
+                            amount_raw = amount_raw or rx_amount
+                            description = description or rx_desc
 
                     if not date_text and not description and not amount_raw:
                         continue  # skip empty/header rows
+                    # Skip rows that look like page-level accessibility blobs
+                    # (Angular CDK sometimes injects aria-live rows with full page text)
+                    if description and len(description) > 150:
+                        continue
 
                     row_date = _parse_date(date_text)
 
@@ -452,6 +617,180 @@ class BankCrawler:
         return records
 
     # ------------------------------------------------------------------ #
+    # DOM auto-discovery
+    # ------------------------------------------------------------------ #
+
+    def _read_page_balance(self) -> str | None:
+        """
+        Try to read the current account balance from the page header (not transaction rows).
+        Returns a formatted string like '$3,872.43' or None if not found.
+        Used for credit card pages (Capital One) where the balance lives in the
+        account hero section.
+        """
+        selectors = [
+            # Capital One: the hero widget has two .cdk-visually-hidden spans —
+            # the first is the balance, the second is available credit.
+            # Target it specifically within the account-hero section.
+            "c1-ease-account-details-top-middle-grid-cell .cdk-visually-hidden",
+            "c1-ease-account-hero .cdk-visually-hidden",
+            # Generic fallbacks
+            "[class*='current-balance'] [class*='amount']",
+            "[class*='account-balance'] [class*='amount']",
+            "[class*='balance-amount']",
+        ]
+        for sel in selectors:
+            try:
+                el = self._page.query_selector(sel)  # first match only
+                if el:
+                    txt = (el.inner_text() or "").strip()
+                    m = _AMOUNT_RE.search(txt)
+                    if m:
+                        raw = m.group(0)
+                        try:
+                            val = float(raw.replace("$", "").replace(",", ""))
+                            if 0 < val < 1_000_000:
+                                return raw
+                        except ValueError:
+                            pass
+            except Exception:
+                pass
+        return None
+
+    def _auto_discover_row_selector(self, timeout_ms: int = 12000) -> str | None:
+        """
+        Run JavaScript on the current page to find which CSS selector returns
+        the most transaction-like rows. Tries known data-testid patterns first,
+        then structural heuristics (li/div containing a date and dollar amount).
+
+        Returns the winning selector string, or None if nothing found.
+        Saves a debug HTML snapshot to /tmp/<bank_key>_debug.html on failure.
+        """
+        bank_key = self._cfg.get("bank_key", "bank")
+
+        # Wait briefly for React to render
+        try:
+            self._page.wait_for_load_state("networkidle", timeout=timeout_ms)
+        except Exception:
+            pass
+
+        result: dict = self._page.evaluate("""
+        () => {
+            const dollarRe = /\\$[\\d,]+\\.\\d{2}/;
+            const dateRe = /\\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\\.?\\s+\\d{1,2}|\\d{1,2}\\/\\d{1,2}/i;
+
+            // Strategy 1: known data-testid patterns and bank-specific selectors
+            const knownSels = [
+                // Capital One — c1-ease-row with table__row class (confirmed from debug HTML)
+                "c1-ease-row.c1-ease-table__row",
+                "[data-testid='purchase-list-item']",
+                "[data-testid='transaction-list-item']",
+                "[data-testid='txn-row']",
+                "[data-testid='transaction-row']",
+                "[data-testid='activity-row']",
+                "li[class*='TransactionRow']",
+                "tr[class*='transaction']",
+                "div[class*='transaction-item']:not([class*='transaction-item__'])",
+                "li[class*='transaction-item']:not([class*='transaction-item__'])",
+            ];
+            for (const sel of knownSels) {
+                try {
+                    const els = document.querySelectorAll(sel);
+                    if (els.length >= 2) return { selector: sel, count: els.length, sample: els[0]?.outerHTML?.substring(0, 400) || "" };
+                } catch(e) {}
+            }
+
+            // Strategy 2: find the TOPMOST element containing both a date and a dollar amount.
+            // We normalise textContent (strip whitespace) before length-checking so Angular's
+            // hidden aria-label / _ngcontent text doesn't falsely inflate the length.
+            function normText(el) {
+                return (el.textContent || "").replace(/\\s+/g, " ").trim();
+            }
+
+            const allEls = Array.from(document.querySelectorAll("li, tr, div"));
+            const candidates = allEls.filter(el => {
+                const txt = normText(el);
+                return dollarRe.test(txt) && dateRe.test(txt) && txt.length < 2000 && txt.length > 10;
+            });
+
+            if (!candidates.length) return { selector: null, count: 0, sample: "", debug: "no candidates" };
+
+            // For each candidate, walk UP to find the topmost ancestor that also qualifies
+            function topmostMatch(el) {
+                let top = el;
+                let p = el.parentElement;
+                while (p) {
+                    const pt = normText(p);
+                    if (pt.length > 2000) break;  // too large — definitely a container
+                    // Stop if the parent contains multiple distinct transaction children
+                    const pCount = Array.from(p.querySelectorAll(":scope > *")).filter(c => {
+                        const ct = normText(c);
+                        return dollarRe.test(ct) && dateRe.test(ct);
+                    }).length;
+                    if (pCount > 1) break;  // parent is a list container, not a single row
+                    if (dollarRe.test(pt) && dateRe.test(pt)) top = p;
+                    p = p.parentElement;
+                }
+                return top;
+            }
+
+            const topRows = candidates.map(topmostMatch);
+
+            // Deduplicate (same element from multiple sub-element candidates)
+            const seen = new WeakSet();
+            const unique = topRows.filter(el => { if (seen.has(el)) return false; seen.add(el); return true; });
+
+            if (!unique.length) return { selector: null, count: 0, sample: "", debug: "no unique rows after dedup" };
+
+            // Build selector from the most common tag+class pattern among unique rows.
+            // Use the BLOCK part of a BEM class (before __) and append :not([class*='__'])
+            // so the selector never matches BEM sub-elements like transaction-item__amount.
+            const freq = {};
+            for (const el of unique) {
+                const tag = el.tagName.toLowerCase();
+                const rawCls = (el.className && typeof el.className === "string")
+                    ? el.className.trim().split(/\\s+/).find(c => c && !c.startsWith("ng-") && c.length > 3)
+                    : null;
+                const blockCls = rawCls ? rawCls.split("__")[0] : null;
+                const testid = el.getAttribute("data-testid");
+                // Exclude BEM sub-elements in the selector itself
+                const key = testid ? `[data-testid='${testid}']`
+                           : blockCls ? `${tag}[class*='${blockCls}']:not([class*='${blockCls}__'])`
+                           : tag;
+                freq[key] = (freq[key] || 0) + 1;
+            }
+            const best = Object.entries(freq).sort((a,b) => b[1]-a[1])[0][0];
+
+            // Verify the best selector actually matches the expected number of rows
+            let finalCount = 0;
+            try { finalCount = document.querySelectorAll(best).length; } catch(e) {}
+
+            const sample = document.querySelector(best)?.outerHTML?.substring(0, 400) || "";
+            return { selector: best, count: finalCount, unique: unique.length, sample, debug: "" };
+        }
+        """)
+
+        sel = result.get("selector") if result else None
+        count = result.get("count", 0) if result else 0
+
+        if sel and count >= 1:
+            print(f"  [discover] Found {count} rows with selector: {sel!r}")
+            print(f"  [discover] Sample: {(result.get('sample') or '')[:200]}")
+            return sel
+
+        # Nothing found — dump HTML for debugging
+        try:
+            debug_dir = Path(__file__).resolve().parent.parent / "data" / "debug"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            html = self._page.content()
+            debug_path = debug_dir / f"{bank_key}_debug.html"
+            debug_path.write_text(html, encoding="utf-8")
+            print(f"  [discover] No rows found. URL={self._page.url} HTML→{debug_path}", flush=True)
+        except Exception as e:
+            print(f"  [discover] Could not save debug HTML: {e}", flush=True)
+
+        return None
+
+    # ------------------------------------------------------------------ #
     # PDF download loop
     # ------------------------------------------------------------------ #
 
@@ -521,8 +860,11 @@ class BankCrawler:
         use_headless = headless if headless is not None else self._cfg.get("headless", False)
         self._pw = sync_playwright().start()
 
-        # Always use bundled Chromium — reliable across both headless and interactive modes.
-        engine, channel = "chromium", None
+        # Default to bundled Chromium. Some banks (e.g. Discover) fingerprint the browser
+        # binary itself and reject "Chrome for Testing". Setting browser_channel="chrome"
+        # in the bank config makes Playwright launch the real installed Chrome instead.
+        engine = self._cfg.get("browser_engine", "chromium")
+        channel = self._cfg.get("browser_channel", None)
 
         ctx_kwargs: dict = dict(
             accept_downloads=True,
@@ -565,8 +907,10 @@ class BankCrawler:
                     args=["--disable-extensions"],
                 )
 
-        # WebKit uses Safari's user agent automatically; set one for Chromium/Firefox.
-        if engine != "webkit":
+        # WebKit uses Safari's UA automatically; real Chrome channel uses its own UA.
+        # Only override for bundled Chromium (channel=None), which otherwise exposes
+        # "Chrome for Testing" in its user agent string.
+        if engine != "webkit" and channel is None:
             ctx_kwargs["user_agent"] = (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -642,13 +986,50 @@ def _text(element, selector: str) -> str:
     return (child.inner_text() or "").strip()
 
 
+_DATE_RE = re.compile(
+    r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:,?\s+\d{4})?'
+    r'|\d{1,2}/\d{1,2}(?:/\d{2,4})?'
+    r'|\d{4}-\d{2}-\d{2}',
+    re.IGNORECASE,
+)
+_AMOUNT_RE = re.compile(r'[-+]?\$[\d,]+\.\d{2}')
+
+
+def _extract_from_row_text(full_text: str) -> tuple[str, str, str]:
+    """
+    Extract (date, amount, description) from a row's full text content using regex.
+    Used as a fallback when CSS column selectors are unavailable or wrong.
+    """
+    text = " ".join(full_text.split())  # normalise whitespace / newlines
+    date_m = _DATE_RE.search(text)
+    amount_m = _AMOUNT_RE.search(text)
+    date = date_m.group(0).strip() if date_m else ""
+    amount = amount_m.group(0).strip() if amount_m else ""
+    # Description = text minus the date and amount tokens
+    desc = text
+    if date:
+        desc = desc.replace(date_m.group(0), " ", 1)
+    if amount:
+        desc = desc.replace(amount_m.group(0), " ", 1)
+    desc = re.sub(r'\s{2,}', ' ', desc).strip()
+    return date, amount, desc
+
+
 def _parse_date(text: str) -> datetime | None:
     """Parse a transaction date string. Returns None for unparseable text (e.g. 'Processing')."""
-    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y"):
+    text = " ".join(text.split())  # normalise newlines
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y", "%b %d %Y", "%b %d, %Y"):
         try:
             return datetime.strptime(text.strip(), fmt)
         except ValueError:
             continue
+    # Try the month-name pattern without year (assume current year)
+    m = re.match(r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})$', text.strip(), re.I)
+    if m:
+        try:
+            return datetime.strptime(f"{m.group(1)} {m.group(2)} {datetime.now().year}", "%b %d %Y")
+        except ValueError:
+            pass
     return None  # "Processing" / pending rows → treat as current, always include
 
 

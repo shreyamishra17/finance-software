@@ -49,23 +49,36 @@ def _count_recent_auth_failures(account_id: int) -> int:
 
 def refresh_all() -> None:
     """
-    Main entry point called by the scheduler.
-    Loops through every account and refreshes it.
+    Main entry point called by the scheduler (runs every 30 min).
+    Only syncs accounts where auto_sync is enabled AND the per-account
+    sync_interval_hours has elapsed since last_synced_at.
     """
     accounts = get_accounts()
     if not accounts:
         return
 
-    print(f"[refresh] Starting background sync for {len(accounts)} account(s)…")
+    now = datetime.now()
     for account in accounts:
         account_id = account["id"]
         status = account.get("status", "connected")
 
-        # Skip accounts that need user action — can't auto-refresh
+        # Skip accounts that need user action
         if status in ("pending", "otp_required", "reauth_required", "broken"):
-            print(f"[refresh] Skipping account {account_id} ({account['display_name']}) — status: {status}")
             continue
 
+        # Skip if auto_sync not enabled
+        if not account.get("auto_sync"):
+            continue
+
+        # Check if per-account interval has elapsed
+        interval_hours = int(account.get("sync_interval_hours") or 8)
+        last_synced = account.get("last_synced_at")
+        if last_synced:
+            elapsed = (now - datetime.fromisoformat(last_synced)).total_seconds() / 3600
+            if elapsed < interval_hours:
+                continue  # not due yet
+
+        print(f"[refresh] Due: {account['display_name']} (every {interval_hours}h, last synced {last_synced})")
         try:
             _refresh_account(account)
         except Exception as exc:

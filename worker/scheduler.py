@@ -17,7 +17,9 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 _scheduler: BackgroundScheduler | None = None
 
-_INTERVAL_HOURS = int(os.environ.get("REFRESH_INTERVAL_HOURS", "8"))
+# How often to CHECK which accounts are due (not how often to sync each account)
+# Per-account sync frequency is controlled by sync_interval_hours in the DB
+_CHECK_INTERVAL_MINUTES = int(os.environ.get("REFRESH_CHECK_MINUTES", "30"))
 
 
 def _run_refresh() -> None:
@@ -46,13 +48,13 @@ def start_scheduler() -> None:
     )
     _scheduler.add_job(
         _run_refresh,
-        trigger=IntervalTrigger(hours=_INTERVAL_HOURS),
+        trigger=IntervalTrigger(minutes=_CHECK_INTERVAL_MINUTES),
         id="refresh_all",
-        name="Refresh all linked accounts",
+        name="Check and refresh due accounts",
         replace_existing=True,
     )
     _scheduler.start()
-    print(f"[scheduler] Started — refresh every {_INTERVAL_HOURS}h.")
+    print(f"[scheduler] Started — checking due accounts every {_CHECK_INTERVAL_MINUTES}min.")
 
 
 def stop_scheduler() -> None:

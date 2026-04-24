@@ -25,9 +25,9 @@ for p in (str(ROOT / "src"), str(ROOT)):
 from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from core.db import init_db
@@ -40,6 +40,15 @@ WEB_ROOT = ROOT / "website"
 async def lifespan(app: FastAPI):
     # ── Startup ───────────────────────────────────────────────────────
     init_db()
+    # Warm the encryption key cache while the main thread has Keychain access.
+    # Background scheduler threads get -25320 (errSecInteractionNotAllowed) if
+    # they try to read the Keychain directly; caching here avoids that.
+    try:
+        from core.encryption import _get_or_create_key
+        _get_or_create_key()
+        print("[startup] Encryption key loaded into memory cache.")
+    except Exception as exc:
+        print(f"WARNING: Could not pre-load encryption key: {exc}")
     try:
         from worker.scheduler import start_scheduler
         start_scheduler()
@@ -133,6 +142,15 @@ async def parse_pdf(
         raise HTTPException(status_code=500, detail=str(exc))
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+@app.middleware("http")
+async def no_cache_html(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path.endswith(".html") or path == "/":
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.get("/")

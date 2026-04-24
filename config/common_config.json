@@ -56,14 +56,12 @@
     "WHOLE FOODS LAJ 1": "Whole Foods",
     "DRIVE INS": "Drive Insurance",
     "DRIVE INS CO": "Drive Insurance",
-    "MIRAMAR CASH": "Miramar Cash and Carry",
     "TRADER JOE": "Trader Joe's",
     "TRADER JOES": "Trader Joe's"
   },
   "contains_aliases": {
     "WHOLE FOODS": "Whole Foods",
     "DRIVE INS": "Drive Insurance",
-    "MIRAMAR CASH": "Miramar Cash and Carry",
     "DOORDASH": "DoorDash",
     "LYFT": "Lyft",
     "NETFLIX": "Netflix",

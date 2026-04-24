@@ -48,6 +48,10 @@
     {
       "category": "Finance",
       "keywords": [
+        "DISCOVER E-PAYMENT",
+        "ACH HOLD DISCOVER",
+        "ACH HOLD DISCOVER E-PAYMENT",
+        "DISCOVER",
         "ZELLE",
         "VENMO",
         "PAYPAL",
@@ -75,17 +79,22 @@
     {
       "category": "Housing",
       "keywords": [
+        "GARDEN HOME",
         "RENT",
         "RENTERS",
         "LEASE",
         "CLICKPAY",
         "PROPRTYPAY"
       ],
-      "confidence": 0.9
+      "confidence": 1.0
     },
     {
       "category": "Utilities & Bills",
       "keywords": [
+        "GARDENHOMESMANAG",
+        "ACH HOLD GARDENHOMESMANAG",
+        "SD GAS ELEC",
+        "SD GAS",
         "ELECTRIC",
         "GAS COMPANY",
         "WATER",

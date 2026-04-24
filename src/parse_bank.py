@@ -15,7 +15,16 @@ from typing import Iterable, List, Optional
 
 
 DATE_ANCHOR_RE = re.compile(
-    r"^(?P<date>(0?[1-9]|1[0-2])/(0?[1-9]|[12]\d|3[01])(?:/\d{2})?)\b"
+    r"^(?P<date>"
+    r"(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12]\d|3[01])(?:/\d{2})?"  # MM/DD[/YY]  (BOA, Chase, …)
+    r"|"
+    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +\d{1,2}"  # MMM DD  (Capital One, Amex, …)
+    r")"
+    # Optionally consume a second MMM-DD post-date that Capital One prints before the description.
+    # anchor.group("date") still captures only the transaction date; anchor.end() skips past both.
+    r"(?:\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +\d{1,2})?"
+    r"\b",
+    re.IGNORECASE,
 )
 AMOUNT_RE = re.compile(r"(?P<amount>\(?-?\$?\d[\d,]*\.\d{2}\)?)")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -897,11 +906,12 @@ def _strip_location_tail(tokens: List[str]) -> List[str]:
 
 _CITY_NAMES_CACHE: Optional[set] = None
 _CITY_NAMES_CACHE_LOADED: bool = False
+_CITY_NAME_SUFFIXES_CACHE: Optional[set] = None  # last words of multi-word city names
 _CITY_NAMES_LOCK = threading.Lock()
 
 
 def _load_city_names() -> set:
-    global _CITY_NAMES_CACHE, _CITY_NAMES_CACHE_LOADED
+    global _CITY_NAMES_CACHE, _CITY_NAMES_CACHE_LOADED, _CITY_NAME_SUFFIXES_CACHE
     with _CITY_NAMES_LOCK:
         if _CITY_NAMES_CACHE_LOADED:
             return _CITY_NAMES_CACHE or set()
@@ -909,10 +919,58 @@ def _load_city_names() -> set:
         try:
             import geonamescache  # type: ignore
             gc = geonamescache.GeonamesCache()
-            _CITY_NAMES_CACHE = {c["name"].lower() for c in gc.get_cities().values()}
+            names = {c["name"].lower() for c in gc.get_cities().values()}
+            _CITY_NAMES_CACHE = names
+            # Precompute last words of all city names (min 4 chars).
+            # Used for compact CITYSTATE detection: "DiegoCA" → prefix "Diego" →
+            # last word of "San Diego" → city suffix → strip.
+            _CITY_NAME_SUFFIXES_CACHE = {
+                name.rsplit(None, 1)[-1]
+                for name in names
+                if len(name.rsplit(None, 1)[-1]) >= 4
+            }
         except Exception:
             _CITY_NAMES_CACHE = set()
+            _CITY_NAME_SUFFIXES_CACHE = set()
         return _CITY_NAMES_CACHE or set()
+
+
+def _load_city_name_suffixes() -> set:
+    if _CITY_NAME_SUFFIXES_CACHE is None:
+        _load_city_names()  # populates both caches
+    return _CITY_NAME_SUFFIXES_CACHE or set()
+
+
+# City-start words that Capital One (and some issuers) paste directly onto the end of a
+# merchant name with no space separator.  Both ALL-CAPS and Title-case variants are listed.
+# 3+-char prefixes use a looser lookbehind (any non-space, e.g. "." or digit) because the
+# false-positive risk is low for long tokens like "SAN", "NEW", "LOS".
+# 2-char "La/LA" uses a strict alpha lookbehind to avoid false-stripping words like "FORMULA".
+_MERGED_CITY_PREFIX_RE = re.compile(
+    r"(?<=[^\s])(SAN|LOS|LAS|NEW|EL|FORT|MOUNT|NORTH|SOUTH|EAST|WEST"
+    r"|San|Los|Las|New|El|Fort|Mount|North|South|East|West)$"
+    r"|(?<=[A-Za-z])(LA|La)$"
+)
+
+
+def _strip_merged_city_prefix(tokens: List[str]) -> List[str]:
+    """Strip a city-start word that was merged (no space) onto the end of the last token.
+
+    Capital One's PDF layout has no gap between merchant name and city name, so pdfplumber
+    concatenates them: "CESARINASan DiegoCA" → last token before "DiegoCA" is "CESARINASan".
+    After _strip_city_state_tail removes "DiegoCA", "San" is still attached to "CESARINA".
+
+    Only fires when the result prefix is ≥ 2 chars to avoid false truncation.
+    """
+    if not tokens:
+        return tokens
+    last = tokens[-1]
+    m = _MERGED_CITY_PREFIX_RE.search(last)
+    if m:
+        prefix = last[: m.start()]
+        if len(prefix) >= 2:
+            return tokens[:-1] + [prefix]
+    return tokens
 
 
 def _strip_city_state_tail(tokens: List[str]) -> List[str]:
@@ -939,16 +997,36 @@ def _strip_city_state_tail(tokens: List[str]) -> List[str]:
         changed = False
         last = result[-1]
 
-        # Pattern 1: compact CITYSTATE token (e.g. "SANDIEGOCA", "MANHATTANNY").
-        # Require the token to be all-uppercase — person names like "Jenny" (ends with "ny")
-        # would otherwise be misidentified as compact CITYSTATE tokens.
-        if last.isupper() and len(last) > 3 and last[-2:] in state_abbrs:
+        # Pattern 1: compact CITYSTATE token (e.g. "DiegoCA", "JOLLACA", "MANHATTANNY").
+        # Capital One and some other issuers print city+state with no spaces, so the last
+        # token of a transaction may look like "San DiegoCA" split into ["San", "DiegoCA"].
+        # Guard: the prefix (city part) must be the last word of a known city name (min 4 chars).
+        # This accepts "Diego" (end of "San Diego"), "Jolla" (end of "La Jolla"), "Manhattan",
+        # while rejecting person names like "Jenny" whose prefix "Jenn" is not a city suffix.
+        if len(last) > 3 and last[-2:].upper() in state_abbrs:
             prefix = last[:-2]
-            prefix_norm = re.sub(r"[^a-z0-9]", "", prefix.lower())
-            if len(prefix) >= 3 and (
-                prefix.lower() in city_names or prefix_norm in city_compact or prefix_norm in known_compact
-            ):
-                result.pop()
+            city_suffixes = _load_city_name_suffixes()
+            prefix_lower = prefix.lower()
+            # Determine how many chars of the prefix are the city name.
+            # This lets us keep the merchant part when the city is embedded at the tail:
+            # "WAVERLYCardiffCA" → prefix="WAVERLYCardiff", city_len=7 → keep "WAVERLY".
+            city_len = 0
+            if prefix_lower in city_names or prefix_lower in city_suffixes:
+                city_len = len(prefix)
+            elif re.sub(r"[^a-z0-9]", "", prefix_lower) in known_compact:
+                city_len = len(prefix)
+            else:
+                # Find the longest city-suffix word (≥5 chars) at the END of the prefix.
+                for suf in sorted(city_suffixes, key=len, reverse=True):
+                    if len(suf) >= 5 and prefix_lower.endswith(suf) and len(prefix_lower) > len(suf):
+                        city_len = len(suf)
+                        break
+            if city_len > 0 and len(prefix) >= 4:
+                merchant_part = prefix[: len(prefix) - city_len].rstrip(" .,;:-")
+                if merchant_part:
+                    result[-1] = merchant_part  # replace token, keep merchant prefix
+                else:
+                    result.pop()                # whole token was city
                 changed = True
                 continue
 
@@ -1125,6 +1203,11 @@ def _fuzzy_normalize_merchant(merchant: str) -> str:
             canonical_words = {w.lower() for w in canonical.split()}
             if not all(w in canonical_words for w in input_sig):
                 return merchant
+        # Guard: single-word input must appear as a substring of the canonical (case-insensitive).
+        # Prevents "Conservice" fuzzy-matching "Con Edison" — neither word contains the other.
+        if len(merchant.split()) == 1 and len(merchant) >= 5:
+            if merchant.lower() not in canonical.lower() and canonical.lower() not in merchant.lower():
+                return merchant
         return canonical
     except Exception:
         pass
@@ -1146,7 +1229,9 @@ def _extract_structured_merchant(raw: str) -> Optional[str]:
         return None
 
     escaped = [re.escape(label) for label in sorted(labels, key=len, reverse=True)]
-    label_re = re.compile(rf"\b(?P<label>{'|'.join(escaped)})\s*:?", re.IGNORECASE)
+    # Require a word boundary on BOTH sides of the label so embedded strings like
+    # "DESTINY" are not falsely parsed as "DES" (metadata label) + "TINY" (value).
+    label_re = re.compile(rf"\b(?P<label>{'|'.join(escaped)})\b\s*:?", re.IGNORECASE)
     matches = list(label_re.finditer(raw))
     if not matches:
         return None
@@ -1221,6 +1306,7 @@ def _refine_merchant(name: str, fallback: str) -> tuple[str, Optional[str]]:
         tokens = _strip_state_zip_anchor(tokens)
         tokens = _strip_location_tail(tokens)
         tokens = _strip_city_state_tail(tokens)
+        tokens = _strip_merged_city_prefix(tokens)
         tokens = _strip_tail_junk_tokens(tokens)
         if not is_p2p_channel:
             tokens = _strip_low_quality_tail_tokens(tokens)
@@ -1447,6 +1533,19 @@ def _extract_city_state_zip(raw_description: str) -> tuple[str, str, str]:
             # in metadata-heavy rows like "... INDN: FIRST LAST CO".
             if "INDN:" in original_text.upper() and not city_is_known_single and not city_is_known_phrase:
                 return "NA", "NA", "NA"
+            # If the city candidate is multi-word and not a known phrase, try to find
+            # the actual city by checking 1-3 word suffixes against geonamescache.
+            # e.g. "GARAM MIRCHI FREMONT" → last word "Fremont" is in geonamescache → city = "Fremont"
+            if len(city_tokens) >= 2 and not city_is_known_phrase:
+                city_names = _load_city_names()
+                for n in range(min(3, len(city_tokens)), 0, -1):
+                    suffix = " ".join(city_tokens[-n:])
+                    if suffix.lower() in city_names:
+                        city = suffix
+                        break
+                else:
+                    # No suffix matched a known city — drop the merchant garbage, keep state/zip
+                    city = "NA"
             return (city if city else "NA"), state, zip_code
 
     # Fallback: known location phrase at end (no state/zip present).
@@ -2852,8 +2951,12 @@ def _normalize_txn_type_for_statement(
 def _build_normalized_transactions(transactions: List[Transaction], statement_type: str) -> List[dict[str, Optional[str]]]:
     out: List[dict[str, Optional[str]]] = []
     for txn in transactions:
+        if str(txn.amount).upper() == "UNPARSED":
+            continue
         merchant = merchant_clean(txn.description)
         merchant = _apply_venmo_direction(merchant, txn.description, txn.txn_type)
+        city_for_strip, _, _ = _extract_city_state_zip(txn.description)
+        merchant = _strip_city_overlap_from_merchant(merchant, city_for_strip)
         normalized_txn_type = _normalize_txn_type_for_statement(
             txn.txn_type, txn.amount, statement_type, txn.description
         )

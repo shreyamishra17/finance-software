@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     account_balance     TEXT,
     plaid_item_id       TEXT,
     source              TEXT    DEFAULT 'scraped',
+    account_type        TEXT    DEFAULT 'checking',
     status              TEXT    NOT NULL DEFAULT 'connected',
     last_error          TEXT
 );
@@ -78,6 +79,7 @@ _MIGRATIONS = [
     "ALTER TABLE transactions ADD COLUMN merchant_clean TEXT",
     "ALTER TABLE accounts ADD COLUMN plaid_item_id TEXT",
     "ALTER TABLE accounts ADD COLUMN source TEXT DEFAULT 'scraped'",
+    "ALTER TABLE accounts ADD COLUMN account_type TEXT DEFAULT 'checking'",
     "ALTER TABLE accounts ADD COLUMN status TEXT NOT NULL DEFAULT 'connected'",
     "ALTER TABLE accounts ADD COLUMN last_error TEXT",
 ]
@@ -174,6 +176,7 @@ def add_account(
     display_name: str,
     sync_period: str = "1m",
     source: str = "scraped",
+    account_type: str = "checking",
 ) -> int:
     """
     Insert a new account row, or return the existing row id if
@@ -186,16 +189,16 @@ def add_account(
         ).fetchone()
         if existing:
             conn.execute(
-                "UPDATE accounts SET source = ?, sync_period = ? WHERE id = ?",
-                (source, sync_period, existing["id"]),
+                "UPDATE accounts SET source = ?, sync_period = ?, account_type = ? WHERE id = ?",
+                (source, sync_period, account_type, existing["id"]),
             )
             return existing["id"]
         now = datetime.now().isoformat()
         cur = conn.execute(
             """INSERT INTO accounts
-               (bank_key, display_name, added_at, sync_period, source, status)
-               VALUES (?, ?, ?, ?, ?, 'connected')""",
-            (bank_key, display_name, now, sync_period, source),
+               (bank_key, display_name, added_at, sync_period, source, account_type, status)
+               VALUES (?, ?, ?, ?, ?, ?, 'connected')""",
+            (bank_key, display_name, now, sync_period, source, account_type),
         )
         return cur.lastrowid
 
@@ -206,7 +209,7 @@ def get_accounts() -> list[dict]:
             SELECT a.id, a.bank_key, a.display_name, a.account_hint,
                    a.added_at, a.last_synced_at, a.sync_period,
                    a.auto_sync, a.sync_interval_hours, a.needs_login,
-                   a.account_balance, a.source, a.status, a.last_error,
+                   a.account_balance, a.source, a.account_type, a.status, a.last_error,
                    COUNT(t.id) AS tx_count
             FROM accounts a
             LEFT JOIN transactions t ON t.account_id = a.id
