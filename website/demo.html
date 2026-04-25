@@ -1672,19 +1672,25 @@
         // Show account view, hide empty state
         showAccountView();
         // Update header
-        const cleanLabel = label.replace(/\s*\(Sandbox\)\s*/i, "").replace(/\s*Sandbox\s*/i, "").trim();
+        const cleanLabel = label.replace(/\s*\((Sandbox|Demo)\)\s*/i, "").replace(/\s*(Sandbox|Demo)\s*/i, "").trim();
         document.getElementById("resultsHeading").textContent = cleanLabel;
         document.getElementById("resultsInfo").textContent = `${txns.length} transactions`;
         // Sandbox badge
         const sandboxBadge = document.getElementById("mainSandboxBadge");
-        const isSandbox = (acctMeta && (acctMeta.display_name || "").toLowerCase().includes("sandbox")) ||
-                          (label || "").toLowerCase().includes("sandbox");
+        const isSandbox = (acctMeta && /(sandbox|demo)/i.test(acctMeta.display_name || "")) ||
+                          /(sandbox|demo)/i.test(label || "");
         if (sandboxBadge) sandboxBadge.style.display = isSandbox ? "" : "none";
         // Restore insights tab visibility (hidden for PDF mode)
         const insTab = document.getElementById("mainTabInsights");
         if (insTab) insTab.style.display = "";
-        // Always land on Overview tab for live accounts
-        switchMainTab("overview");
+        // Land on Overview only when first loading an account (not when re-rendering
+        // from a period filter click, category click, etc. while already on a tab)
+        if (!activeMainTab || activeMainTab === "overview") {
+          switchMainTab("overview");
+        }
+        // Ensure period filter row is visible on transactions tab
+        const periodRow = document.getElementById("periodFilterRow");
+        if (periodRow && activeMainTab === "transactions") periodRow.style.display = "";
       }
 
       async function setAccountBalance(accountId, balanceStr) {
