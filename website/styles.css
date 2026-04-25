@@ -3191,3 +3191,72 @@ body.demo-page::after {
     transform: translateX(100%);
   }
 }
+
+/* ================================================================
+   RESPONSIVE OVERRIDES — must live at the END of the file so they
+   beat all base-rule definitions above (same specificity, later wins)
+   ================================================================ */
+
+/* Tablet: 768–1023px */
+@media (max-width: 1023px) {
+  /* Insights header: runway full-width top, then 2 metric cards per row */
+  .insights-header-cards {
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .insights-runway-card {
+    grid-column: span 2;
+  }
+  /* Overview: stack chart + recent list vertically */
+  .overview-lower {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  /* Insights chart section: single column */
+  .insights-chart-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Mobile: ≤ 767px */
+@media (max-width: 767px) {
+  /* Insights: all 4 cards in a single vertical column */
+  .insights-header-cards {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .insights-runway-card {
+    grid-column: span 1;  /* undo tablet span */
+  }
+  .insights-runway-card,
+  .insights-metric-card {
+    padding: 16px 18px;
+  }
+  .insights-runway-value { font-size: 28px; }
+
+  /* Overview: single column, no horizontal overflow */
+  .overview-lower {
+    grid-template-columns: 1fr;
+    gap: 14px;
+    margin-top: 16px;
+  }
+  .overview-chart-wrap { height: 220px; }
+
+  /* Insights charts: single column */
+  .insights-chart-grid { grid-template-columns: 1fr; }
+
+  /* Results summary cards: single column */
+  .results-summary {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  /* Transactions table: allow horizontal scroll only inside its wrapper */
+  .results-table-wrap { overflow-x: auto; }
+  .results-table     { min-width: 480px; }
+
+  /* Prevent the demo main area from ever creating horizontal scroll */
+  .demo-main        { overflow-x: hidden; }
+  .demo-main-pane   { overflow-x: hidden; }
+  .demo-app         { overflow-x: hidden; }
+}

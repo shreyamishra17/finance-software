@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Demo — FIFO</title>
     <meta name="description" content="Upload a PDF and preview it in the browser." />
-    <link rel="stylesheet" href="styles.css?v=17" />
+    <link rel="stylesheet" href="styles.css?v=18" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231f5f55'/><text x='50%25' y='50%25' font-family='system-ui,sans-serif' font-size='20' font-weight='800' fill='white' text-anchor='middle' dominant-baseline='central'>F</text></svg>" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   </head>
@@ -52,7 +52,7 @@
                 <h2 class="demo-empty-title">Your financial dashboard</h2>
                 <p class="demo-empty-sub">Connect a bank or load sample data to see spending insights, runway, and trends.</p>
                 <div class="demo-empty-actions">
-                  <button class="demo-sandbox-btn" onclick="connectViaPlaIdSandbox()">Load Chase Sandbox</button>
+                  <button class="demo-sandbox-btn" onclick="connectViaPlaIdSandbox()">Try Demo Bank</button>
                   <button class="demo-connect-ghost-btn" onclick="openBankPicker()">+ Connect account</button>
                 </div>
               </div>
@@ -66,7 +66,7 @@
                   <h2 id="resultsHeading" class="demo-acct-name"></h2>
                   <span id="resultsInfo" class="demo-acct-meta"></span>
                 </div>
-                <span id="mainSandboxBadge" class="sandbox-badge" style="display:none">Sandbox data</span>
+                <span id="mainSandboxBadge" class="sandbox-badge" style="display:none">Demo data</span>
               </div>
 
               <!-- Tabs -->
@@ -140,7 +140,7 @@
                     <div class="insights-chart-wrap" id="monthlyChartWrap">
                       <canvas id="monthlyChart"></canvas>
                     </div>
-                    <p id="monthlyChartNote" class="insights-chart-note" style="display:none">Sandbox data — identical transactions repeat each month. Real accounts will show actual variation.</p>
+                    <p id="monthlyChartNote" class="insights-chart-note" style="display:none">Demo data — identical transactions repeat each month. Real accounts will show actual variation.</p>
                   </div>
                   <div class="insights-chart-card">
                     <div class="insights-chart-title">Spending by Category</div>
@@ -1812,12 +1812,12 @@
         document.getElementById("bankPickerOverlay").style.display = "none";
         const status = document.getElementById("connectBankStatus");
         status.style.display = "block";
-        status.textContent = "Loading Chase sample data…";
+        status.textContent = "Loading demo bank data…";
 
         // Register static account + transactions in the offline registry
         const acct = {
           id:              CHASE_SANDBOX_ID,
-          display_name:    "Chase (Sandbox)",
+          display_name:    "Chase (Demo)",
           account_type:    "checking",
           account_balance: SANDBOX_DEFAULT_BALANCE,
           account_hint:    "••4567",
@@ -1942,12 +1942,12 @@
         const typeStr    = acct.account_type
           ? acct.account_type.charAt(0).toUpperCase() + acct.account_type.slice(1) + " account"
           : "Account";
-        const cleanName  = (acct.display_name || "").replace(/\s*\(Sandbox\)\s*/i, "").replace(/\s*Sandbox\s*/i, "").trim();
-        const isSandbox  = (acct.display_name || "").toLowerCase().includes("sandbox");
+        const cleanName  = (acct.display_name || "").replace(/\s*\(Demo\)\s*/i, "").replace(/\s*\(Sandbox\)\s*/i, "").replace(/\s*Sandbox\s*/i, "").trim();
+        const isSandbox  = (acct.display_name || "").toLowerCase().includes("sandbox") || (acct.display_name || "").toLowerCase().includes("demo");
         const isActive   = currentAccountId === acct.id;
         const statusBadge = needsAuth
           ? `<span class="sidebar-reauth-badge" title="Session expired — click to re-login">!</span>`
-          : (isSandbox ? '<span class="sidebar-sandbox-badge">sandbox</span>' : "");
+          : (isSandbox ? '<span class="sidebar-sandbox-badge">demo</span>' : "");
         return `
           <div class="sidebar-account-item${isActive ? " is-active" : ""}${needsAuth ? " needs-reauth" : ""}" data-id="${acct.id}"
                onclick="loadAccountTransactions(${acct.id})">
@@ -2098,7 +2098,7 @@
       <div class="bank-picker-list">
         <button class="bank-option bank-option-plaid" onclick="connectViaPlaIdSandbox()">
           <span class="bank-name">🏦 Chase</span>
-          <span class="bank-soon" style="color:#1f5f55;font-weight:600">Sample data</span>
+          <span class="bank-soon" style="color:#1f5f55;font-weight:600">Try Demo Bank</span>
         </button>
         <div class="bank-picker-divider">— or use browser scraper —</div>
         <div class="bank-option-row">
