@@ -192,6 +192,130 @@
       const _accountBalanceOverrides = new Map();
       const SANDBOX_DEFAULT_BALANCE = "$8,500.00";
 
+      // ── Offline demo registry (no backend needed) ─────────────────────
+      const _offlineAccounts = new Map();  // id → account object
+      const _offlineTxns     = new Map();  // id → transactions[]
+      const CHASE_SANDBOX_ID = -1;         // negative = never collides with real DB ids
+
+      function _isLocalhost() {
+        const h = window.location.hostname;
+        return h === "localhost" || h === "127.0.0.1";
+      }
+
+      // ── Static Chase sandbox transactions (12 months of realistic data) ──
+      const CHASE_SANDBOX_TXNS = (() => {
+        // [day-of-month, description, merchant_clean, amount, type, category]
+        const tpl = [
+          [ 1, "DIRECT DEP PAYROLL",   "Employer Payroll",  "2750.00", "credit", "Income"],
+          [ 2, "AUTOPAY RENT ZELLE",   "Rent",              "1850.00", "debit",  "Housing"],
+          [ 3, "WHOLE FOODS MKT",      "Whole Foods",       "118.43",  "debit",  "Groceries"],
+          [ 4, "STARBUCKS",            "Starbucks",         "9.75",    "debit",  "Coffee & Cafes"],
+          [ 5, "PG&E PAYMENT",         "PG&E",              "87.42",   "debit",  "Utilities"],
+          [ 6, "COMCAST AUTOPAY",      "Comcast",           "64.99",   "debit",  "Utilities"],
+          [ 7, "LYFT *RIDE",           "Lyft",              "18.50",   "debit",  "Transport"],
+          [ 8, "AMAZON MKTPLACE PMTS", "Amazon",            "54.99",   "debit",  "Shopping"],
+          [ 9, "CHIPOTLE ONLINE",      "Chipotle",          "13.85",   "debit",  "Dining"],
+          [10, "SHELL OIL",            "Shell",             "52.40",   "debit",  "Gas & Fuel"],
+          [11, "NETFLIX.COM",          "Netflix",           "17.99",   "debit",  "Subscriptions"],
+          [12, "TRADER JOE'S",         "Trader Joe's",      "74.23",   "debit",  "Groceries"],
+          [13, "SWEETGREEN",           "Sweetgreen",        "16.45",   "debit",  "Dining"],
+          [14, "SPOTIFY USA",          "Spotify",           "11.99",   "debit",  "Subscriptions"],
+          [15, "DIRECT DEP PAYROLL",   "Employer Payroll",  "2750.00", "credit", "Income"],
+          [16, "CVS PHARMACY",         "CVS Pharmacy",      "38.15",   "debit",  "Health & Wellness"],
+          [17, "LYFT *RIDE",           "Lyft",              "22.75",   "debit",  "Transport"],
+          [18, "TARGET",               "Target",            "83.47",   "debit",  "Shopping"],
+          [19, "DOORDASH*ORDER",       "DoorDash",          "34.20",   "debit",  "Dining"],
+          [20, "CHEVRON",              "Chevron",           "48.60",   "debit",  "Gas & Fuel"],
+          [21, "SAFEWAY",              "Safeway",           "93.81",   "debit",  "Groceries"],
+          [22, "AMC THEATRES",         "AMC Theatres",      "28.00",   "debit",  "Entertainment"],
+          [23, "AMAZON MKTPLACE PMTS", "Amazon",            "67.50",   "debit",  "Shopping"],
+          [24, "HULU",                 "Hulu",              "17.99",   "debit",  "Subscriptions"],
+          [25, "STARBUCKS",            "Starbucks",         "8.45",    "debit",  "Coffee & Cafes"],
+          [26, "UBER EATS",            "Uber Eats",         "32.75",   "debit",  "Dining"],
+          [27, "WALGREENS",            "Walgreens",         "22.50",   "debit",  "Health & Wellness"],
+          [28, "VENMO PAYMENT",        "Venmo",             "120.00",  "credit", "Transfer"],
+        ];
+        const txns = [];
+        const now = new Date();
+        for (let mo = 11; mo >= 0; mo--) {
+          const d = new Date(now.getFullYear(), now.getMonth() - mo, 1);
+          const yr = d.getFullYear();
+          const mm = String(d.getMonth() + 1).padStart(2, "0");
+          const dim = new Date(yr, d.getMonth() + 1, 0).getDate();
+          for (const [day, desc, merch, amt, type, cat] of tpl) {
+            if (day > dim) continue;
+            txns.push({
+              date: `${yr}-${mm}-${String(day).padStart(2, "0")}`,
+              description: desc, merchant_clean: merch,
+              amount: amt, amount_type: type, category: cat,
+            });
+          }
+        }
+        return txns;
+      })();
+
+      // ── Client-side insights computation (for offline accounts) ──────────
+      function _computeOfflineInsights(txns, acct, period) {
+        const now = new Date();
+        let since = null;
+        if      (period === "1m")  since = new Date(now.getFullYear(), now.getMonth() - 1,  now.getDate());
+        else if (period === "3m")  since = new Date(now.getFullYear(), now.getMonth() - 3,  now.getDate());
+        else if (period === "6m")  since = new Date(now.getFullYear(), now.getMonth() - 6,  now.getDate());
+        else if (period === "1y")  since = new Date(now.getFullYear() - 1, now.getMonth(),  now.getDate());
+        else if (period === "ytd") since = new Date(now.getFullYear(), 0, 1);
+
+        const filtered = since
+          ? txns.filter(t => new Date(t.date) >= since)
+          : txns;
+
+        let total_income = 0, total_expenses = 0;
+        const byCat = {};
+        const byMerch = {};
+        for (const t of filtered) {
+          const n = parseFloat(t.amount) || 0;
+          if (t.amount_type === "credit") {
+            total_income += n;
+          } else {
+            total_expenses += n;
+            if (!byCat[t.category]) byCat[t.category] = { category: t.category, total: 0, count: 0 };
+            byCat[t.category].total  += n;
+            byCat[t.category].count += 1;
+            const m = t.merchant_clean || t.description;
+            if (!byMerch[m]) byMerch[m] = { name: m, total: 0, count: 0 };
+            byMerch[m].total  += n;
+            byMerch[m].count += 1;
+          }
+        }
+        return {
+          account_type:   acct.account_type || "checking",
+          current_balance: acct.account_balance || SANDBOX_DEFAULT_BALANCE,
+          total_income:   Math.round(total_income   * 100) / 100,
+          total_expenses: Math.round(total_expenses * 100) / 100,
+          net:            Math.round((total_income - total_expenses) * 100) / 100,
+          by_category:    Object.values(byCat).sort((a, b) => b.total - a.total),
+          top_merchants:  Object.values(byMerch).sort((a, b) => b.total - a.total).slice(0, 10),
+        };
+      }
+
+      function _computeOfflineMonthly(txns, monthsBack) {
+        const buckets = {};
+        for (const t of txns) {
+          const key = t.date.slice(0, 7); // "YYYY-MM"
+          if (!buckets[key]) buckets[key] = { month: key, income: 0, expenses: 0 };
+          const n = parseFloat(t.amount) || 0;
+          if (t.amount_type === "credit") buckets[key].income   += n;
+          else                            buckets[key].expenses += n;
+        }
+        const months = Object.values(buckets)
+          .sort((a, b) => a.month.localeCompare(b.month))
+          .slice(-(monthsBack || 24));
+        months.forEach(m => {
+          m.income   = Math.round(m.income   * 100) / 100;
+          m.expenses = Math.round(m.expenses * 100) / 100;
+        });
+        return { months };
+      }
+
       function setUploadState(state) {
         uploadCta.classList.remove("is-uploaded", "is-loading", "is-error");
         if (state === "uploaded") uploadCta.classList.add("is-uploaded");
@@ -651,6 +775,24 @@
         btn.classList.add("is-active");
         const period = btn.dataset.period;
         const label = document.getElementById("resultsHeading")?.textContent?.trim() || "Account";
+
+        // Offline account — filter static data in-memory, no API call
+        if (_offlineAccounts.has(currentAccountId)) {
+          const acctMeta = _offlineAccounts.get(currentAccountId);
+          const allTxns  = _offlineTxns.get(currentAccountId) || [];
+          const now = new Date();
+          let since = null;
+          if      (period === "1m")  since = new Date(now.getFullYear(), now.getMonth() - 1,  now.getDate());
+          else if (period === "3m")  since = new Date(now.getFullYear(), now.getMonth() - 3,  now.getDate());
+          else if (period === "6m")  since = new Date(now.getFullYear(), now.getMonth() - 6,  now.getDate());
+          else if (period === "1y")  since = new Date(now.getFullYear() - 1, now.getMonth(),  now.getDate());
+          else if (period === "ytd") since = new Date(now.getFullYear(), 0, 1);
+          const txns = since ? allTxns.filter(t => new Date(t.date) >= since) : allTxns;
+          _renderLiveTransactions(txns, label, acctMeta);
+          if (activeMainTab === "insights") loadInsights(currentAccountId, period);
+          return;
+        }
+
         Promise.all([
           _apiFetch(`/api/accounts/${currentAccountId}/transactions?period=${period}`).then(r => r.json()),
           _apiFetch("/api/accounts").then(r => r.json()),
@@ -727,6 +869,18 @@
         if (_monthlyChartInstance) { _monthlyChartInstance.destroy(); _monthlyChartInstance = null; }
         try {
           await new Promise((resolve) => setTimeout(resolve, 180));
+
+          // Offline (static) account — compute insights client-side, no API needed
+          if (_offlineAccounts.has(accountId)) {
+            const acct = _offlineAccounts.get(accountId);
+            const txns = _offlineTxns.get(accountId) || [];
+            const monthsParam = { "1m": 2, "3m": 3, "6m": 6, "1y": 12, "ytd": 12, "all": 24 }[period] || 24;
+            const ins     = _computeOfflineInsights(txns, acct, period);
+            const monthly = _computeOfflineMonthly(txns, monthsParam);
+            _renderInsights(ins, monthly, period);
+            return;
+          }
+
           const monthsParam = { "1m": 2, "3m": 3, "6m": 6, "1y": 12, "ytd": 12, "all": 24 }[period] || 24;
           const [ins, monthly] = await Promise.all([
             _apiFetch(`/api/accounts/${accountId}/insights?period=${period}`).then(r => r.json()),
@@ -739,9 +893,6 @@
             const acctMeta = accounts.find(a => a.id === accountId) || null;
             if (acctMeta?.account_balance) {
               ins.current_balance = acctMeta.account_balance;
-            } else if ((acctMeta?.display_name || "").toLowerCase().includes("sandbox")) {
-              ins.current_balance = SANDBOX_DEFAULT_BALANCE;
-              _accountBalanceOverrides.set(accountId, SANDBOX_DEFAULT_BALANCE);
             }
           }
           _renderInsights(ins, monthly, period);
@@ -1336,8 +1487,19 @@
 
       async function loadAccounts() {
         try {
-          const resp = await _apiFetch("/api/accounts");
-          const accounts = await resp.json();
+          // On localhost fetch from API; on production use only offline accounts
+          let accounts = [];
+          if (_isLocalhost()) {
+            try {
+              const resp = await _apiFetch("/api/accounts");
+              accounts = await resp.json();
+            } catch (_) {}
+          }
+          // Merge offline (static) accounts — put them first so sandbox appears at top
+          _offlineAccounts.forEach(a => {
+            if (!accounts.find(x => x.id === a.id)) accounts.unshift(a);
+          });
+
           const sidebarList = document.getElementById("sidebarAccountsList");
           const noAccts = document.getElementById("sidebarNoAccounts");
           // Remove old items
@@ -1409,6 +1571,17 @@
         document.querySelectorAll("#periodFilterRow .period-btn").forEach((b) => b.classList.remove("is-active"));
         const allBtn = document.querySelector('#periodFilterRow .period-btn[data-period="all"]');
         if (allBtn) allBtn.classList.add("is-active");
+
+        // Offline (static) account — no API calls needed
+        if (_offlineAccounts.has(accountId)) {
+          const acctMeta = _offlineAccounts.get(accountId);
+          const txns = _offlineTxns.get(accountId) || [];
+          const label = (acctMeta.display_name || "").replace(/\s*\(Sandbox\)\s*/i, "").replace(/\s*Sandbox\s*/i, "").trim();
+          document.getElementById("periodFilterRow").style.display = "";
+          _renderLiveTransactions(txns, label, acctMeta);
+          return;
+        }
+
         const acctResp = await _apiFetch(`/api/accounts/${accountId}/transactions?period=all`);
         const txns = await acctResp.json();
         const accounts = await (await _apiFetch("/api/accounts")).json();
@@ -1620,7 +1793,12 @@
       async function deleteAccount(event, accountId) {
         event.stopPropagation();
         if (!confirm("Remove this account and all its stored transactions?")) return;
-        await _apiFetch(`/api/accounts/${accountId}`, { method: "DELETE" });
+        if (_offlineAccounts.has(accountId)) {
+          _offlineAccounts.delete(accountId);
+          _offlineTxns.delete(accountId);
+        } else {
+          await _apiFetch(`/api/accounts/${accountId}`, { method: "DELETE" });
+        }
         if (currentAccountId === accountId) {
           currentAccountId = null;
           showEmptyState();
@@ -1629,46 +1807,34 @@
         await loadAccounts();
       }
 
-      // ── Connect via Plaid sandbox (no CDN needed) ────────────────────
+      // ── Load Chase sandbox — fully static, no backend needed ────────────
       async function connectViaPlaIdSandbox() {
         document.getElementById("bankPickerOverlay").style.display = "none";
         const status = document.getElementById("connectBankStatus");
         status.style.display = "block";
-        status.textContent = "Loading Chase sandbox data…";
-        try {
-          const data = await _apiFetch("/api/plaid/sandbox-connect", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-          }).then(r => r.json());
-          if (data.error) throw new Error(data.error);
+        status.textContent = "Loading Chase sample data…";
 
-          // Pre-set a demo balance so runway is visible in the Insights tab
-          const demoBalance = SANDBOX_DEFAULT_BALANCE;
-          const patchResp = await _apiFetch(`/api/accounts/${data.account.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ account_balance: demoBalance }),
-          });
-          if (patchResp.ok) {
-            const patchedAccount = await patchResp.json().catch(() => null);
-            if (patchedAccount && patchedAccount.account_balance) {
-              data.account = patchedAccount;
-            } else {
-              data.account.account_balance = demoBalance;
-            }
-          } else {
-            data.account.account_balance = demoBalance;
-          }
-          _accountBalanceOverrides.set(data.account.id, data.account.account_balance || demoBalance);
+        // Register static account + transactions in the offline registry
+        const acct = {
+          id:              CHASE_SANDBOX_ID,
+          display_name:    "Chase (Sandbox)",
+          account_type:    "checking",
+          account_balance: SANDBOX_DEFAULT_BALANCE,
+          account_hint:    "••4567",
+          last_synced_at:  new Date().toISOString(),
+          source:          "plaid",
+          tx_count:        CHASE_SANDBOX_TXNS.length,
+          status:          "connected",
+        };
+        _offlineAccounts.set(CHASE_SANDBOX_ID, acct);
+        _offlineTxns.set(CHASE_SANDBOX_ID, CHASE_SANDBOX_TXNS);
+        _accountBalanceOverrides.set(CHASE_SANDBOX_ID, SANDBOX_DEFAULT_BALANCE);
 
-          status.textContent = `${data.account.display_name} connected — ${data.count} transaction${data.count !== 1 ? "s" : ""} stored.`;
-          await loadAccounts();
-          _renderLiveTransactions(data.transactions, data.account.display_name, data.account);
-          currentAccountId = data.account.id;
-          document.getElementById("periodFilterRow").style.display = "";
-        } catch (err) {
-          status.textContent = `Error: ${err.message}`;
-        }
+        status.textContent = `Chase connected — ${CHASE_SANDBOX_TXNS.length} transactions loaded.`;
+        await loadAccounts();
+        _renderLiveTransactions(CHASE_SANDBOX_TXNS, "Chase", acct);
+        currentAccountId = CHASE_SANDBOX_ID;
+        document.getElementById("periodFilterRow").style.display = "";
       }
 
       // ── Connect bank via Plaid Link ───────────────────────────────────
