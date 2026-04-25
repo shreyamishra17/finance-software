@@ -1473,6 +1473,8 @@ body.demo-page::after {
     max-width: 100%;
     border-radius: 16px;
   }
+  /* Hide the ::after "INSIGHTS DASHBOARD" label — the chip already shows it */
+  .hero-preview::after { display: none; }
   .hero-visual {
     display: flex;
     justify-content: center;
@@ -2529,7 +2531,14 @@ body.demo-page::after {
   .results-summary { flex-wrap: wrap; }
   .overview-lower { grid-template-columns: 1fr; }
   .insights-chart-grid { grid-template-columns: 1fr; }
-  .insights-header-cards { flex-wrap: wrap; }
+  /* Stack insights cards vertically on mobile — no horizontal scrolling */
+  .insights-header-cards {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .insights-runway-card,
+  .insights-metric-card { padding: 16px 18px; }
+  .insights-runway-value { font-size: 28px; }
   .demo-footer { flex-direction: column; gap: 6px; padding: 10px 16px; }
   .demo-footer-links { gap: 16px; flex-wrap: wrap; justify-content: center; }
 }
