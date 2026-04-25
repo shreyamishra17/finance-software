@@ -2464,7 +2464,8 @@ body.demo-page::after {
     border-right: none;
     border-bottom: 1px solid rgba(208, 198, 182, 0.72);
     height: auto;
-    overflow: visible;
+    overflow: visible;       /* keep visible so dropdowns aren't clipped */
+    contain: layout;         /* still prevent layout bleed into adjacent areas */
   }
   .demo-sidebar.is-collapsed {
     width: 100%;
@@ -2505,16 +2506,20 @@ body.demo-page::after {
   }
   .sidebar-footer {
     flex-direction: row;
-    padding: 8px 16px;
+    flex-wrap: wrap;
+    padding: 8px 16px 10px;
     gap: 8px;
     align-items: center;
     border-top: 1px solid rgba(208,198,182,0.4);
   }
   .sidebar-connect-btn {
     flex: 1;
+    min-width: 120px;
     justify-content: center;
   }
-  .sidebar-upload-link { flex: 1; text-align: center; }
+  .sidebar-upload-link { flex: 1; min-width: 100px; text-align: center; }
+  .sidebar-status-msg { width: 100%; order: 10; padding-top: 2px; }
+  .sidebar-meta { width: 100%; order: 11; }
   .demo-main { overflow-y: visible; height: auto; }
   .demo-main-pane { padding: 16px 14px 24px; overflow-y: visible; }
   .demo-acct-header { padding: 16px 14px 0; }
