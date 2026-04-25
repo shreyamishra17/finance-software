@@ -736,7 +736,10 @@
         currentBookmarkletBank = bankKey;
         document.getElementById("bookmarkletBankName").textContent = cfg.name;
         document.getElementById("openBankBtn").textContent = `Open ${cfg.name} →`;
-        const origin = window.location.origin;
+        // On prod (Cloudflare Pages) there's no local backend — bookmarklet must
+        // POST directly to the Cloud Run API, not to the static Pages origin.
+        const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+        const origin = isLocal ? window.location.origin : CLOUD_API_BASE;
         const js = cfg.bookmarkletJs.replace(/\{ORIGIN\}/g, origin);
         document.getElementById("bookmarkletLink").href = "javascript:" + js;
         document.getElementById("bookmarkletOverlay").style.display = "flex";
@@ -2154,8 +2157,7 @@
         </li>
       </ol>
       <p class="bookmarklet-note">
-        ⚠ If you see a CORS error, your bank blocks requests to localhost.
-        Use the automated login option instead.
+        ⚠ If you see an error, make sure you're on your bank's Transactions page and have scrolled to load the transactions you want.
       </p>
       <button class="bank-picker-cancel" onclick="closeBookmarkletModal()">Close</button>
     </div>

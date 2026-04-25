@@ -31,7 +31,7 @@ from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from core.db import init_db
-from api.routers import accounts, transactions, insights, plaid_router
+from api.routers import accounts, transactions, insights, plaid_router, import_router
 
 WEB_ROOT = ROOT / "website"
 
@@ -83,6 +83,7 @@ app.include_router(accounts.router,     prefix="/api")
 app.include_router(transactions.router, prefix="/api")
 app.include_router(insights.router,     prefix="/api")
 app.include_router(plaid_router.router, prefix="/api")
+app.include_router(import_router.router, prefix="/api")
 
 
 # /api/parse — PDF upload (kept at top-level for backward compat)
