@@ -202,7 +202,9 @@ class BankCrawler:
             found_sel = None
             poll_count = 0
             bank_key = self._cfg.get("bank_key", "bank")
-            print("  [wait] Waiting for transactions — click your credit card account now…", flush=True)
+            # Pre-seed with the configured row_selector so we check it first
+            _preconfigured_sel = (self._cfg.get("transactions_config") or {}).get("row_selector", "")
+            print(f"  [wait] Waiting for transaction rows (preconfigured: {_preconfigured_sel!r})…", flush=True)
             while time.time() < deadline:
                 poll_count += 1
                 try:
@@ -218,11 +220,24 @@ class BankCrawler:
                     except Exception:
                         pass
 
-                try:
-                    found_sel = self._auto_discover_row_selector(timeout_ms=2000)
-                except Exception as disc_exc:
-                    print(f"  [wait] discovery error: {disc_exc}", flush=True)
-                    found_sel = None
+                # Check the configured selector first (fast path — no JS evaluation needed)
+                found_sel = None
+                if _preconfigured_sel:
+                    try:
+                        count = len(self._page.query_selector_all(_preconfigured_sel))
+                        if count >= 1:
+                            found_sel = _preconfigured_sel
+                            print(f"  [wait] preconfigured selector matched {count} rows", flush=True)
+                    except Exception:
+                        pass
+
+                # Fall back to full auto-discovery if the configured selector didn't fire
+                if not found_sel:
+                    try:
+                        found_sel = self._auto_discover_row_selector(timeout_ms=2000)
+                    except Exception as disc_exc:
+                        print(f"  [wait] discovery error: {disc_exc}", flush=True)
+                        found_sel = None
 
                 if found_sel:
                     # Don't scrape the accounts overview — require a URL change away
@@ -675,11 +690,18 @@ class BankCrawler:
 
         result: dict = self._page.evaluate("""
         () => {
-            const dollarRe = /\\$[\\d,]+\\.\\d{2}/;
+            // Match $1,234.56 OR amounts without $ like 1,234.56 / +1,234.56 / -1,234.56
+            // (BofA shows amounts as "+ 1,234.56" without a dollar sign)
+            const dollarRe = /(?:\\$[\\d,]+\\.\\d{2}|(?:^|[\\s(+\\-])\\d{1,3}(?:,\\d{3})*\\.\\d{2})/;
             const dateRe = /\\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\\.?\\s+\\d{1,2}|\\d{1,2}\\/\\d{1,2}/i;
 
             // Strategy 1: known data-testid patterns and bank-specific selectors
             const knownSels = [
+                // Bank of America
+                "tr.activity-row",
+                "tr[class*='activity-row']",
+                "tr[class*='activity']",
+                "div[class*='activity-row']",
                 // Capital One — c1-ease-row with table__row class (confirmed from debug HTML)
                 "c1-ease-row.c1-ease-table__row",
                 "[data-testid='purchase-list-item']",
@@ -695,7 +717,10 @@ class BankCrawler:
             for (const sel of knownSels) {
                 try {
                     const els = document.querySelectorAll(sel);
-                    if (els.length >= 2) return { selector: sel, count: els.length, sample: els[0]?.outerHTML?.substring(0, 400) || "" };
+                    // Require at least 1 row for highly specific selectors (e.g. tr.activity-row),
+                    // at least 2 for generic class-contains selectors
+                    const minCount = (sel.includes("activity-row") || sel.includes("testid")) ? 1 : 2;
+                    if (els.length >= minCount) return { selector: sel, count: els.length, sample: els[0]?.outerHTML?.substring(0, 400) || "" };
                 } catch(e) {}
             }
 
