@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Demo — FIFO</title>
     <meta name="description" content="Upload a PDF and preview it in the browser." />
-    <link rel="stylesheet" href="styles.css?v=18" />
+    <link rel="stylesheet" href="styles.css?v=19" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231f5f55'/><text x='50%25' y='50%25' font-family='system-ui,sans-serif' font-size='20' font-weight='800' fill='white' text-anchor='middle' dominant-baseline='central'>F</text></svg>" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   </head>
@@ -1490,14 +1490,12 @@
 
       async function loadAccounts() {
         try {
-          // On localhost fetch from API; on production use only offline accounts
+          // Always fetch from API (_apiFetch routes to Cloud Run on prod, localhost on dev)
           let accounts = [];
-          if (_isLocalhost()) {
-            try {
-              const resp = await _apiFetch("/api/accounts");
-              accounts = await resp.json();
-            } catch (_) {}
-          }
+          try {
+            const resp = await _apiFetch("/api/accounts");
+            accounts = await resp.json();
+          } catch (_) {}
           // Merge offline (static) accounts — put them first so sandbox appears at top
           _offlineAccounts.forEach(a => {
             if (!accounts.find(x => x.id === a.id)) accounts.unshift(a);

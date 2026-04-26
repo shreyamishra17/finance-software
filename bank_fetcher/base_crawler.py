@@ -885,11 +885,16 @@ class BankCrawler:
         use_headless = headless if headless is not None else self._cfg.get("headless", False)
         self._pw = sync_playwright().start()
 
-        # Default to bundled Chromium. Some banks (e.g. Discover) fingerprint the browser
-        # binary itself and reject "Chrome for Testing". Setting browser_channel="chrome"
-        # in the bank config makes Playwright launch the real installed Chrome instead.
-        engine = self._cfg.get("browser_engine", "chromium")
-        channel = self._cfg.get("browser_channel", None)
+        # Use config-specified engine/channel if either is set; otherwise auto-detect
+        # from the system's default browser so the user sees a familiar window.
+        # (Discover needs browser_channel="chrome" to avoid fingerprinting, so we
+        # respect browser_channel even when browser_engine is absent.)
+        if "browser_engine" in self._cfg or "browser_channel" in self._cfg:
+            engine = self._cfg.get("browser_engine", "chromium")
+            channel = self._cfg.get("browser_channel", None)
+        else:
+            engine, channel = _detect_default_browser()
+            print(f"  Auto-detected browser: {engine}{f' ({channel})' if channel else ''}")
 
         ctx_kwargs: dict = dict(
             accept_downloads=True,
