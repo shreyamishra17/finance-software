@@ -1911,6 +1911,13 @@
 
       // ── Connect bank (add new account, store in DB) ───────────────────
       async function connectBank(bankKey) {
+        // On production (Cloudflare Pages / Cloud Run) the Playwright browser
+        // scraper is unavailable — route to the bookmarklet flow instead.
+        if (!_isLocalhost()) {
+          openBookmarkletSetup(bankKey);
+          return;
+        }
+
         document.getElementById("bankPickerOverlay").style.display = "none";
 
         const status = document.getElementById("connectBankStatus");
@@ -2109,24 +2116,21 @@
           <span class="bank-name">🏦 Chase</span>
           <span class="bank-soon" style="color:#1f5f55;font-weight:600">Try Demo Bank</span>
         </button>
-        <div class="bank-picker-divider">— or use browser scraper —</div>
+        <div class="bank-picker-divider">— connect your bank —</div>
         <div class="bank-option-row">
           <button class="bank-option" onclick="connectBank('boa')">
             <span class="bank-name">Bank of America</span>
           </button>
-          <button class="bank-import-btn" onclick="openBookmarkletSetup('boa')" title="Import from your browser">⬆ Import</button>
         </div>
         <div class="bank-option-row">
           <button class="bank-option" onclick="connectBank('capital_one')">
             <span class="bank-name">Capital One</span>
           </button>
-          <button class="bank-import-btn" onclick="openBookmarkletSetup('capital_one')" title="Import from your browser">⬆ Import</button>
         </div>
         <div class="bank-option-row">
           <button class="bank-option" onclick="connectBank('discover')">
             <span class="bank-name">Discover</span>
           </button>
-          <button class="bank-import-btn" onclick="openBookmarkletSetup('discover')" title="Import from your browser">⬆ Import</button>
         </div>
       </div>
       <button class="bank-picker-cancel" onclick="closeBankPicker()">Cancel</button>
