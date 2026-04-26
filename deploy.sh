@@ -1,0 +1,36 @@
+#!/bin/bash
+# deploy.sh — rebuild and redeploy the FIFO backend to Cloud Run
+# Run from the Finance_Software root directory.
+#
+# Prerequisites: gcloud CLI installed + authenticated
+#   brew install google-cloud-sdk
+#   gcloud auth login
+#   gcloud config set project <your-project-id>
+
+set -e
+
+PROJECT=$(gcloud config get-value project 2>/dev/null)
+SERVICE="finance-demo"
+REGION="us-central1"
+IMAGE="gcr.io/${PROJECT}/${SERVICE}"
+
+echo "→ Building Docker image: ${IMAGE}"
+gcloud builds submit --tag "${IMAGE}" .
+
+echo "→ Deploying to Cloud Run (min-instances=1 to keep DB alive between requests)"
+gcloud run deploy "${SERVICE}" \
+  --image "${IMAGE}" \
+  --region "${REGION}" \
+  --platform managed \
+  --allow-unauthenticated \
+  --min-instances 1 \
+  --max-instances 3 \
+  --memory 512Mi \
+  --cpu 1 \
+  --timeout 300 \
+  --port 8000
+
+echo "✓ Deployed. Service URL:"
+gcloud run services describe "${SERVICE}" \
+  --region "${REGION}" \
+  --format "value(status.url)"

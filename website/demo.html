@@ -2104,6 +2104,14 @@
 
       // Load accounts on page start
       loadAccounts();
+
+      // When the user returns to this tab (e.g. after running the bookmarklet on their
+      // bank's website), silently refresh the account list so newly imported data appears.
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+          loadAccounts();
+        }
+      });
     </script>
   <!-- Modals live outside all content containers so display:none on parents never hides them -->
   <div id="bankPickerOverlay" class="bank-picker-overlay" style="display:none" onclick="closeBankPicker(event)">
@@ -2155,13 +2163,17 @@
         </li>
         <li class="bookmarklet-step">
           Click <strong>FIFO Import ★</strong> in your bookmarks bar.
-          Transactions will be imported here automatically.
+          You'll see an alert confirming how many transactions were imported.
+        </li>
+        <li class="bookmarklet-step">
+          Come back to this tab and click <strong>Done — Load My Data</strong> below.
         </li>
       </ol>
       <p class="bookmarklet-note">
-        ⚠ If you see an error, make sure you're on your bank's Transactions page and have scrolled to load the transactions you want.
+        ⚠ If you see "No transactions found", make sure you're on the Transactions page and transactions are visible on screen.
       </p>
-      <button class="bank-picker-cancel" onclick="closeBookmarkletModal()">Close</button>
+      <button class="demo-sandbox-btn" style="width:100%;margin-bottom:8px" onclick="closeBookmarkletModal(); loadAccounts();">Done — Load My Data</button>
+      <button class="bank-picker-cancel" onclick="closeBookmarkletModal()">Cancel</button>
     </div>
   </div>
   </body>
