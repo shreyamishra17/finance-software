@@ -1,72 +1,69 @@
 """
-db.py — SQLite persistence for FIFO accounts and transactions.
+db.py — Firestore persistence for FIFO accounts and transactions.
 
-Tables:
-  accounts     — one row per connected bank/investment account
+Collections:
+  accounts     — one document per connected bank/investment account
   transactions — scraped transactions, deduplicated per account
+  _meta        — internal counters (account_id_seq)
 """
 from __future__ import annotations
 
-import sqlite3
+import hashlib
+import os
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
-_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "fifo.db"
+import firebase_admin
+from firebase_admin import credentials, firestore as fb_firestore
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS accounts (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    bank_key       TEXT    NOT NULL,
-    display_name   TEXT    NOT NULL,
-    account_hint   TEXT,
-    added_at       TEXT    NOT NULL,
-    last_synced_at TEXT,
-    sync_period    TEXT    NOT NULL DEFAULT '1m'
-);
+# ------------------------------------------------------------------ #
+# Client init
+# ------------------------------------------------------------------ #
 
-CREATE TABLE IF NOT EXISTS transactions (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    account_id   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    date         TEXT,
-    description  TEXT,
-    amount       TEXT,
-    amount_type  TEXT,
-    scraped_at   TEXT    NOT NULL,
-    UNIQUE(account_id, date, description, amount)
-);
-"""
+_db = None
+_SERVICE_ACCOUNT_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "financesoftware-5c8e4-firebase-adminsdk-fbsvc-d456331984.json"
+)
 
 
-def _connect() -> sqlite3.Connection:
-    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
-
-
-_MIGRATIONS = [
-    "ALTER TABLE accounts ADD COLUMN auto_sync INTEGER NOT NULL DEFAULT 0",
-    "ALTER TABLE accounts ADD COLUMN sync_interval_hours INTEGER NOT NULL DEFAULT 24",
-    "ALTER TABLE accounts ADD COLUMN needs_login INTEGER NOT NULL DEFAULT 0",
-    "ALTER TABLE accounts ADD COLUMN last_url TEXT",
-    "ALTER TABLE transactions ADD COLUMN category TEXT",
-    "ALTER TABLE accounts ADD COLUMN account_balance TEXT",
-    "ALTER TABLE transactions ADD COLUMN merchant_clean TEXT",
-    "ALTER TABLE accounts ADD COLUMN plaid_item_id TEXT",
-    "ALTER TABLE accounts ADD COLUMN source TEXT DEFAULT 'scraped'",
-]
+def _get_db():
+    global _db
+    if _db is not None:
+        return _db
+    if not firebase_admin._apps:
+        if _SERVICE_ACCOUNT_PATH.exists():
+            cred = credentials.Certificate(str(_SERVICE_ACCOUNT_PATH))
+        else:
+            cred = credentials.ApplicationDefault()
+        firebase_admin.initialize_app(cred)
+    _db = fb_firestore.client()
+    return _db
 
 
 def init_db() -> None:
-    """Create tables and run migrations. Safe to call on every server start."""
-    with _connect() as conn:
-        conn.executescript(_SCHEMA)
-        for sql in _MIGRATIONS:
-            try:
-                conn.execute(sql)
-            except Exception:
-                pass  # column already exists
+    """Connect to Firestore. Safe to call on every server start."""
+    _get_db()
+
+
+# ------------------------------------------------------------------ #
+# ID generation — atomic counter stored in Firestore
+# ------------------------------------------------------------------ #
+
+def _next_account_id() -> int:
+    db = _get_db()
+    counter_ref = db.collection("_meta").document("counters")
+
+    @fb_firestore.transactional
+    def _increment(transaction, ref):
+        snap = ref.get(transaction=transaction)
+        current = int(snap.get("account_id_seq") or 0) if snap.exists else 0
+        next_id = current + 1
+        transaction.set(ref, {"account_id_seq": next_id}, merge=True)
+        return next_id
+
+    return _increment(db.transaction(), counter_ref)
 
 
 # ------------------------------------------------------------------ #
@@ -75,69 +72,138 @@ def init_db() -> None:
 
 def add_account(bank_key: str, display_name: str, sync_period: str = "1m") -> int:
     """
-    Insert a new account row and return its id.
-    If (bank_key, display_name) already exists, returns the existing id
-    to prevent ghost duplicates.
+    Insert a new account and return its id.
+    If (bank_key, display_name) already exists, returns the existing id.
     """
-    with _connect() as conn:
-        existing = conn.execute(
-            "SELECT id FROM accounts WHERE bank_key = ? AND display_name = ?",
-            (bank_key, display_name),
-        ).fetchone()
-        if existing:
-            conn.execute(
-                "UPDATE accounts SET sync_period = ? WHERE id = ?",
-                (sync_period, existing["id"]),
-            )
-            return existing["id"]
-        now = datetime.now().isoformat()
-        cur = conn.execute(
-            "INSERT INTO accounts (bank_key, display_name, added_at, sync_period) VALUES (?, ?, ?, ?)",
-            (bank_key, display_name, now, sync_period),
-        )
-        return cur.lastrowid
+    db = _get_db()
+    existing = (
+        db.collection("accounts")
+        .where("bank_key", "==", bank_key)
+        .where("display_name", "==", display_name)
+        .limit(1)
+        .get()
+    )
+    if existing:
+        doc = existing[0]
+        doc.reference.update({"sync_period": sync_period})
+        return int(doc.get("id"))
+
+    account_id = _next_account_id()
+    now = datetime.now().isoformat()
+    db.collection("accounts").document(str(account_id)).set({
+        "id":                 account_id,
+        "bank_key":           bank_key,
+        "display_name":       display_name,
+        "account_hint":       None,
+        "added_at":           now,
+        "last_synced_at":     None,
+        "sync_period":        sync_period,
+        "auto_sync":          False,
+        "sync_interval_hours": 24,
+        "needs_login":        False,
+        "last_url":           None,
+        "account_balance":    None,
+        "plaid_item_id":      None,
+        "source":             "scraped",
+    })
+    return account_id
 
 
 def get_accounts() -> list[dict]:
     """Return all accounts with transaction count and last_synced_at."""
-    with _connect() as conn:
-        rows = conn.execute("""
-            SELECT a.id, a.bank_key, a.display_name, a.account_hint,
-                   a.added_at, a.last_synced_at, a.sync_period,
-                   COUNT(t.id) AS tx_count
-            FROM accounts a
-            LEFT JOIN transactions t ON t.account_id = a.id
-            GROUP BY a.id
-            ORDER BY a.added_at DESC
-        """).fetchall()
-    return [dict(r) for r in rows]
+    db = _get_db()
+    account_docs = (
+        db.collection("accounts")
+        .order_by("added_at", direction=fb_firestore.Query.DESCENDING)
+        .get()
+    )
+    if not account_docs:
+        return []
+
+    # Count transactions per account in one pass
+    tx_counts: dict[int, int] = {}
+    for txn_doc in db.collection("transactions").get():
+        aid = txn_doc.to_dict().get("account_id")
+        if aid is not None:
+            tx_counts[aid] = tx_counts.get(aid, 0) + 1
+
+    result = []
+    for doc in account_docs:
+        data = doc.to_dict()
+        data["tx_count"] = tx_counts.get(data.get("id"), 0)
+        result.append(data)
+    return result
 
 
 def get_account(account_id: int) -> dict | None:
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM accounts WHERE id = ?", (account_id,)
-        ).fetchone()
-    return dict(row) if row else None
+    db = _get_db()
+    doc = db.collection("accounts").document(str(account_id)).get()
+    return doc.to_dict() if doc.exists else None
 
 
-def update_last_synced(account_id: int, dt: datetime, account_hint: str | None = None) -> None:
-    with _connect() as conn:
-        if account_hint:
-            conn.execute(
-                "UPDATE accounts SET last_synced_at = ?, account_hint = ? WHERE id = ?",
-                (dt.isoformat(), account_hint, account_id),
-            )
-        else:
-            conn.execute(
-                "UPDATE accounts SET last_synced_at = ? WHERE id = ?",
-                (dt.isoformat(), account_id),
-            )
+def update_last_synced(
+    account_id: int,
+    dt: datetime,
+    account_hint: str | None = None,
+) -> None:
+    updates: dict = {"last_synced_at": dt.isoformat()}
+    if account_hint:
+        updates["account_hint"] = account_hint
+    _get_db().collection("accounts").document(str(account_id)).update(updates)
 
 
 def delete_account(account_id: int) -> None:
-    with _connect() as conn:
-        conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+    db = _get_db()
+    txn_docs = db.collection("transactions").where("account_id", "==", account_id).get()
+    # Delete transactions in batches (Firestore limit: 500 per batch)
+    batch = db.batch()
+    count = 0
+    for doc in txn_docs:
+        batch.delete(doc.reference)
+        count += 1
+        if count >= 400:
+            batch.commit()
+            batch = db.batch()
+            count = 0
+    if count > 0:
+        batch.commit()
+    db.collection("accounts").document(str(account_id)).delete()
+
+
+def set_auto_sync(
+    account_id: int,
+    enabled: bool | None = None,
+    interval_hours: int | None = None,
+) -> None:
+    updates: dict = {}
+    if enabled is not None:
+        updates["auto_sync"] = bool(enabled)
+    if interval_hours is not None:
+        updates["sync_interval_hours"] = max(1, int(interval_hours))
+    if updates:
+        _get_db().collection("accounts").document(str(account_id)).update(updates)
+
+
+def set_needs_login(account_id: int, flag: bool) -> None:
+    _get_db().collection("accounts").document(str(account_id)).update(
+        {"needs_login": bool(flag)}
+    )
+
+
+def set_last_url(account_id: int, url: str) -> None:
+    _get_db().collection("accounts").document(str(account_id)).update({"last_url": url})
+
+
+def set_account_balance(account_id: int, balance: str) -> None:
+    _get_db().collection("accounts").document(str(account_id)).update(
+        {"account_balance": balance}
+    )
+
+
+def set_plaid_item_id(account_id: int, item_id: str) -> None:
+    _get_db().collection("accounts").document(str(account_id)).update(
+        {"plaid_item_id": item_id, "source": "plaid"}
+    )
 
 
 # ------------------------------------------------------------------ #
@@ -145,7 +211,7 @@ def delete_account(account_id: int) -> None:
 # ------------------------------------------------------------------ #
 
 def _normalize_date(raw: str) -> str:
-    """Normalize transaction date to YYYY-MM-DD for correct SQL comparisons."""
+    """Normalize transaction date to YYYY-MM-DD for correct comparisons."""
     for fmt in ("%m/%d/%Y", "%Y-%m-%d"):
         try:
             return datetime.strptime(raw.strip(), fmt).strftime("%Y-%m-%d")
@@ -154,145 +220,157 @@ def _normalize_date(raw: str) -> str:
     return raw
 
 
+def _txn_doc_id(account_id: int, date: str, description: str, amount: str) -> str:
+    """Stable, collision-resistant ID for deduplication."""
+    key = f"{account_id}|{date}|{description}|{amount}"
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()
+
+
 def store_transactions(account_id: int, transactions: list[dict]) -> int:
     """
     Upsert transactions for an account.  Ignores duplicates (same date+description+amount).
     Returns number of newly inserted rows.
     """
+    db = _get_db()
     now = datetime.now().isoformat()
     inserted = 0
-    with _connect() as conn:
-        for txn in transactions:
-            try:
-                conn.execute(
-                    """INSERT INTO transactions
-                       (account_id, date, description, merchant_clean, amount, amount_type, category, scraped_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                       ON CONFLICT(account_id, date, description, amount)
-                       DO UPDATE SET
-                           merchant_clean = excluded.merchant_clean,
-                           category       = excluded.category""",
-                    (
-                        account_id,
-                        _normalize_date(txn.get("date", "") or ""),
-                        txn.get("description", ""),
-                        txn.get("merchant_clean") or txn.get("description", ""),
-                        txn.get("amount", ""),
-                        txn.get("type", "debit"),
-                        txn.get("category"),
-                        now,
-                    ),
-                )
-                if conn.execute("SELECT changes()").fetchone()[0]:
-                    inserted += 1
-            except Exception:
-                pass
+    batch = db.batch()
+    batch_count = 0
+
+    for txn in transactions:
+        date = _normalize_date(txn.get("date", "") or "")
+        description = txn.get("description", "")
+        amount = txn.get("amount", "")
+        doc_id = _txn_doc_id(account_id, date, description, amount)
+        ref = db.collection("transactions").document(doc_id)
+
+        existing = ref.get()
+        if existing.exists:
+            # Update categorisation fields only
+            batch.update(ref, {
+                "merchant_clean": txn.get("merchant_clean") or description,
+                "category":       txn.get("category"),
+            })
+        else:
+            batch.set(ref, {
+                "id":          doc_id,
+                "account_id":  account_id,
+                "date":        date,
+                "description": description,
+                "merchant_clean": txn.get("merchant_clean") or description,
+                "amount":      amount,
+                "amount_type": txn.get("type", "debit"),
+                "category":    txn.get("category"),
+                "scraped_at":  now,
+            })
+            inserted += 1
+
+        batch_count += 1
+        if batch_count >= 400:
+            batch.commit()
+            batch = db.batch()
+            batch_count = 0
+
+    if batch_count > 0:
+        batch.commit()
+
     return inserted
 
 
 def update_transaction_categories(account_id: int, transactions: list[dict]) -> None:
-    """
-    Update category and merchant_clean for already-stored transactions.
-    Matches rows by (account_id, date, description, amount).
-    """
-    with _connect() as conn:
-        for txn in transactions:
-            category = txn.get("category")
-            merchant = txn.get("merchant_clean") or txn.get("description", "")
-            if not category and not merchant:
-                continue
-            conn.execute(
-                """UPDATE transactions
-                   SET category = ?, merchant_clean = ?
-                   WHERE account_id = ?
-                     AND date = ?
-                     AND description = ?
-                     AND amount = ?""",
-                (
-                    category,
-                    merchant,
-                    account_id,
-                    _normalize_date(txn.get("date", "") or ""),
-                    txn.get("description", ""),
-                    txn.get("amount", ""),
-                ),
-            )
+    """Update category and merchant_clean for already-stored transactions."""
+    db = _get_db()
+    batch = db.batch()
+    batch_count = 0
+
+    for txn in transactions:
+        category = txn.get("category")
+        merchant = txn.get("merchant_clean") or txn.get("description", "")
+        if not category and not merchant:
+            continue
+        date = _normalize_date(txn.get("date", "") or "")
+        doc_id = _txn_doc_id(account_id, date, txn.get("description", ""), txn.get("amount", ""))
+        ref = db.collection("transactions").document(doc_id)
+        batch.update(ref, {"category": category, "merchant_clean": merchant})
+        batch_count += 1
+        if batch_count >= 400:
+            batch.commit()
+            batch = db.batch()
+            batch_count = 0
+
+    if batch_count > 0:
+        batch.commit()
 
 
-def get_transactions(account_id: int | None = None, since_date: datetime | None = None) -> list[dict]:
-    """Return transactions for one account or all accounts (account_id=None), optionally filtered by date."""
-    conditions = []
-    params: list = []
+def get_transactions(
+    account_id: int | None = None,
+    since_date: datetime | None = None,
+) -> list[dict]:
+    """Return transactions for one account or all accounts, optionally filtered by date."""
+    db = _get_db()
+    query = db.collection("transactions")
     if account_id is not None:
-        conditions.append("t.account_id = ?")
-        params.append(account_id)
-    if since_date is not None:
-        conditions.append("t.date >= ?")
-        params.append(since_date.strftime("%Y-%m-%d"))
-    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    with _connect() as conn:
-        rows = conn.execute(
-            f"""SELECT t.*, a.display_name AS bank_name
-               FROM transactions t
-               JOIN accounts a ON a.id = t.account_id
-               {where}
-               ORDER BY t.date DESC, t.id DESC""",
-            params,
-        ).fetchall()
-    return [dict(r) for r in rows]
+        query = query.where("account_id", "==", account_id)
+
+    docs = query.get()
+
+    # Build account-name lookup
+    account_names: dict[int, str] = {}
+    for acc_doc in db.collection("accounts").get():
+        acc = acc_doc.to_dict()
+        account_names[acc.get("id")] = acc.get("display_name", "")
+
+    cutoff = since_date.strftime("%Y-%m-%d") if since_date else None
+    result = []
+    for doc in docs:
+        data = doc.to_dict()
+        if cutoff and (data.get("date") or "") < cutoff:
+            continue
+        data["bank_name"] = account_names.get(data.get("account_id"), "")
+        result.append(data)
+
+    result.sort(key=lambda r: (r.get("date") or "", r.get("id") or ""), reverse=True)
+    return result
 
 
 # ------------------------------------------------------------------ #
-# Auto-sync settings
+# Helpers for serve_demo.py recategorize / backfill (replaces _connect)
 # ------------------------------------------------------------------ #
 
-def set_auto_sync(
-    account_id: int,
-    enabled: bool | None = None,
-    interval_hours: int | None = None,
+def get_transactions_for_account_raw(account_id: int) -> list[dict]:
+    """Return all transactions for an account with every stored field."""
+    db = _get_db()
+    docs = db.collection("transactions").where("account_id", "==", account_id).get()
+    return [doc.to_dict() for doc in docs]
+
+
+def get_uncategorized_transactions(limit: int = 5000) -> list[dict]:
+    """
+    Return transactions that are missing category or have merchant_clean == description
+    (i.e. haven't been cleaned yet).  Fetches up to 3× limit docs and filters in Python
+    because Firestore doesn't support OR-queries.
+    """
+    db = _get_db()
+    all_docs = db.collection("transactions").limit(limit * 3).get()
+    result = []
+    for doc in all_docs:
+        data = doc.to_dict()
+        desc = data.get("description", "")
+        merchant = data.get("merchant_clean") or ""
+        if not data.get("category") or not merchant or merchant == desc:
+            result.append(data)
+            if len(result) >= limit:
+                break
+    return result
+
+
+def update_transaction_by_id(
+    txn_id: str,
+    category: str | None,
+    merchant_clean: str | None,
 ) -> None:
-    updates: list[str] = []
-    params: list = []
-    if enabled is not None:
-        updates.append("auto_sync = ?")
-        params.append(1 if enabled else 0)
-    if interval_hours is not None:
-        updates.append("sync_interval_hours = ?")
-        params.append(max(1, int(interval_hours)))
-    if not updates:
-        return
-    params.append(account_id)
-    with _connect() as conn:
-        conn.execute(f"UPDATE accounts SET {', '.join(updates)} WHERE id = ?", params)
-
-
-def set_needs_login(account_id: int, flag: bool) -> None:
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE accounts SET needs_login = ? WHERE id = ?",
-            (1 if flag else 0, account_id),
-        )
-
-
-def set_last_url(account_id: int, url: str) -> None:
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE accounts SET last_url = ? WHERE id = ?",
-            (url, account_id),
-        )
-
-
-def set_account_balance(account_id: int, balance: str) -> None:
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE accounts SET account_balance = ? WHERE id = ?",
-            (balance, account_id),
-        )
-
-
-def set_plaid_item_id(account_id: int, item_id: str) -> None:
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE accounts SET plaid_item_id = ?, source = 'plaid' WHERE id = ?",
-            (item_id, account_id),
-        )
+    """Update category and merchant_clean for a transaction by its doc ID."""
+    _get_db().collection("transactions").document(txn_id).update({
+        "category":       category,
+        "merchant_clean": merchant_clean,
+    })

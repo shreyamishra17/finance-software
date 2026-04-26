@@ -730,7 +730,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
 
     def _handle_recategorize_account(self, account_id: int) -> None:
         """POST /api/accounts/<id>/recategorize — re-run categorizer on all stored transactions."""
-        from db import _connect  # local import
+        from db import get_transactions_for_account_raw, update_transaction_by_id
 
         account = get_account(account_id)
         if account is None:
@@ -738,29 +738,23 @@ class DemoHandler(SimpleHTTPRequestHandler):
             return
 
         try:
-            with _connect() as conn:
-                rows = conn.execute(
-                    """SELECT id, account_id, date, description, amount, amount_type
-                       FROM transactions WHERE account_id = ?""",
-                    (account_id,),
-                ).fetchall()
+            txns = get_transactions_for_account_raw(account_id)
 
-            if not rows:
+            if not txns:
                 self._send_json(HTTPStatus.OK, {"updated": 0})
                 return
 
-            txns = [dict(r) for r in rows]
             for t in txns:
                 t["type"] = t.get("amount_type", "debit")
 
             _categorize_scraped(txns)
 
-            with _connect() as conn:
-                for t in txns:
-                    conn.execute(
-                        """UPDATE transactions SET category = ?, merchant_clean = ? WHERE id = ?""",
-                        (t.get("category"), t.get("merchant_clean") or t.get("description"), t["id"]),
-                    )
+            for t in txns:
+                update_transaction_by_id(
+                    t["id"],
+                    t.get("category"),
+                    t.get("merchant_clean") or t.get("description"),
+                )
 
             self._send_json(HTTPStatus.OK, {"updated": len(txns)})
         except Exception as exc:
@@ -914,33 +908,24 @@ def _backfill_missing_categories() -> None:
     and run them through the parser + categorizer.  Runs in a background thread
     so it doesn't delay server startup.
     """
-    import sqlite3 as _sqlite3
-    from db import _connect, _normalize_date  # local import to avoid circular issues
+    from db import get_uncategorized_transactions, update_transaction_by_id
 
     def _run() -> None:
         try:
-            with _connect() as conn:
-                rows = conn.execute(
-                    """SELECT id, account_id, date, description, amount, amount_type
-                       FROM transactions
-                       WHERE category IS NULL OR merchant_clean IS NULL OR merchant_clean = description
-                       LIMIT 5000"""
-                ).fetchall()
-            if not rows:
+            txns = get_uncategorized_transactions(limit=5000)
+            if not txns:
                 return
-            print(f"BACKFILL: re-categorizing {len(rows)} transactions with missing categories…")
-            txns = [dict(r) for r in rows]
-            # Map DB columns to the format _categorize_scraped expects
+            print(f"BACKFILL: re-categorizing {len(txns)} transactions with missing categories…")
+            # Map DB fields to the format _categorize_scraped expects
             for t in txns:
                 t["type"] = t.get("amount_type", "debit")
             _categorize_scraped(txns)
-            with _connect() as conn:
-                for t in txns:
-                    conn.execute(
-                        """UPDATE transactions SET category = ?, merchant_clean = ?
-                           WHERE id = ?""",
-                        (t.get("category"), t.get("merchant_clean") or t.get("description"), t["id"]),
-                    )
+            for t in txns:
+                update_transaction_by_id(
+                    t["id"],
+                    t.get("category"),
+                    t.get("merchant_clean") or t.get("description"),
+                )
             print(f"BACKFILL: done — {len(txns)} transactions updated")
         except Exception as exc:
             print(f"BACKFILL error: {exc}")
