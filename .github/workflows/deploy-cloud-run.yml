@@ -26,11 +26,13 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
 
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker gcr.io --quiet
+
       - name: Build and push Docker image
         run: |
-          gcloud builds submit \
-            --tag gcr.io/${{ secrets.GCP_PROJECT_ID }}/finance-demo \
-            .
+          docker build -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/finance-demo .
+          docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/finance-demo
 
       - name: Deploy to Cloud Run
         run: |
