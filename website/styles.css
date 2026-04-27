@@ -3260,3 +3260,80 @@ body.demo-page::after {
   .demo-main-pane   { overflow-x: hidden; }
   .demo-app         { overflow-x: hidden; }
 }
+
+/* ── Smart Connect — "Let FIFO handle it" ──────────────────────── */
+.bank-option-manual {
+  flex: 1;
+  text-align: left;
+}
+.bank-option-manual .bank-option-method {
+  font-size: 11px;
+  font-weight: 500;
+  color: #888;
+}
+
+.bank-option-auto {
+  flex-shrink: 0;
+  background: #1f5f55;
+  border: none;
+  border-radius: 8px;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s;
+}
+.bank-option-auto:hover:not(:disabled) { background: #174f46; }
+.bank-option-auto-soon {
+  background: #f0f0f0 !important;
+  color: #aaa !important;
+  cursor: not-allowed !important;
+  font-weight: 500 !important;
+}
+
+.smart-connect-modal {
+  min-width: 320px;
+  max-width: 400px;
+  text-align: left;
+}
+.smart-connect-subtitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: #555;
+  margin-top: -10px;
+  margin-bottom: 16px;
+}
+.smart-connect-note {
+  font-size: 12px;
+  color: #777;
+  margin: 0 0 14px;
+  line-height: 1.5;
+}
+.smart-connect-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1.5px solid #d1d5db;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+  color: #111;
+  background: #fafafa;
+  margin-bottom: 8px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.smart-connect-input:focus { border-color: #1f5f55; background: #fff; }
+.smart-connect-otp {
+  font-size: 20px;
+  letter-spacing: 4px;
+  text-align: center;
+}
+.smart-connect-status-msg {
+  font-size: 14px;
+  color: #333;
+  text-align: center;
+  padding: 16px 0 8px;
+  line-height: 1.5;
+}

@@ -3,6 +3,8 @@ plaid-python
 python-dotenv
 firebase-admin
 google-cloud-firestore
+playwright
+pyotp
 pandas
 scikit-learn
 joblib

@@ -104,8 +104,9 @@ class BankCrawler:
         self._context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
         self._creds: Optional[BankCredentials] = None
-        self._ending_balance: str = ""   # balance from the most-recent (first) scraped row
-        self._starting_balance: str = "" # balance from the oldest (last) scraped row
+        self._ending_balance: str = ""    # balance from the most-recent (first) scraped row
+        self._starting_balance: str = ""  # balance from the oldest (last) scraped row
+        self._mfa_callback = None         # callable() → OTP string; set by run_scrape_automated
 
     # ------------------------------------------------------------------ #
     # Public entry point
@@ -480,6 +481,59 @@ class BankCrawler:
         finally:
             self._creds = None
             # No logout — preserve session for next headless sync
+            self._close_browser()
+
+    def run_scrape_automated(
+        self,
+        username: str,
+        password: str,
+        mfa_callback=None,
+        since_date: datetime | None = None,
+    ) -> tuple[list[TransactionRecord], str | None]:
+        """
+        Headless automated scrape using explicit credentials (Smart Connect / server-side).
+        Uses login_steps from the config — skips interactive_login_steps entirely.
+        mfa_callback: callable that blocks until the user submits an OTP via the web UI,
+                      then returns it as a string. Required when mfa_mode='otp_interactive'.
+        """
+        from bank_fetcher.credential_manager import BankCredentials
+        login_steps = self._cfg.get("login_steps")
+        if not login_steps:
+            bank = self._cfg.get("bank_display_name", self._cfg.get("bank_key", "this bank"))
+            raise RuntimeError(
+                f"Smart Connect is not yet configured for {bank}. "
+                "The bank's fetcher config needs a 'login_steps' section."
+            )
+
+        self._creds = BankCredentials(username=username, password=password)
+        self._mfa_callback = mfa_callback
+        transactions_url: str | None = None
+
+        try:
+            self._launch_browser(headless=True)
+            self._run_steps(login_steps)
+
+            # Discover or use configured row selector
+            txn_cfg = self._cfg.get("transactions_config", {})
+            if not txn_cfg.get("row_selector"):
+                discovered = self._auto_discover_row_selector()
+                if discovered:
+                    self._cfg.setdefault("transactions_config", {})["row_selector"] = discovered
+                else:
+                    raise RuntimeError("Could not find transaction rows on the page.")
+            else:
+                self._run_steps(self._cfg.get("transactions_steps", []))
+
+            transactions_url = self._page.url
+            page_balance = self._read_page_balance()
+            records = self._scrape_transactions(since_date)
+            if page_balance and not self._ending_balance:
+                self._ending_balance = page_balance
+            return records, transactions_url
+        finally:
+            self._creds = None
+            self._mfa_callback = None
+            self._safe_logout()
             self._close_browser()
 
     def _scrape_transactions(self, since_date: datetime | None) -> list[TransactionRecord]:
@@ -866,8 +920,13 @@ class BankCrawler:
                 )
             otp_code = generate_totp(self._creds.totp_secret)
         else:  # otp_interactive
-            bank_name = self._cfg["bank_display_name"]
-            otp_code = input(f"\n[{bank_name}] Enter the OTP sent to your phone/email: ").strip()
+            if self._mfa_callback:
+                # Server-side (Smart Connect): block until the API receives the OTP
+                otp_code = self._mfa_callback()
+            else:
+                # Local dev: prompt in the terminal
+                bank_name = self._cfg["bank_display_name"]
+                otp_code = input(f"\n[{bank_name}] Enter the OTP sent to your phone/email: ").strip()
 
         self._page.fill(mfa_sel["otp_field"], otp_code)
         self._page.click(mfa_sel["submit_button"])
@@ -925,16 +984,21 @@ class BankCrawler:
                     "    playwright install firefox\n"
                 ) from None
         else:
+            # Add sandbox-disable flags when running headless (required inside Docker / Cloud Run)
+            extra_args = (
+                ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                if use_headless else []
+            )
             try:
                 self._browser = self._pw.chromium.launch(
                     headless=use_headless,
                     channel=channel,
-                    args=["--disable-extensions"],
+                    args=["--disable-extensions"] + extra_args,
                 )
             except Exception:
                 self._browser = self._pw.chromium.launch(
                     headless=use_headless,
-                    args=["--disable-extensions"],
+                    args=["--disable-extensions"] + extra_args,
                 )
 
         # WebKit uses Safari's UA automatically; real Chrome channel uses its own UA.

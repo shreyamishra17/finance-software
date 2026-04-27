@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import os
+import queue as _queue
 import tempfile
 import threading
 import time
+import uuid as _uuid
 import webbrowser
 from datetime import datetime, timedelta
 from email.parser import BytesParser
@@ -86,6 +88,76 @@ def _period_to_since_date(period: str) -> datetime | None:
     return mapping.get(period, mapping["1m"])
 
 
+# ------------------------------------------------------------------ #
+# Smart Connect — server-side automated login state
+# ------------------------------------------------------------------ #
+
+# session_id → {status, mfa_queue, result, error, bank_key, account_id}
+_smart_sessions: dict = {}
+
+
+def _smart_connect_worker(
+    session_id: str,
+    bank_key: str,
+    username: str,
+    password: str,
+) -> None:
+    """Background thread: runs headless Playwright login + scrape for Smart Connect."""
+    import sys
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from bank_fetcher import scrape_automated, _load_fetcher_config
+
+    session = _smart_sessions[session_id]
+
+    def mfa_callback() -> str:
+        """Block until the user submits the OTP via /api/smart-connect/mfa."""
+        session["status"] = "mfa_required"
+        try:
+            otp = session["mfa_queue"].get(timeout=300)  # 5-minute window
+            session["status"] = "scraping"
+            return otp
+        except _queue.Empty:
+            raise RuntimeError("MFA timed out — no code received within 5 minutes.")
+
+    try:
+        session["status"] = "logging_in"
+        cfg = _load_fetcher_config(bank_key)
+        display_name = cfg.get("bank_display_name", bank_key)
+        account_id = add_account(bank_key, display_name, sync_period="1y")
+        session["account_id"] = account_id
+
+        since_date = datetime.now() - timedelta(days=365)
+        transactions, last_url, ending_balance, _ = scrape_automated(
+            bank_key=bank_key,
+            username=username,
+            password=password,
+            mfa_callback=mfa_callback,
+            since_date=since_date,
+        )
+
+        session["status"] = "categorizing"
+        _categorize_scraped(transactions)
+        store_transactions(account_id, transactions)
+        update_last_synced(account_id, datetime.now())
+        if last_url:
+            set_last_url(account_id, last_url)
+        if ending_balance:
+            set_account_balance(account_id, ending_balance)
+        set_needs_login(account_id, False)
+
+        session["status"] = "done"
+        session["result"] = {
+            "account":      get_account(account_id),
+            "count":        len(transactions),
+            "transactions": transactions,
+        }
+    except Exception as exc:
+        session["status"] = "error"
+        session["error"] = str(exc)
+        print(f"[smart-connect] error in session {session_id}: {exc}", flush=True)
+
+
 class DemoHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(WEB_ROOT), **kwargs)
@@ -148,6 +220,9 @@ class DemoHandler(SimpleHTTPRequestHandler):
                     return
                 self._handle_get_transactions(acct_id)
                 return
+        if path == "/api/smart-connect/status":
+            self._handle_smart_connect_status()
+            return
         if path == "/":
             self.path = "/about.html"
         return super().do_GET()
@@ -190,6 +265,12 @@ class DemoHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/smart-connect/start":
+            self._handle_smart_connect_start()
+            return
+        if path == "/api/smart-connect/mfa":
+            self._handle_smart_connect_mfa()
+            return
         if path == "/api/connect-bank":
             self._handle_connect_bank()
             return
@@ -336,6 +417,77 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 pass
 
         self._send_json(HTTPStatus.OK, payload)
+
+    # ------------------------------------------------------------------ #
+    # Smart Connect endpoints
+    # ------------------------------------------------------------------ #
+
+    def _handle_smart_connect_start(self) -> None:
+        """POST /api/smart-connect/start — kick off automated headless login."""
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length)) if length else {}
+        bank_key = body.get("bank_key", "").strip()
+        username  = body.get("username", "").strip()
+        password  = body.get("password", "")
+
+        if not bank_key or not username or not password:
+            self._send_json(HTTPStatus.BAD_REQUEST,
+                            {"error": "bank_key, username, and password are required"})
+            return
+
+        session_id = str(_uuid.uuid4())
+        _smart_sessions[session_id] = {
+            "status":    "starting",
+            "mfa_queue": _queue.Queue(),
+            "result":    None,
+            "error":     None,
+            "account_id": None,
+            "bank_key":  bank_key,
+        }
+
+        threading.Thread(
+            target=_smart_connect_worker,
+            args=(session_id, bank_key, username, password),
+            daemon=True,
+            name=f"smart-connect-{session_id[:8]}",
+        ).start()
+
+        self._send_json(HTTPStatus.OK, {"session_id": session_id, "status": "starting"})
+
+    def _handle_smart_connect_mfa(self) -> None:
+        """POST /api/smart-connect/mfa — deliver OTP to the waiting browser thread."""
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length)) if length else {}
+        session_id = body.get("session_id", "")
+        otp = body.get("otp", "").strip()
+
+        session = _smart_sessions.get(session_id)
+        if not session:
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Session not found"})
+            return
+        if not otp:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "otp is required"})
+            return
+
+        session["mfa_queue"].put(otp)
+        self._send_json(HTTPStatus.OK, {"status": "ok"})
+
+    def _handle_smart_connect_status(self) -> None:
+        """GET /api/smart-connect/status?session_id=<id> — poll for progress."""
+        qs = parse_qs(urlparse(self.path).query)
+        session_id = qs.get("session_id", [""])[0]
+
+        session = _smart_sessions.get(session_id)
+        if not session:
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Session not found"})
+            return
+
+        resp: dict = {"status": session["status"]}
+        if session.get("error"):
+            resp["error"] = session["error"]
+        if session.get("result"):
+            resp.update(session["result"])
+        self._send_json(HTTPStatus.OK, resp)
 
     def _handle_connect_bank(self) -> None:
         """POST /api/connect-bank — open browser, log in, return transactions for requested period."""

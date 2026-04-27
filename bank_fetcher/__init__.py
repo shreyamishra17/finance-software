@@ -88,6 +88,37 @@ def scrape_recent_transactions(
     return txns, last_url, crawler._ending_balance, crawler._starting_balance
 
 
+def scrape_automated(
+    bank_key: str,
+    username: str,
+    password: str,
+    mfa_callback=None,
+    since_date: datetime | None = None,
+) -> tuple[list[dict], str | None, str, str]:
+    """
+    Headless automated scrape using provided credentials (Smart Connect).
+    Returns (transactions, transactions_page_url, ending_balance, starting_balance).
+    """
+    fetcher_cfg = _load_fetcher_config(bank_key)
+    crawler = BankCrawler(fetcher_cfg=fetcher_cfg, raw_dir=DEFAULT_RAW_DIR)
+    records, last_url = crawler.run_scrape_automated(
+        username=username,
+        password=password,
+        mfa_callback=mfa_callback,
+        since_date=since_date,
+    )
+    txns = [
+        {
+            "date": r.date,
+            "description": r.description,
+            "amount": r.amount,
+            "type": r.amount_type,
+        }
+        for r in records
+    ]
+    return txns, last_url, crawler._ending_balance, crawler._starting_balance
+
+
 def scrape_recent_transactions_headless(
     bank_key: str,
     since_date: datetime | None = None,

@@ -2112,6 +2112,114 @@
           loadAccounts();
         }
       });
+
+      // ── Smart Connect ─────────────────────────────────────────────
+      let _scBank = null;
+      let _scSessionId = null;
+      let _scPollTimer = null;
+
+      const _scBankNames = { boa: "Bank of America", capital_one: "Capital One", discover: "Discover" };
+
+      function openSmartConnect(bankKey) {
+        _scBank = bankKey;
+        _scSessionId = null;
+        clearInterval(_scPollTimer);
+
+        document.getElementById("smartConnectBankLabel").textContent = _scBankNames[bankKey] || bankKey;
+        document.getElementById("smartConnectForm").style.display = "";
+        document.getElementById("smartConnectStatus").style.display = "none";
+        document.getElementById("smartConnectMfaSection").style.display = "none";
+        document.getElementById("smartConnectStatusMsg").textContent = "🔐 Logging in…";
+        document.getElementById("smartConnectUsername").value = "";
+        document.getElementById("smartConnectPassword").value = "";
+        document.getElementById("smartConnectOtp").value = "";
+
+        closeBankPicker();
+        document.getElementById("smartConnectOverlay").style.display = "flex";
+      }
+
+      function closeSmartConnect(event) {
+        if (event && event.target !== document.getElementById("smartConnectOverlay")) return;
+        clearInterval(_scPollTimer);
+        document.getElementById("smartConnectOverlay").style.display = "none";
+      }
+
+      async function startSmartConnect() {
+        const username = document.getElementById("smartConnectUsername").value.trim();
+        const password = document.getElementById("smartConnectPassword").value;
+        if (!username || !password) { alert("Please enter your username and password."); return; }
+
+        document.getElementById("smartConnectForm").style.display = "none";
+        document.getElementById("smartConnectStatus").style.display = "";
+        document.getElementById("smartConnectStatusMsg").textContent = "🔐 Logging in…";
+
+        try {
+          const resp = await _apiFetch("/api/smart-connect/start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ bank_key: _scBank, username, password }),
+          });
+          const data = await resp.json();
+          if (!resp.ok || !data.session_id) throw new Error(data.error || "Failed to start session");
+          _scSessionId = data.session_id;
+          _scPollTimer = setInterval(pollSmartConnect, 2000);
+        } catch (err) {
+          document.getElementById("smartConnectStatusMsg").textContent = "❌ " + err.message;
+          setTimeout(() => {
+            document.getElementById("smartConnectStatus").style.display = "none";
+            document.getElementById("smartConnectForm").style.display = "";
+          }, 3000);
+        }
+      }
+
+      async function pollSmartConnect() {
+        if (!_scSessionId) return;
+        try {
+          const resp = await _apiFetch("/api/smart-connect/status?session_id=" + _scSessionId);
+          const data = await resp.json();
+          const msg = document.getElementById("smartConnectStatusMsg");
+          const mfaSection = document.getElementById("smartConnectMfaSection");
+
+          if (data.status === "mfa_required") {
+            msg.textContent = "📱 Enter the security code sent to your phone or email:";
+            mfaSection.style.display = "";
+            clearInterval(_scPollTimer);
+          } else if (data.status === "done") {
+            clearInterval(_scPollTimer);
+            msg.textContent = "✅ Imported! Loading your data…";
+            setTimeout(() => {
+              document.getElementById("smartConnectOverlay").style.display = "none";
+              loadAccounts();
+            }, 1200);
+          } else if (data.status === "error") {
+            clearInterval(_scPollTimer);
+            msg.textContent = "❌ " + (data.message || "Something went wrong. Please try again.");
+            setTimeout(() => {
+              document.getElementById("smartConnectStatus").style.display = "none";
+              document.getElementById("smartConnectForm").style.display = "";
+            }, 3500);
+          } else if (data.message) {
+            msg.textContent = data.message;
+          }
+        } catch (_) { /* ignore transient network errors */ }
+      }
+
+      async function submitSmartConnectMfa() {
+        const otp = document.getElementById("smartConnectOtp").value.trim();
+        if (!otp) return;
+        document.getElementById("smartConnectMfaSection").style.display = "none";
+        document.getElementById("smartConnectStatusMsg").textContent = "🔑 Verifying code…";
+        try {
+          await _apiFetch("/api/smart-connect/mfa", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ session_id: _scSessionId, otp }),
+          });
+          _scPollTimer = setInterval(pollSmartConnect, 2000);
+        } catch (err) {
+          document.getElementById("smartConnectStatusMsg").textContent = "❌ " + err.message;
+        }
+      }
     </script>
   <!-- Modals live outside all content containers so display:none on parents never hides them -->
   <div id="bankPickerOverlay" class="bank-picker-overlay" style="display:none" onclick="closeBankPicker(event)">
@@ -2124,19 +2232,25 @@
         </button>
         <div class="bank-picker-divider">— connect your bank —</div>
         <div class="bank-option-row">
-          <button class="bank-option" onclick="connectBank('boa')">
+          <button class="bank-option bank-option-manual" onclick="connectBank('boa')">
             <span class="bank-name">Bank of America</span>
+            <span class="bank-option-method">Open in browser</span>
           </button>
+          <button class="bank-option-auto" onclick="openSmartConnect('boa')">⚡ Let FIFO handle it</button>
         </div>
         <div class="bank-option-row">
-          <button class="bank-option" onclick="connectBank('capital_one')">
+          <button class="bank-option bank-option-manual" onclick="connectBank('capital_one')">
             <span class="bank-name">Capital One</span>
+            <span class="bank-option-method">Open in browser</span>
           </button>
+          <button class="bank-option-auto bank-option-auto-soon" disabled>⚡ Coming soon</button>
         </div>
         <div class="bank-option-row">
-          <button class="bank-option" onclick="connectBank('discover')">
+          <button class="bank-option bank-option-manual" onclick="connectBank('discover')">
             <span class="bank-name">Discover</span>
+            <span class="bank-option-method">Open in browser</span>
           </button>
+          <button class="bank-option-auto bank-option-auto-soon" disabled>⚡ Coming soon</button>
         </div>
       </div>
       <button class="bank-picker-cancel" onclick="closeBankPicker()">Cancel</button>
@@ -2174,6 +2288,46 @@
       </p>
       <button class="demo-sandbox-btn" style="width:100%;margin-bottom:8px" onclick="closeBookmarkletModal(); loadAccounts();">Done — Load My Data</button>
       <button class="bank-picker-cancel" onclick="closeBookmarkletModal()">Cancel</button>
+    </div>
+  </div>
+  <!-- Smart Connect modal -->
+  <div id="smartConnectOverlay" class="bank-picker-overlay" style="display:none" onclick="closeSmartConnect(event)">
+    <div class="bank-picker-modal smart-connect-modal">
+      <div class="bank-picker-title">⚡ Let FIFO handle it</div>
+      <div id="smartConnectBankLabel" class="smart-connect-subtitle"></div>
+
+      <!-- Step 1: credential form -->
+      <div id="smartConnectForm">
+        <p class="smart-connect-note">
+          FIFO logs in on your behalf using a secure headless browser.
+          Your credentials are encrypted before storage.
+        </p>
+        <input id="smartConnectUsername" type="text" class="smart-connect-input"
+               placeholder="Online banking username" autocomplete="username" />
+        <input id="smartConnectPassword" type="password" class="smart-connect-input"
+               placeholder="Password" autocomplete="current-password" />
+        <button class="demo-sandbox-btn" style="width:100%;margin-top:6px"
+                onclick="startSmartConnect()">Connect &amp; Import →</button>
+      </div>
+
+      <!-- Step 2: live status -->
+      <div id="smartConnectStatus" style="display:none">
+        <div id="smartConnectStatusMsg" class="smart-connect-status-msg">🔐 Logging in…</div>
+        <div id="smartConnectMfaSection" style="display:none;margin-top:14px">
+          <p style="margin:0 0 8px;font-size:13px;color:var(--text-secondary)">
+            📱 Enter the security code sent to your phone or email:
+          </p>
+          <div style="display:flex;gap:8px">
+            <input id="smartConnectOtp" type="text" inputmode="numeric" maxlength="8"
+                   class="smart-connect-input smart-connect-otp" placeholder="6-digit code"
+                   style="flex:1;margin:0" />
+            <button class="demo-sandbox-btn" style="white-space:nowrap"
+                    onclick="submitSmartConnectMfa()">Submit →</button>
+          </div>
+        </div>
+      </div>
+
+      <button class="bank-picker-cancel" style="margin-top:12px" onclick="closeSmartConnect()">Cancel</button>
     </div>
   </div>
   </body>
