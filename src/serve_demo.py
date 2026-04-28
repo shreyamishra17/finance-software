@@ -275,6 +275,9 @@ class DemoHandler(SimpleHTTPRequestHandler):
         if path == "/api/smart-connect/mfa":
             self._handle_smart_connect_mfa()
             return
+        if path == "/api/smart-connect/extension-ingest":
+            self._handle_smart_connect_extension_ingest()
+            return
         if path == "/api/connect-bank":
             self._handle_connect_bank()
             return
@@ -492,6 +495,66 @@ class DemoHandler(SimpleHTTPRequestHandler):
         if session.get("result"):
             resp.update(session["result"])
         self._send_json(HTTPStatus.OK, resp)
+
+    def _handle_smart_connect_extension_ingest(self) -> None:
+        """POST /api/smart-connect/extension-ingest
+
+        Accepts transactions scraped by the FIFO Chrome extension running in the
+        user's own browser.  No Playwright / headless Chromium involved — the
+        user logs in themselves so there is zero bot-detection risk.
+
+        Body JSON:
+          {
+            "bank_key":       "boa",
+            "transactions":   [...],        # list of {date, description, amount, ...}
+            "ending_balance": "1234.56"     # optional
+          }
+        """
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length)) if length else {}
+
+        bank_key = body.get("bank_key", "").strip()
+        transactions = body.get("transactions", [])
+        ending_balance = body.get("ending_balance")
+
+        if not bank_key:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "bank_key is required"})
+            return
+        if not isinstance(transactions, list):
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "transactions must be a list"})
+            return
+
+        try:
+            import sys
+            if str(ROOT) not in sys.path:
+                sys.path.insert(0, str(ROOT))
+            from bank_fetcher import _load_fetcher_config
+
+            cfg = _load_fetcher_config(bank_key)
+            display_name = cfg.get("bank_display_name", bank_key)
+
+            account_id = add_account(bank_key, display_name, sync_period="1y")
+            _categorize_scraped(transactions)
+            store_transactions(account_id, transactions)
+            update_last_synced(account_id, datetime.now())
+            if ending_balance:
+                set_account_balance(account_id, ending_balance)
+            set_needs_login(account_id, False)
+
+            print(
+                f"[extension-ingest] {bank_key}: stored {len(transactions)} txns "
+                f"for account_id={account_id}",
+                flush=True,
+            )
+
+            self._send_json(HTTPStatus.OK, {
+                "account":      get_account(account_id),
+                "count":        len(transactions),
+                "transactions": transactions,
+            })
+        except Exception as exc:
+            print(f"[extension-ingest] error: {exc}", flush=True)
+            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
 
     def _handle_connect_bank(self) -> None:
         """POST /api/connect-bank — open browser, log in, return transactions for requested period."""

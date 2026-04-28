@@ -1,0 +1,54 @@
+{
+  "manifest_version": 3,
+  "name": "FIFO Bank Connector",
+  "version": "1.0.0",
+  "description": "Sync your bank transactions to FIFO — securely, from your own browser.",
+
+  "permissions": [
+    "tabs",
+    "scripting",
+    "storage"
+  ],
+
+  "host_permissions": [
+    "https://www.bankofamerica.com/*",
+    "https://secure.bankofamerica.com/*",
+    "https://finance-demo-486722019708.us-central1.run.app/*",
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8000/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.pages.dev/*",
+        "http://localhost:8000/*",
+        "http://127.0.0.1:8000/*",
+        "https://finance-demo-486722019708.us-central1.run.app/*"
+      ],
+      "js": ["content_scripts/fifo_bridge.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "FIFO Bank Connector",
+    "default_icon": {
+      "16":  "icons/icon16.png",
+      "48":  "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+
+  "icons": {
+    "16":  "icons/icon16.png",
+    "48":  "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
