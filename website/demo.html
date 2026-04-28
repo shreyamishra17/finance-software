@@ -2115,14 +2115,12 @@
 
       // ── Smart Connect ─────────────────────────────────────────────
       // ── Smart Connect ─────────────────────────────────────────────────────── //
-      // Uses the FIFO Chrome Extension when installed (recommended).
-      // The extension opens BofA in the user's real browser — no bot detection.
+      // Uses the FIFO Chrome Extension — users install it once, then bank
+      // connections are fully automatic. No credentials ever leave their device.
 
       let _scBank = null;
-
       const _scBankNames = { boa: "Bank of America", capital_one: "Capital One", discover: "Discover" };
 
-      /** Returns true if the FIFO Chrome Extension is installed. */
       function _scExtensionInstalled() {
         return typeof window.__FIFO_EXTENSION !== "undefined";
       }
@@ -2130,23 +2128,15 @@
       function openSmartConnect(bankKey) {
         _scBank = bankKey;
         closeBankPicker();
-
         document.getElementById("smartConnectBankLabel").textContent = _scBankNames[bankKey] || bankKey;
 
         if (_scExtensionInstalled()) {
-          // Extension path: hide credential form, show status, trigger immediately
-          document.getElementById("smartConnectForm").style.display = "none";
+          _scShowStatus("⚡ Opening your bank…");
           document.getElementById("smartConnectInstallPrompt").style.display = "none";
-          document.getElementById("smartConnectStatus").style.display = "";
-          document.getElementById("smartConnectMfaSection").style.display = "none";
-          document.getElementById("smartConnectStatusMsg").textContent = "⚡ Opening your bank…";
           document.getElementById("smartConnectOverlay").style.display = "flex";
-          _scStartViaExtension();
+          _scTrigger();
         } else {
-          // No extension: show install prompt
-          document.getElementById("smartConnectForm").style.display = "none";
           document.getElementById("smartConnectStatus").style.display = "none";
-          document.getElementById("smartConnectMfaSection").style.display = "none";
           document.getElementById("smartConnectInstallPrompt").style.display = "";
           document.getElementById("smartConnectOverlay").style.display = "flex";
         }
@@ -2154,58 +2144,44 @@
 
       function closeSmartConnect(event) {
         if (event && event.target !== document.getElementById("smartConnectOverlay")) return;
+        window.removeEventListener("message", _scOnMessage);
         document.getElementById("smartConnectOverlay").style.display = "none";
       }
 
-      // ── Extension path ────────────────────────────────────────────────────── //
-
-      function _scStartViaExtension() {
-        const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-        const apiBase = isLocal ? window.location.origin : CLOUD_API_BASE;
-
-        // Listen for status messages from the extension (via fifo_bridge.js)
-        window.addEventListener("message", _scHandleExtensionMessage);
-
-        // Send start request to extension via postMessage → fifo_bridge.js → background.js
-        window.postMessage({
-          type:    "FIFO_SMART_CONNECT",
-          bank:    _scBank,
-          apiBase: apiBase,
-        }, "*");
+      function _scShowStatus(text) {
+        document.getElementById("smartConnectInstallPrompt").style.display = "none";
+        document.getElementById("smartConnectStatus").style.display = "";
+        document.getElementById("smartConnectStatusMsg").textContent = text;
       }
 
-      function _scHandleExtensionMessage(event) {
+      function _scTrigger() {
+        const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+        window.addEventListener("message", _scOnMessage);
+        window.postMessage({ type: "FIFO_SMART_CONNECT", bank: _scBank,
+                             apiBase: isLocal ? location.origin : CLOUD_API_BASE }, "*");
+      }
+
+      function _scOnMessage(event) {
         if (event.source !== window) return;
         const msg = event.data;
         if (!msg || msg.type !== "FIFO_SYNC_STATUS") return;
-
-        const statusEl = document.getElementById("smartConnectStatusMsg");
-
-        switch (msg.status) {
-          case "logging_in":
-            statusEl.textContent = "🔐 Opening your bank — please log in…";
-            break;
-          case "scraping":
-            statusEl.textContent = "📋 Reading your transactions…";
-            break;
-          case "saving":
-            statusEl.textContent = "💾 " + (msg.message || "Saving…");
-            break;
-          case "done":
-            window.removeEventListener("message", _scHandleExtensionMessage);
-            statusEl.textContent = "✅ Imported " + (msg.data?.count ?? 0) + " transactions!";
-            setTimeout(() => {
-              document.getElementById("smartConnectOverlay").style.display = "none";
-              loadAccounts();
-            }, 1400);
-            break;
-          case "error":
-            window.removeEventListener("message", _scHandleExtensionMessage);
-            statusEl.textContent = "❌ " + (msg.message || "Something went wrong. Please try again.");
-            setTimeout(() => {
-              document.getElementById("smartConnectOverlay").style.display = "none";
-            }, 4000);
-            break;
+        const labels = {
+          logging_in: "🔐 Log into your bank in the new tab…",
+          scraping:   "📋 Reading your transactions…",
+          saving:     "💾 Saving to your account…",
+        };
+        if (labels[msg.status]) { _scShowStatus(labels[msg.status]); return; }
+        if (msg.status === "done") {
+          window.removeEventListener("message", _scOnMessage);
+          _scShowStatus("✅ Connected! " + (msg.data?.count ?? 0) + " transactions imported.");
+          setTimeout(() => {
+            document.getElementById("smartConnectOverlay").style.display = "none";
+            loadAccounts();
+          }, 1400);
+        } else if (msg.status === "error") {
+          window.removeEventListener("message", _scOnMessage);
+          _scShowStatus("❌ " + (msg.message || "Something went wrong. Please try again."));
+          setTimeout(() => { document.getElementById("smartConnectOverlay").style.display = "none"; }, 4000);
         }
       }
     </script>
@@ -2284,37 +2260,40 @@
       <div class="bank-picker-title">⚡ Let FIFO handle it</div>
       <div id="smartConnectBankLabel" class="smart-connect-subtitle"></div>
 
-      <!-- Extension not installed: prompt to install -->
+      <!-- State A: extension not installed → one-time setup prompt -->
       <div id="smartConnectInstallPrompt" style="display:none">
-        <p class="smart-connect-note" style="margin-bottom:14px">
-          ⚡ <strong>FIFO Browser Extension required.</strong><br>
-          The extension lets FIFO read your transactions directly from your bank's website —
-          no credentials stored, no bot detection.
+        <p class="smart-connect-note" style="margin-bottom:16px;line-height:1.6">
+          FIFO uses a browser extension to securely read your transactions.<br>
+          Install it once — then connecting any bank takes one click.
         </p>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:4px">
+          <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:#555">
+            <span style="font-size:18px">🔒</span> Your bank credentials never leave your device
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:#555">
+            <span style="font-size:18px">⚡</span> Future syncs happen in the background automatically
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:#555">
+            <span style="font-size:18px">🏦</span> Works with every bank, no extra configuration
+          </div>
+        </div>
         <a class="demo-sandbox-btn"
-           href="https://github.com/rishuandshreya/FIFO/releases/latest"
+           href="https://chrome.google.com/webstore/detail/fifo-bank-connector"
            target="_blank" rel="noopener"
-           style="display:block;text-align:center;text-decoration:none;width:100%;box-sizing:border-box">
-          Install FIFO Extension →
+           style="display:block;text-align:center;text-decoration:none;width:100%;box-sizing:border-box;margin-top:16px">
+          Add FIFO to Chrome — it's free →
         </a>
-        <p style="margin-top:10px;font-size:12px;color:#888;text-align:center">
+        <p style="margin-top:10px;font-size:12px;color:#aaa;text-align:center">
           After installing, reload this page and try again.
         </p>
       </div>
 
-      <!-- Extension installed: hidden placeholder form (not used in extension flow) -->
-      <div id="smartConnectForm" style="display:none">
-        <input id="smartConnectUsername" type="text" style="display:none" />
-        <input id="smartConnectPassword" type="password" style="display:none" />
-      </div>
-
-      <!-- Live status (shown during extension sync) -->
+      <!-- State B: extension installed → live sync status -->
       <div id="smartConnectStatus" style="display:none">
         <div id="smartConnectStatusMsg" class="smart-connect-status-msg">⚡ Opening your bank…</div>
-        <div id="smartConnectMfaSection" style="display:none"></div>
       </div>
 
-      <button class="bank-picker-cancel" style="margin-top:12px" onclick="closeSmartConnect()">Cancel</button>
+      <button class="bank-picker-cancel" style="margin-top:16px" onclick="closeSmartConnect()">Cancel</button>
     </div>
   </div>
   </body>

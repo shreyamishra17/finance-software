@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import platform
 import plistlib
 import re
@@ -961,6 +962,17 @@ class BankCrawler:
         )
         if storage_state is not None:
             ctx_kwargs["storage_state"] = str(storage_state)
+
+        # Residential proxy — set PROXY_URL env var on Cloud Run to route headless
+        # Chromium through a non-datacenter IP so banks don't flag it as a bot.
+        # Format: http://user:pass@host:port  (Bright Data / Oxylabs / Smartproxy etc.)
+        # When not set (local dev, CI), traffic goes direct — no change in behaviour.
+        proxy_url = os.environ.get("PROXY_URL", "").strip()
+        if proxy_url and use_headless:
+            ctx_kwargs["proxy"] = {"server": proxy_url}
+            print(f"  Proxy: residential proxy active (headless)")
+        elif use_headless:
+            print(f"  Proxy: none (set PROXY_URL env var on Cloud Run to enable)")
 
         print(f"  Browser: {engine}{f' ({channel})' if channel else ''}")
 
