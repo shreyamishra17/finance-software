@@ -15,7 +15,7 @@
     "headless": false,
     "timeouts_ms": {
         "page_load": 60000,
-        "element_wait": 10000,
+        "element_wait": 30000,
         "download_wait": 60000
     },
     "max_statements": 12,

@@ -985,8 +985,14 @@ class BankCrawler:
                 ) from None
         else:
             # Add sandbox-disable flags when running headless (required inside Docker / Cloud Run)
+            # Extra args reduce bot-detection signals from headless Chromium
             extra_args = (
-                ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                [
+                    "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-infobars",
+                    "--window-size=1280,800",
+                ]
                 if use_headless else []
             )
             try:
