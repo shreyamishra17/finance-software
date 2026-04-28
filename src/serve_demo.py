@@ -337,7 +337,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 return
         # Parse a PDF statement and return structured JSON.
         if path != "/api/parse":
-            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found", "v": "v4", "got": path})
             return
 
         ctype = self.headers.get("Content-Type", "")

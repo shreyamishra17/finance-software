@@ -5,6 +5,7 @@ firebase-admin
 google-cloud-firestore
 playwright
 pyotp
+keyring
 pandas
 scikit-learn
 joblib
