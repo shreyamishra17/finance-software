@@ -33,7 +33,7 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          docker build -t us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/finance-demo/finance-demo:latest .
+          docker build --no-cache -t us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/finance-demo/finance-demo:latest .
           docker push us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/finance-demo/finance-demo:latest
 
       - name: Deploy to Cloud Run
