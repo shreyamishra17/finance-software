@@ -12,10 +12,16 @@ set -e
 PROJECT=$(gcloud config get-value project 2>/dev/null)
 SERVICE="finance-demo"
 REGION="us-central1"
-IMAGE="gcr.io/${PROJECT}/${SERVICE}"
+IMAGE="us-central1-docker.pkg.dev/${PROJECT}/${SERVICE}/${SERVICE}:latest"
 
-echo "→ Building Docker image: ${IMAGE}"
-gcloud builds submit --tag "${IMAGE}" .
+echo "→ Configuring Docker for Artifact Registry"
+gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+echo "→ Building Docker image locally: ${IMAGE}"
+docker build -t "${IMAGE}" .
+
+echo "→ Pushing image to Artifact Registry"
+docker push "${IMAGE}"
 
 echo "→ Deploying to Cloud Run (min-instances=1 to keep DB alive between requests)"
 gcloud run deploy "${SERVICE}" \

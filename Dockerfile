@@ -28,6 +28,7 @@ RUN playwright install chromium
 COPY . /app
 
 ENV PORT=8000
+ENV PYTHONPATH=/app
 EXPOSE 8000
 
 CMD ["python", "src/serve_demo.py"]

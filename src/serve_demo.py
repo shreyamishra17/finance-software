@@ -1086,6 +1086,7 @@ def _backfill_missing_categories() -> None:
 
 
 def main() -> int:
+    print("FIFO server v2 — smart-connect=YES pythonpath=YES", flush=True)
     init_db()
     _backfill_missing_categories()
     _start_auto_sync_scheduler()
