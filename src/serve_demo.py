@@ -184,6 +184,9 @@ class DemoHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/version":
+            self._send_json(HTTPStatus.OK, {"version": "v3", "smart_connect": True})
+            return
         if path == "/api/accounts":
             self._handle_get_accounts()
             return
@@ -265,6 +268,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        print(f"[POST] raw={self.path!r} parsed={path!r}", flush=True)
         if path == "/api/smart-connect/start":
             self._handle_smart_connect_start()
             return
