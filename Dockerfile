@@ -27,6 +27,11 @@ RUN playwright install chromium
 
 COPY . /app
 
+# Verify the correct version of serve_demo.py was copied (build fails if stale)
+RUN grep -q "smart-connect/start" /app/src/serve_demo.py && \
+    echo "✓ serve_demo.py verified" || \
+    (echo "ERROR: serve_demo.py is missing smart-connect routes!" && exit 1)
+
 ENV PORT=8000
 ENV PYTHONPATH=/app
 EXPOSE 8000
