@@ -1754,24 +1754,29 @@
 
       async function reloginAccount(event, accountId) {
         event.stopPropagation();
-        const btn = event.currentTarget;
-        btn.disabled = true;
-        btn.textContent = "Opening browser…";
-        const status = document.getElementById("connectBankStatus");
-        status.style.display = "block";
-        status.textContent = "Opening browser — log in and complete OTP. Transactions will sync automatically when the browser closes.";
-        try {
-          const resp = await _apiFetch(`/api/accounts/${accountId}/relogin`, { method: "POST" });
-          const data = await resp.json();
-          if (!resp.ok) throw new Error(data.error || data.detail || "Re-login failed");
-          const newTx = data.count || 0;
-          status.textContent = `Re-login successful — ${newTx} new transaction${newTx !== 1 ? "s" : ""} added.`;
-          await loadAccounts();
-          await loadAccountTransactions(accountId);
-        } catch (err) {
-          status.textContent = `Error: ${err.message}`;
-          btn.disabled = false;
-          btn.textContent = "Re-login →";
+        const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+
+        if (isLocal) {
+          // Local: server opens the browser directly, no extension needed
+          const item = event.currentTarget;
+          const meta = item.querySelector(".sidebar-acct-meta");
+          if (meta) meta.textContent = "Opening browser…";
+          try {
+            const resp = await _apiFetch(`/api/accounts/${accountId}/relogin`, { method: "POST" });
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || "Re-login failed");
+            await loadAccounts();
+            await loadAccountTransactions(accountId);
+          } catch (err) {
+            if (meta) meta.textContent = "Tap to re-connect →";
+            alert("Re-login failed: " + err.message);
+          }
+        } else {
+          // Prod: use extension flow
+          const allAccounts = await _apiFetch("/api/accounts").then(r => r.json()).catch(() => []);
+          const acct = (Array.isArray(allAccounts) ? allAccounts : allAccounts.accounts || [])
+                         .find(a => a.id === accountId);
+          openSmartConnect(acct?.bank_key || "boa");
         }
       }
 
@@ -1964,11 +1969,11 @@
           : (isSandbox ? '<span class="sidebar-sandbox-badge">demo</span>' : "");
         return `
           <div class="sidebar-account-item${isActive ? " is-active" : ""}${needsAuth ? " needs-reauth" : ""}" data-id="${acct.id}"
-               onclick="loadAccountTransactions(${acct.id})">
+               onclick="${needsAuth ? `reloginAccount(event,${acct.id})` : `loadAccountTransactions(${acct.id})`}">
             <span class="sidebar-acct-dot${needsAuth ? " dot-pulse" : ""}" style="background:${dotColor}"></span>
             <div class="sidebar-acct-info">
               <span class="sidebar-acct-name">${cleanName}</span>
-              <span class="sidebar-acct-meta">${needsAuth ? "Session expired" : typeStr + hint}</span>
+              <span class="sidebar-acct-meta">${needsAuth ? "Tap to re-connect →" : typeStr + hint}</span>
             </div>
             ${statusBadge}
           </div>`;

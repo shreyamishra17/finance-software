@@ -17,7 +17,10 @@
         "logout_url": "https://www.capitalone.com/sign-out/"
     },
     "interactive_login_steps": [
-        {"action": "goto", "url": "https://verified.capitalone.com/auth/signin"},
+        {
+            "action": "goto",
+            "url": "https://verified.capitalone.com/auth/signin"
+        },
         {
             "action": "wait_for_url",
             "pattern": "**/accountSummary**",
@@ -25,7 +28,7 @@
         },
         {
             "action": "inject_banner",
-            "message": "FIFO: Capital One — Logged in! Click on your credit card account. Browser closes automatically."
+            "message": "FIFO: Capital One \u2014 Logged in! Click on your credit card account. Browser closes automatically."
         },
         {
             "action": "wait_for_url",
@@ -44,9 +47,10 @@
         "row_selector": "c1-ease-row.c1-ease-table__row",
         "view_more_selector": "button.c1-ease-card-transactions-view__load-next-statement--button",
         "columns": {
-            "date":        ".cdk-column-date",
+            "date": ".cdk-column-date",
             "description": ".cdk-column-description",
-            "amount":      ".cdk-column-amount"
+            "amount": ".cdk-column-amount"
         }
-    }
+    },
+    "browser_engine": "chromium"
 }

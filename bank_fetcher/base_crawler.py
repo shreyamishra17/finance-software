@@ -333,9 +333,12 @@ class BankCrawler:
                 if (!b) {{
                     b = document.createElement('div');
                     b.id = '__fifo_banner__';
-                    b.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#1a6b3c;'
-                        + 'color:#fff;padding:10px 16px;font-size:13px;font-family:sans-serif;'
-                        + 'z-index:2147483647;text-align:center;box-shadow:0 2px 6px rgba(0,0,0,.3);';
+                    b.style.cssText = 'position:fixed;top:0;left:0;right:0;'
+                        + 'background:linear-gradient(90deg,#d4f0e8 0%,#fce4f0 100%);'
+                        + 'color:#1f5f55;padding:0 16px;font-size:13px;font-weight:600;line-height:38px;'
+                        + 'font-family:-apple-system,sans-serif;z-index:2147483647;text-align:center;'
+                        + 'border-bottom:1.5px solid rgba(31,95,85,.15);'
+                        + 'box-shadow:0 2px 12px rgba(31,95,85,.08);letter-spacing:.01em;';
                     document.body.prepend(b);
                 }}
                 b.textContent = '{safe_msg}';
@@ -1019,10 +1022,13 @@ class BankCrawler:
                     args=["--disable-extensions"] + extra_args,
                 )
 
-        # WebKit uses Safari's UA automatically; real Chrome channel uses its own UA.
-        # Only override for bundled Chromium (channel=None), which otherwise exposes
-        # "Chrome for Testing" in its user agent string.
-        if engine != "webkit" and channel is None:
+        # Config can override user agent (e.g. Discover needs a current UA to pass browser check).
+        # Fall back to a modern Chrome UA for bundled Chromium (channel=None) which otherwise
+        # exposes "Chrome for Testing" in its user agent string.
+        cfg_ua = self._cfg.get("user_agent")
+        if cfg_ua:
+            ctx_kwargs["user_agent"] = cfg_ua
+        elif engine != "webkit" and channel is None:
             ctx_kwargs["user_agent"] = (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "

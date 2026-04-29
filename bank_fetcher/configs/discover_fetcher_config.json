@@ -8,7 +8,6 @@
     "keyring_totp_secret_key": "discover_totp_secret",
     "mfa_mode": "otp_interactive",
     "headless": false,
-    "browser_channel": "chrome",
     "timeouts_ms": {
         "page_load": 60000,
         "element_wait": 10000,
@@ -18,7 +17,10 @@
         "logout_url": "https://portal.discover.com/customerSvcs2/universalLogin/logout"
     },
     "interactive_login_steps": [
-        {"action": "goto", "url": "https://portal.discover.com/customerSvcs2/universalLogin/login_flow"},
+        {
+            "action": "goto",
+            "url": "https://portal.discover.com/customerSvcs2/universalLogin/login_flow"
+        },
         {
             "action": "wait_for_url",
             "pattern": "**/home**",
@@ -26,7 +28,7 @@
         },
         {
             "action": "inject_banner",
-            "message": "FIFO: Discover — Logged in! Click on your credit card account, then navigate to the full transaction list. Browser closes automatically."
+            "message": "FIFO: Discover \u2014 Logged in! Click on your credit card account, then navigate to the full transaction list. Browser closes automatically."
         },
         {
             "action": "wait_for_url",
@@ -45,9 +47,11 @@
         "row_selector": "TODO: run dom_discovery.js on the transactions page to get this",
         "view_more_selector": "TODO: run dom_discovery.js on the transactions page to get this",
         "columns": {
-            "date":        "TODO",
+            "date": "TODO",
             "description": "TODO",
-            "amount":      "TODO"
+            "amount": "TODO"
         }
-    }
+    },
+    "browser_engine": "chromium",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 }

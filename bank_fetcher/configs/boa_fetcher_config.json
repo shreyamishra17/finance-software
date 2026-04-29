@@ -112,5 +112,6 @@
             "amount_type": "td:nth-child(3)",
             "balance": "td:nth-child(5)"
         }
-    }
+    },
+    "browser_engine": "chromium"
 }

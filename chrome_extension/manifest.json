@@ -11,8 +11,16 @@
   ],
 
   "host_permissions": [
-    "https://www.bankofamerica.com/*",
-    "https://secure.bankofamerica.com/*",
+    "https://*.bankofamerica.com/*",
+    "https://*.chase.com/*",
+    "https://*.capitalone.com/*",
+    "https://*.discover.com/*",
+    "https://*.wellsfargo.com/*",
+    "https://*.citibank.com/*",
+    "https://*.citi.com/*",
+    "https://*.americanexpress.com/*",
+    "https://*.usbank.com/*",
+    "https://*.tdbank.com/*",
     "https://finance-demo-486722019708.us-central1.run.app/*",
     "http://localhost:8000/*",
     "http://127.0.0.1:8000/*"

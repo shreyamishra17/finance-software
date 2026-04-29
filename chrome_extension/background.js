@@ -203,9 +203,12 @@ function injectFifoBanner(message) {
   banner.id = "__fifo_banner__";
   banner.style.cssText = [
     "position:fixed", "top:0", "left:0", "right:0", "z-index:2147483647",
-    "background:#1f5f55", "color:#fff", "font:700 14px/40px sans-serif",
+    "background:linear-gradient(90deg,#d4f0e8 0%,#fce4f0 100%)",
+    "color:#1f5f55", "font:600 13px/38px sans-serif",
     "text-align:center", "padding:0 16px", "pointer-events:none",
-    "box-shadow:0 2px 8px rgba(0,0,0,.25)",
+    "border-bottom:1.5px solid rgba(31,95,85,.15)",
+    "box-shadow:0 2px 12px rgba(31,95,85,.08)",
+    "letter-spacing:.01em",
   ].join(";");
   banner.textContent = message;
   document.body.prepend(banner);
