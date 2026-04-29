@@ -6,7 +6,7 @@
  */
 
 const FIFO_API_BASE = "https://finance-demo-486722019708.us-central1.run.app";
-const FIFO_APP_URL  = "https://fifo-app.pages.dev";   // Update if Cloudflare URL changes
+const FIFO_APP_URL  = "https://finance-software.pages.dev";
 
 const statusEl = document.getElementById("status");
 
