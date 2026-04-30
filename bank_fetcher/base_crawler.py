@@ -493,12 +493,14 @@ class BankCrawler:
         password: str,
         mfa_callback=None,
         since_date: datetime | None = None,
+        session_save_path: Path | None = None,
     ) -> tuple[list[TransactionRecord], str | None]:
         """
         Headless automated scrape using explicit credentials (Smart Connect / server-side).
         Uses login_steps from the config — skips interactive_login_steps entirely.
         mfa_callback: callable that blocks until the user submits an OTP via the web UI,
                       then returns it as a string. Required when mfa_mode='otp_interactive'.
+        If session_save_path provided, saves fresh session cookies there for next headless reuse.
         """
         from bank_fetcher.credential_manager import BankCredentials
         login_steps = self._cfg.get("login_steps")
@@ -529,6 +531,12 @@ class BankCrawler:
                 self._run_steps(self._cfg.get("transactions_steps", []))
 
             transactions_url = self._page.url
+
+            # Save fresh session cookies before scraping so next headless sync can reuse them
+            if session_save_path:
+                session_save_path.parent.mkdir(parents=True, exist_ok=True)
+                self._context.storage_state(path=str(session_save_path))
+
             page_balance = self._read_page_balance()
             records = self._scrape_transactions(since_date)
             if page_balance and not self._ending_balance:
@@ -537,7 +545,9 @@ class BankCrawler:
         finally:
             self._creds = None
             self._mfa_callback = None
-            self._safe_logout()
+            # Skip logout when saving session — logout invalidates the cookies we just saved
+            if not session_save_path:
+                self._safe_logout()
             self._close_browser()
 
     def _scrape_transactions(self, since_date: datetime | None) -> list[TransactionRecord]:

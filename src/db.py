@@ -269,6 +269,30 @@ def update_transaction_categories(account_id: int, transactions: list[dict]) -> 
         batch.commit()
 
 
+def _normalize_date(raw: str) -> str | None:
+    """Normalize any bank date string to YYYY-MM-DD for comparison.
+    Returns None for unparseable strings like 'Pending' (those always pass the filter).
+    Banks use many formats: MM/DD/YYYY (Capital One), YYYY-MM-DD (BofA), 'May 5' etc.
+    """
+    import re as _re
+    s = raw.strip()
+    if not s:
+        return None
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y", "%b %d, %Y", "%b %d %Y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    # "May 5" or "May 05" — no year, assume current year
+    m = _re.match(r'^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})$', s, _re.I)
+    if m:
+        try:
+            return datetime.strptime(f"{m.group(1)} {m.group(2)} {datetime.now().year}", "%b %d %Y").strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    return None  # "Pending", "Processing", etc. → always include
+
+
 def get_transactions(account_id: int | None = None, since_date: datetime | None = None) -> list[dict]:
     db = _get_db()
     query = db.collection("transactions")
@@ -283,11 +307,20 @@ def get_transactions(account_id: int | None = None, since_date: datetime | None 
     result = []
     for doc in docs:
         data = doc.to_dict()
-        if cutoff and (data.get("date") or "") < cutoff:
-            continue
+        raw_date = (data.get("date") or "").strip()
+        if cutoff:
+            iso = _normalize_date(raw_date)
+            # Only exclude if we successfully parsed the date AND it's before the cutoff
+            if iso and iso < cutoff:
+                continue
+            # If iso is None (Pending, etc.) → always include
         data["bank_name"] = account_names.get(data.get("account_id"), "")
         result.append(data)
-    result.sort(key=lambda r: (r.get("date") or "", r.get("id") or ""), reverse=True)
+    # Sort: pending/no-date float to top, real dates descending
+    result.sort(
+        key=lambda r: (_normalize_date(r.get("date") or "") or "9999-99-99", r.get("id") or ""),
+        reverse=True,
+    )
     return result
 
 

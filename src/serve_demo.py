@@ -1069,41 +1069,77 @@ class DemoHandler(SimpleHTTPRequestHandler):
 
 def _run_due_syncs() -> None:
     """Check all accounts and headlessly sync any that are overdue."""
-    from bank_fetcher import scrape_recent_transactions_headless  # noqa: PLC0415
+    from bank_fetcher import _load_fetcher_config, scrape_recent_transactions_headless  # noqa: PLC0415
     from bank_fetcher.base_crawler import SessionExpiredError  # noqa: PLC0415
+    from bank_fetcher.credential_manager import get_credentials  # noqa: PLC0415
 
     for acct in get_accounts():
         if not acct.get("auto_sync"):
             continue
         last_sync = acct.get("last_synced_at")
         if last_sync:
-            interval_hours = acct.get("sync_interval_hours") or 24
+            interval_hours = acct.get("sync_interval_hours") or 6
             hours_since = (datetime.now() - datetime.fromisoformat(last_sync)).total_seconds() / 3600
             if hours_since < interval_hours:
                 continue
         session_path = ROOT / "data" / "sessions" / f"{acct['id']}.json"
-        if not session_path.exists():
-            continue
         last_url = acct.get("last_url")
-        if not last_url:
-            continue
         since_date = datetime.fromisoformat(last_sync) if last_sync else None
+        bank_key = acct["bank_key"]
         print(f"AUTO-SYNC: syncing {acct['display_name']}…")
+
         try:
-            txns = scrape_recent_transactions_headless(
-                bank_key=acct["bank_key"],
-                since_date=since_date,
-                session_path=session_path,
-                account_url=last_url,
-            )
+            # ── Step 1: try fast headless sync with saved session cookies ──
+            if session_path.exists() and last_url:
+                txns = scrape_recent_transactions_headless(
+                    bank_key=bank_key,
+                    since_date=since_date,
+                    session_path=session_path,
+                    account_url=last_url,
+                )
+            else:
+                raise SessionExpiredError("No saved session — falling back to credential login")
+
             _categorize_scraped(txns)
             store_transactions(acct["id"], txns)
             update_last_synced(acct["id"], datetime.now())
             set_needs_login(acct["id"], False)
             print(f"AUTO-SYNC: {acct['display_name']} — {len(txns)} new transactions")
+
         except SessionExpiredError:
-            set_needs_login(acct["id"], True)
-            print(f"AUTO-SYNC: {acct['display_name']} — session expired, needs manual login")
+            # ── Step 2: session expired — re-login using saved keychain credentials ──
+            print(f"AUTO-SYNC: {acct['display_name']} — session expired, re-logging in with keychain…")
+            try:
+                fetcher_cfg = _load_fetcher_config(bank_key)
+                creds = get_credentials(fetcher_cfg)
+
+                from bank_fetcher.base_crawler import BankCrawler  # noqa: PLC0415
+                from bank_fetcher import DEFAULT_RAW_DIR  # noqa: PLC0415
+                crawler = BankCrawler(fetcher_cfg=fetcher_cfg, raw_dir=DEFAULT_RAW_DIR)
+                records, new_last_url = crawler.run_scrape_automated(
+                    username=creds.username,
+                    password=creds.password,
+                    since_date=since_date,
+                    session_save_path=session_path,   # save fresh session cookies
+                )
+                txns = [
+                    {"date": r.date, "description": r.description,
+                     "amount": r.amount, "type": r.amount_type}
+                    for r in records
+                ]
+                _categorize_scraped(txns)
+                store_transactions(acct["id"], txns)
+                update_last_synced(acct["id"], datetime.now())
+                set_needs_login(acct["id"], False)
+                if new_last_url:
+                    set_last_url(acct["id"], new_last_url)
+                print(f"AUTO-SYNC: {acct['display_name']} — re-login OK, {len(txns)} new transactions")
+
+            except Exception as relogin_exc:
+                # Credentials missing or MFA required — user must log in manually
+                set_needs_login(acct["id"], True)
+                print(f"AUTO-SYNC: {acct['display_name']} — re-login failed ({relogin_exc}), marking needs_login")
+
         except Exception as exc:
             print(f"AUTO-SYNC: {acct['display_name']} — error: {exc}")
 

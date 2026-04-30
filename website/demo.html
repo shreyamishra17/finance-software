@@ -81,13 +81,13 @@
                 <div class="results-summary results-fade" id="resultsSummary"></div>
                 <div class="overview-lower">
                   <div class="overview-chart-card">
-                    <div class="overview-card-label">MONTHLY CASH FLOW</div>
+                    <div class="overview-card-label" id="overviewChartLabel">MONTHLY CASH FLOW</div>
                     <div class="overview-chart-wrap" id="overviewChartWrap">
                       <canvas id="overviewMonthlyChart"></canvas>
                     </div>
                   </div>
                   <div class="overview-recent-card">
-                    <div class="overview-card-label">RECENT TRANSACTIONS</div>
+                    <div class="overview-card-label" id="overviewRecentLabel">RECENT TRANSACTIONS</div>
                     <div id="overviewRecentList" class="overview-recent-list"></div>
                   </div>
                 </div>
@@ -100,14 +100,22 @@
                   <div class="results-summary category-summary" id="categorySummary"></div>
                 </div>
                 <div id="categoryTotal" class="category-total" hidden></div>
-                <div class="period-filter-row" id="periodFilterRow" style="display:none">
-                  <button class="period-btn is-active" data-period="all" onclick="filterByPeriod(this)">All</button>
-                  <button class="period-btn" data-period="1m"  onclick="filterByPeriod(this)">1M</button>
-                  <button class="period-btn" data-period="3m"  onclick="filterByPeriod(this)">3M</button>
-                  <button class="period-btn" data-period="6m"  onclick="filterByPeriod(this)">6M</button>
-                  <button class="period-btn" data-period="1y"  onclick="filterByPeriod(this)">1Y</button>
-                  <button class="period-btn" data-period="ytd" onclick="filterByPeriod(this)">YTD</button>
+                <div class="txn-controls-row" id="periodFilterRow" style="display:none">
+                  <div class="period-filter-pills">
+                    <button class="period-btn is-active" data-period="all" onclick="filterByPeriod(this)">All</button>
+                    <button class="period-btn" data-period="1m"  onclick="filterByPeriod(this)">1M</button>
+                    <button class="period-btn" data-period="3m"  onclick="filterByPeriod(this)">3M</button>
+                    <button class="period-btn" data-period="6m"  onclick="filterByPeriod(this)">6M</button>
+                    <button class="period-btn" data-period="1y"  onclick="filterByPeriod(this)">1Y</button>
+                    <button class="period-btn" data-period="ytd" onclick="filterByPeriod(this)">YTD</button>
+                  </div>
+                  <div class="txn-search-wrap">
+                    <svg class="txn-search-icon" width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="6.5" cy="6.5" r="5" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                    <input id="txnSearchInput" class="txn-search-input" type="text" placeholder="Search merchants, amounts…" oninput="_onTxnSearch(this.value)" />
+                    <button class="txn-search-clear" id="txnSearchClear" onclick="_clearTxnSearch()" style="display:none" title="Clear">✕</button>
+                  </div>
                 </div>
+                <div id="txnSearchNoResults" class="txn-search-no-results" style="display:none">No transactions match "<span id="txnSearchTerm"></span>"</div>
                 <div class="results-table-wrap results-fade">
                   <table class="results-table">
                     <thead>
@@ -188,6 +196,7 @@
       let activeDirectionFilter = null; // "money_in" | "money_out" | null
       let activeMainTab = "overview";
       let _isPdfMode = false;
+      let _txnSearchQuery = ""; // live search query
       let _overviewChartInstance = null;
       const _accountBalanceOverrides = new Map();
       const SANDBOX_DEFAULT_BALANCE = "$8,500.00";
@@ -523,10 +532,30 @@
           });
         }
 
-        const filteredTxns =
+        let filteredTxns =
           categoryFilter && categoryFilter !== "All"
             ? dirFiltered.filter((t) => (t.category || "Uncategorized") === categoryFilter)
             : dirFiltered;
+
+        // Apply live search query
+        if (_txnSearchQuery) {
+          const q = _txnSearchQuery.toLowerCase();
+          filteredTxns = filteredTxns.filter(t => {
+            const merchant = (t.merchant_clean || t.raw_description || "").toLowerCase();
+            const cat      = (t.category || "").toLowerCase();
+            const amount   = (t.amount || "").toString().toLowerCase();
+            const date     = (t.date || "").toLowerCase();
+            return merchant.includes(q) || cat.includes(q) || amount.includes(q) || date.includes(q);
+          });
+        }
+        // Update "no results" state
+        const noResultsEl = document.getElementById("txnSearchNoResults");
+        const termEl      = document.getElementById("txnSearchTerm");
+        if (noResultsEl) {
+          const showEmpty = _txnSearchQuery && filteredTxns.length === 0;
+          noResultsEl.style.display = showEmpty ? "" : "none";
+          if (termEl) termEl.textContent = _txnSearchQuery;
+        }
 
         // Show total spending for the selected category
         if (categoryFilter && categoryFilter !== "All") {
@@ -772,6 +801,66 @@
 
       let currentAccountId = null;
 
+      // Cache of ALL transactions per live account — populated on load, used for client-side filtering
+      const _liveTxnsCache   = {};   // accountId → raw txns array
+      const _liveAcctMetaCache = {}; // accountId → acctMeta
+
+      // Robust date parser — handles every format banks use
+      function _parseTxnDate(raw) {
+        const s = (raw || "").trim();
+        if (!s) return null;
+        // YYYY-MM-DD
+        let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+        // MM/DD/YYYY or M/D/YYYY
+        m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (m) return new Date(+m[3], +m[1] - 1, +m[2]);
+        // MM/DD/YY
+        m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+        if (m) { const y = +m[3] + (+m[3] < 50 ? 2000 : 1900); return new Date(y, +m[1] - 1, +m[2]); }
+        // "May 5" or "May 05" (no year → current year)
+        m = s.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})$/i);
+        if (m) { const d = new Date(`${m[1]} ${m[2]} ${new Date().getFullYear()}`); if (!isNaN(d)) return d; }
+        // "May 5, 2025"
+        m = s.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})/i);
+        if (m) { const d = new Date(`${m[1]} ${m[2]} ${m[3]}`); if (!isNaN(d)) return d; }
+        return null; // "Pending", "Processing", etc → always include
+      }
+
+      function _filterTxnsByPeriod(allTxns, period) {
+        if (!period || period === "all") return allTxns;
+        const now = new Date();
+        let since = null;
+        if      (period === "1m")  since = new Date(now.getFullYear(), now.getMonth() - 1,  now.getDate());
+        else if (period === "3m")  since = new Date(now.getFullYear(), now.getMonth() - 3,  now.getDate());
+        else if (period === "6m")  since = new Date(now.getFullYear(), now.getMonth() - 6,  now.getDate());
+        else if (period === "1y")  since = new Date(now.getFullYear() - 1, now.getMonth(),  now.getDate());
+        else if (period === "ytd") since = new Date(now.getFullYear(), 0, 1);
+        if (!since) return allTxns;
+        return allTxns.filter(t => {
+          const d = _parseTxnDate(t.date || "");
+          if (!d) return true;   // Pending / unparseable → always show
+          return d >= since;
+        });
+      }
+
+      function _onTxnSearch(val) {
+        _txnSearchQuery = val.trim();
+        const clearBtn = document.getElementById("txnSearchClear");
+        if (clearBtn) clearBtn.style.display = _txnSearchQuery ? "" : "none";
+        if (lastPayload) renderTransactions(lastPayload, activeCategory);
+      }
+
+      function _clearTxnSearch() {
+        _txnSearchQuery = "";
+        const input = document.getElementById("txnSearchInput");
+        const clearBtn = document.getElementById("txnSearchClear");
+        if (input) input.value = "";
+        if (clearBtn) clearBtn.style.display = "none";
+        if (lastPayload) renderTransactions(lastPayload, activeCategory);
+        if (input) input.focus();
+      }
+
       function filterByPeriod(btn) {
         if (!currentAccountId) return;
         document.querySelectorAll("#periodFilterRow .period-btn").forEach((b) => b.classList.remove("is-active"));
@@ -779,36 +868,17 @@
         const period = btn.dataset.period;
         const label = document.getElementById("resultsHeading")?.textContent?.trim() || "Account";
 
-        // Offline account — filter static data in-memory, no API call
-        if (_offlineAccounts.has(currentAccountId)) {
-          const acctMeta = _offlineAccounts.get(currentAccountId);
-          const allTxns  = _offlineTxns.get(currentAccountId) || [];
-          const now = new Date();
-          let since = null;
-          if      (period === "1m")  since = new Date(now.getFullYear(), now.getMonth() - 1,  now.getDate());
-          else if (period === "3m")  since = new Date(now.getFullYear(), now.getMonth() - 3,  now.getDate());
-          else if (period === "6m")  since = new Date(now.getFullYear(), now.getMonth() - 6,  now.getDate());
-          else if (period === "1y")  since = new Date(now.getFullYear() - 1, now.getMonth(),  now.getDate());
-          else if (period === "ytd") since = new Date(now.getFullYear(), 0, 1);
-          const txns = since ? allTxns.filter(t => new Date(t.date) >= since) : allTxns;
-          _renderLiveTransactions(txns, label, acctMeta);
-          if (activeMainTab === "insights") loadInsights(currentAccountId, period);
-          return;
-        }
+        // All accounts — filter from in-memory cache (works for offline AND live)
+        const allTxns  = _offlineAccounts.has(currentAccountId)
+          ? (_offlineTxns.get(currentAccountId) || [])
+          : (_liveTxnsCache[currentAccountId]   || []);
+        const acctMeta = _offlineAccounts.has(currentAccountId)
+          ? _offlineAccounts.get(currentAccountId)
+          : (_liveAcctMetaCache[currentAccountId] || null);
 
-        Promise.all([
-          _apiFetch(`/api/accounts/${currentAccountId}/transactions?period=${period}`).then(r => r.json()),
-          _apiFetch("/api/accounts").then(r => r.json()),
-        ]).then(([txns, accounts]) => {
-          const acctMeta = accounts.find(a => a.id === currentAccountId) || null;
-          _renderLiveTransactions(txns, label, acctMeta);
-          if (activeCategory !== "All") {
-            renderTransactions(lastPayload, activeCategory);
-          }
-          if (activeMainTab === "insights") {
-            loadInsights(currentAccountId, period);
-          }
-        });
+        const filtered = _filterTxnsByPeriod(allTxns, period);
+        _renderLiveTransactions(filtered, label, acctMeta);
+        if (activeMainTab === "insights") loadInsights(currentAccountId, period);
       }
 
       // ── Tab switching ────────────────────────────────────────────────
@@ -1568,10 +1638,15 @@
         document.querySelectorAll(".sidebar-account-item").forEach(c => c.classList.remove("is-active"));
         const sidebarItem = document.querySelector(`.sidebar-account-item[data-id="${accountId}"]`);
         if (sidebarItem) sidebarItem.classList.add("is-active");
-        // Reset period filter to "All"
+        // Reset period filter + search when switching accounts
         document.querySelectorAll("#periodFilterRow .period-btn").forEach((b) => b.classList.remove("is-active"));
         const allBtn = document.querySelector('#periodFilterRow .period-btn[data-period="all"]');
         if (allBtn) allBtn.classList.add("is-active");
+        _txnSearchQuery = "";
+        const _si = document.getElementById("txnSearchInput");
+        const _sc = document.getElementById("txnSearchClear");
+        if (_si) _si.value = "";
+        if (_sc) _sc.style.display = "none";
 
         // Offline (static) account — no API calls needed
         if (_offlineAccounts.has(accountId)) {
@@ -1589,6 +1664,9 @@
         const acctMeta = accounts.find(a => a.id === accountId) || null;
         const overrideBalance = _accountBalanceOverrides.get(accountId);
         if (acctMeta && overrideBalance) acctMeta.account_balance = overrideBalance;
+        // Cache all transactions for client-side period filtering
+        _liveTxnsCache[accountId]    = txns;
+        _liveAcctMetaCache[accountId] = acctMeta;
         const label = acctMeta ? acctMeta.display_name.replace(/\s*\(Sandbox\)\s*/i, "").replace(/\s*Sandbox\s*/i, "").trim() : "Account";
         _renderLiveTransactions(txns, label, acctMeta);
       }
@@ -1967,6 +2045,7 @@
         const statusBadge = needsAuth
           ? `<span class="sidebar-reauth-badge" title="Session expired — click to re-login">!</span>`
           : (isSandbox ? '<span class="sidebar-sandbox-badge">demo</span>' : "");
+        const isSandboxAcct = isSandbox;
         return `
           <div class="sidebar-account-item${isActive ? " is-active" : ""}${needsAuth ? " needs-reauth" : ""}" data-id="${acct.id}"
                onclick="${needsAuth ? `reloginAccount(event,${acct.id})` : `loadAccountTransactions(${acct.id})`}">
@@ -1976,6 +2055,16 @@
               <span class="sidebar-acct-meta">${needsAuth ? "Tap to re-connect →" : typeStr + hint}</span>
             </div>
             ${statusBadge}
+            <div class="sidebar-acct-overflow" onclick="event.stopPropagation()">
+              <button class="sidebar-overflow-btn" onclick="_toggleOverflow(event,this)" title="Account options">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="3" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="8" cy="13" r="1.4"/></svg>
+              </button>
+              <div class="acct-overflow-menu sidebar-overflow-menu">
+                ${!isSandboxAcct ? `<button onclick="syncAccount(event,${acct.id})">↻ Sync now</button>` : ""}
+                ${!isSandboxAcct ? `<button onclick="reloginAccount(event,${acct.id})">↩ Re-login</button>` : ""}
+                <button class="acct-overflow-del" onclick="deleteAccount(event,${acct.id})">✕ Remove</button>
+              </div>
+            </div>
           </div>`;
       }
 
@@ -1989,6 +2078,29 @@
           Transfer: "↔️", Utilities: "💡",
         };
         return icons[cat] || "💳";
+      }
+
+      // ── Merchant letter avatar ─────────────────────────────────────────
+      // Consistent color seeded from the merchant name, first 2 letters shown
+      const _AVATAR_COLORS = [
+        ["#e0e7ff","#4338ca"], ["#fce7f3","#be185d"], ["#d1fae5","#065f46"],
+        ["#fef3c7","#92400e"], ["#fee2e2","#991b1b"], ["#e0f2fe","#0369a1"],
+        ["#f3e8ff","#6b21a8"], ["#ffedd5","#9a3412"], ["#ecfdf5","#047857"],
+        ["#fdf2f8","#9d174d"],
+      ];
+      function _merchantAvatar(name, size = 32) {
+        const str = (name || "?").trim();
+        // Pick 2 initials: first letter of each word (max 2 words), else first 2 chars
+        const words = str.split(/\s+/).filter(Boolean);
+        const initials = words.length >= 2
+          ? (words[0][0] + words[1][0]).toUpperCase()
+          : str.slice(0, 2).toUpperCase();
+        // Seed color from character codes
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) & 0xffffffff;
+        const [bg, fg] = _AVATAR_COLORS[Math.abs(hash) % _AVATAR_COLORS.length];
+        const fs = size <= 28 ? 10 : 12;
+        return `<span class="merch-avatar" style="width:${size}px;height:${size}px;background:${bg};color:${fg};font-size:${fs}px">${initials}</span>`;
       }
 
       function _computeMonthlyFromPayload(payload) {
@@ -2014,17 +2126,179 @@
         return Object.keys(monthMap).sort().map(m => ({ month: m, ...monthMap[m] }));
       }
 
+      // ── Category palette (donut) ─────────────────────────────────────
+      const CAT_COLORS = [
+        "#6366f1","#f59e0b","#10b981","#f87171","#3b82f6","#ec4899",
+        "#14b8a6","#8b5cf6","#f97316","#84cc16","#06b6d4","#a78bfa",
+      ];
+
       function renderOverviewContent(payload) {
         const txns = payload.transactions || [];
         const isCreditCard = !!payload._isCreditCard;
 
-        // Recent transactions (last 5)
+        // ── Update panel labels ─────────────────────────────────────────
+        const chartLabelEl  = document.getElementById("overviewChartLabel");
+        const recentLabelEl = document.getElementById("overviewRecentLabel");
+        if (chartLabelEl)  chartLabelEl.textContent  = isCreditCard ? "SPENDING BY CATEGORY" : "MONTHLY CASH FLOW";
+        if (recentLabelEl) recentLabelEl.textContent = isCreditCard ? "RECENT CHARGES"         : "RECENT TRANSACTIONS";
+
+        // ── LEFT PANEL ──────────────────────────────────────────────────
+        if (_overviewChartInstance) { _overviewChartInstance.destroy(); _overviewChartInstance = null; }
+        const wrapEl = document.getElementById("overviewChartWrap");
+
+        if (isCreditCard) {
+          // Donut: spending by category (charges only)
+          const charges = txns.filter(t => {
+            const n = parseAmount(t.amount) || 0;
+            return n > 0; // positive = charge on credit card
+          });
+          const catTotals = {};
+          for (const t of charges) {
+            const cat = t.category || "Uncategorized";
+            catTotals[cat] = (catTotals[cat] || 0) + (parseAmount(t.amount) || 0);
+          }
+          const sorted = Object.entries(catTotals).sort((a, b) => b[1] - a[1]);
+          const TOP_N = 6;
+          const top = sorted.slice(0, TOP_N);
+          const otherTotal = sorted.slice(TOP_N).reduce((s, [, v]) => s + v, 0);
+          if (otherTotal > 0) top.push(["Other", otherTotal]);
+          const totalSpend = top.reduce((s, [, v]) => s + v, 0);
+
+          if (wrapEl && top.length > 0) {
+            wrapEl.innerHTML = '<div class="overview-donut-wrap"><canvas id="overviewDonutChart"></canvas></div>' +
+              '<div class="overview-donut-legend" id="overviewDonutLegend"></div>';
+            const canvas = document.getElementById("overviewDonutChart");
+            _overviewChartInstance = new Chart(canvas, {
+              type: "doughnut",
+              data: {
+                labels: top.map(([k]) => k),
+                datasets: [{
+                  data: top.map(([, v]) => +v.toFixed(2)),
+                  backgroundColor: top.map((_, i) => CAT_COLORS[i % CAT_COLORS.length]),
+                  borderWidth: 2,
+                  borderColor: "#faf9f7",
+                  hoverBorderWidth: 0,
+                }],
+              },
+              options: {
+                responsive: true, maintainAspectRatio: false,
+                cutout: "68%",
+                plugins: {
+                  legend: { display: false },
+                  tooltip: {
+                    backgroundColor: "#fff", titleColor: "#111", bodyColor: "#444",
+                    borderColor: "#e5e7eb", borderWidth: 1, padding: 10,
+                    callbacks: {
+                      label: ctx => {
+                        const v = ctx.parsed;
+                        const pct = totalSpend > 0 ? ((v / totalSpend) * 100).toFixed(0) : 0;
+                        return ` $${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${pct}%)`;
+                      },
+                    },
+                  },
+                },
+              },
+            });
+            // Custom legend
+            const legendEl = document.getElementById("overviewDonutLegend");
+            if (legendEl) {
+              legendEl.innerHTML = top.map(([cat, amt], i) => {
+                const pct = totalSpend > 0 ? ((amt / totalSpend) * 100).toFixed(0) : 0;
+                const color = CAT_COLORS[i % CAT_COLORS.length];
+                return `<div class="donut-legend-row">
+                  <span class="donut-legend-dot" style="background:${color}"></span>
+                  <span class="donut-legend-cat">${cat}</span>
+                  <span class="donut-legend-pct">${pct}%</span>
+                  <span class="donut-legend-amt">$${amt.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+                </div>`;
+              }).join("");
+            }
+          } else if (wrapEl) {
+            wrapEl.innerHTML = '<p style="font-size:13px;color:#9ca3af;padding:24px 0 0">No spending data yet.</p>';
+          }
+
+        } else {
+          // Bar chart: monthly cash flow (checking/savings)
+          const months = _computeMonthlyFromPayload(payload).slice(-6);
+          if (wrapEl && months.length > 0) {
+            wrapEl.innerHTML = '<canvas id="overviewMonthlyChart"></canvas>';
+            const canvas = document.getElementById("overviewMonthlyChart");
+            const labels = months.map(m => {
+              const [y, mo] = m.month.split("-");
+              return new Date(+y, +mo - 1, 1).toLocaleString("default", { month: "short", year: "2-digit" });
+            });
+            _overviewChartInstance = new Chart(canvas, {
+              type: "bar",
+              data: { labels, datasets: [
+                { label: "Income",   data: months.map(m => m.income),   backgroundColor: "#1f5f55", borderRadius: 4, barPercentage: 0.6 },
+                { label: "Expenses", data: months.map(m => m.expenses), backgroundColor: "#f87171", borderRadius: 4, barPercentage: 0.6 },
+              ]},
+              options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                  legend: { position: "top", labels: { font: { size: 11, family: "Inter" }, boxWidth: 8, padding: 10 } },
+                  tooltip: { backgroundColor: "#fff", titleColor: "#111", bodyColor: "#444", borderColor: "#e5e7eb", borderWidth: 1, padding: 8,
+                    callbacks: { label: ctx => ` ${ctx.dataset.label}: $${ctx.parsed.y.toLocaleString()}` } },
+                },
+                scales: {
+                  x: { grid: { display: false }, ticks: { font: { size: 10 }, color: "#9ca3af" } },
+                  y: { border: { display: false }, grid: { color: "#f3f4f6" },
+                       ticks: { font: { size: 10 }, color: "#9ca3af",
+                                callback: v => "$" + (v >= 1000 ? (v / 1000).toFixed(0) + "k" : v) } },
+                },
+              },
+            });
+          } else if (wrapEl) {
+            wrapEl.innerHTML = '<p style="font-size:13px;color:#9ca3af;padding:24px 0 0">Not enough data to chart yet.</p>';
+          }
+        }
+
+        // ── RIGHT PANEL ─────────────────────────────────────────────────
         const recentEl = document.getElementById("overviewRecentList");
-        if (recentEl) {
+        if (!recentEl) return;
+
+        if (isCreditCard) {
+          // Recent charges (last 8 debit/charge transactions)
+          const recentCharges = txns.filter(t => (parseAmount(t.amount) || 0) > 0).slice(0, 8);
+
+          if (recentCharges.length > 0) {
+            recentEl.innerHTML = recentCharges.map(t => {
+              const merchant = t.merchant_clean || t.raw_description || "Unknown";
+              const amt = parseAmount(t.amount) || 0;
+              const cat = t.category || "Uncategorized";
+              // Robust date formatter — handles YYYY-MM-DD, MM/DD/YYYY, M/D/YYYY
+              const dateStr = (() => {
+                const s = (t.date || "").trim();
+                if (!s) return "";
+                let d;
+                const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+                if (iso) d = new Date(+iso[1], +iso[2] - 1, +iso[3]);
+                else {
+                  const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+                  if (us) d = new Date(+us[3], +us[1] - 1, +us[2]);
+                }
+                if (!d || isNaN(d)) return "";
+                return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+              })();
+              return `<div class="overview-recent-row">
+                <span class="overview-recent-icon">${_categoryIcon(cat)}</span>
+                <div class="overview-recent-info">
+                  <span class="overview-recent-merchant">${merchant}</span>
+                  <span class="overview-recent-cat">${cat}${dateStr ? " · " + dateStr : ""}</span>
+                </div>
+                <span class="overview-recent-amount neg">-$${amt.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>`;
+            }).join("");
+          } else {
+            recentEl.innerHTML = '<p style="font-size:13px;color:#9ca3af;padding:12px 0">No transactions loaded.</p>';
+          }
+
+        } else {
+          // Recent transactions (checking/savings)
           const recent = txns.slice(0, 5);
           recentEl.innerHTML = recent.map(t => {
             const merchant = t.merchant_clean || t.raw_description || "";
-            const amount = _displayAmt(t.amount || "", t.txn_type, isCreditCard);
+            const amount = _displayAmt(t.amount || "", t.txn_type, false);
             const isNeg = amount.startsWith("-");
             const cat = t.category || "Other";
             return `<div class="overview-recent-row">
@@ -2036,48 +2310,6 @@
               <span class="overview-recent-amount${isNeg ? " neg" : " pos"}">${amount}</span>
             </div>`;
           }).join("") || '<p style="font-size:13px;color:#9ca3af;padding:12px 0">No transactions loaded.</p>';
-        }
-
-        // Mini monthly chart (last 6 months)
-        if (_overviewChartInstance) { _overviewChartInstance.destroy(); _overviewChartInstance = null; }
-        const wrapEl = document.getElementById("overviewChartWrap");
-        const months = _computeMonthlyFromPayload(payload).slice(-6);
-        if (wrapEl && months.length > 0) {
-          wrapEl.innerHTML = '<canvas id="overviewMonthlyChart"></canvas>';
-          const canvas = document.getElementById("overviewMonthlyChart");
-          const labels = months.map(m => {
-            const [y, mo] = m.month.split("-");
-            return new Date(+y, +mo - 1, 1).toLocaleString("default", { month: "short", year: "2-digit" });
-          });
-          const datasets = isCreditCard
-            ? [
-                { label: "Charges",  data: months.map(m => m.charges),  backgroundColor: "#f87171", borderRadius: 4, barPercentage: 0.6 },
-                { label: "Payments", data: months.map(m => m.payments), backgroundColor: "#1f5f55", borderRadius: 4, barPercentage: 0.6 },
-              ]
-            : [
-                { label: "Income",   data: months.map(m => m.income),   backgroundColor: "#1f5f55", borderRadius: 4, barPercentage: 0.6 },
-                { label: "Expenses", data: months.map(m => m.expenses), backgroundColor: "#f87171", borderRadius: 4, barPercentage: 0.6 },
-              ];
-          _overviewChartInstance = new Chart(canvas, {
-            type: "bar",
-            data: { labels, datasets },
-            options: {
-              responsive: true, maintainAspectRatio: false,
-              plugins: {
-                legend: { position: "top", labels: { font: { size: 11, family: "Inter" }, boxWidth: 8, padding: 10 } },
-                tooltip: { backgroundColor: "#fff", titleColor: "#111", bodyColor: "#444", borderColor: "#e5e7eb", borderWidth: 1, padding: 8,
-                  callbacks: { label: ctx => ` ${ctx.dataset.label}: $${ctx.parsed.y.toLocaleString()}` } },
-              },
-              scales: {
-                x: { grid: { display: false }, ticks: { font: { size: 10 }, color: "#9ca3af" } },
-                y: { border: { display: false }, grid: { color: "#f3f4f6" },
-                     ticks: { font: { size: 10 }, color: "#9ca3af",
-                              callback: v => "$" + (v >= 1000 ? (v / 1000).toFixed(0) + "k" : v) } },
-              },
-            },
-          });
-        } else if (wrapEl && months.length === 0) {
-          wrapEl.innerHTML = '<p style="font-size:13px;color:#9ca3af;padding:24px 0 0">Not enough data to chart yet.</p>';
         }
       }
 
