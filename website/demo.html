@@ -47,7 +47,6 @@
           <div class="demo-main">
             <!-- Empty state — shown when no account is selected -->
             <div id="demoEmptyState" class="demo-empty-state">
-              <!-- No accounts at all: full connect prompt -->
               <div class="demo-empty-inner" id="emptyStateNoAccounts">
                 <div class="demo-empty-icon">📊</div>
                 <h2 class="demo-empty-title">Your financial dashboard</h2>
@@ -56,12 +55,6 @@
                   <button class="demo-sandbox-btn" onclick="connectViaPlaIdSandbox()">Try Demo Bank</button>
                   <button class="demo-connect-ghost-btn" onclick="openBankPicker()">+ Connect account</button>
                 </div>
-              </div>
-              <!-- Accounts exist but none selected: light select prompt -->
-              <div class="demo-empty-inner demo-empty-select" id="emptyStateSelectAccount" style="display:none">
-                <div class="demo-empty-icon">👈</div>
-                <h2 class="demo-empty-title" style="font-size:1.2rem">Select an account</h2>
-                <p class="demo-empty-sub" style="font-size:0.9rem">Choose an account from the sidebar to view transactions and insights.</p>
               </div>
             </div>
 
@@ -1679,19 +1672,14 @@
           const noAccts = document.getElementById("sidebarNoAccounts");
           // Remove old items
           sidebarList.querySelectorAll(".sidebar-account-item").forEach(el => el.remove());
-          const noAcctsEl   = document.getElementById("emptyStateNoAccounts");
-          const selectAcctEl = document.getElementById("emptyStateSelectAccount");
-
           if (!accounts.length) {
-            if (noAccts)   noAccts.style.display   = "";
-            if (noAcctsEl)  noAcctsEl.style.display  = "";
-            if (selectAcctEl) selectAcctEl.style.display = "none";
+            if (noAccts) noAccts.style.display = "";
             _dismissReauthBanner();
             return;
           }
 
-          // Accounts exist — hide "connect a bank" prompt, show sidebar list
-          if (noAccts)   noAccts.style.display = "none";
+          // Accounts exist — hide "no accounts" text, show sidebar list
+          if (noAccts) noAccts.style.display = "none";
           accounts.forEach(acct => {
             sidebarList.insertAdjacentHTML("beforeend", _renderSidebarAccount(acct));
           });
@@ -1710,10 +1698,6 @@
             const item = sidebarList.querySelector(`.sidebar-account-item[data-id="${currentAccountId}"]`);
             if (item) item.classList.add("is-active");
             // Already showing account view — no empty state needed
-          } else {
-            // Show the lightweight "select an account" prompt instead of the full connect flow
-            if (noAcctsEl)   noAcctsEl.style.display   = "none";
-            if (selectAcctEl) selectAcctEl.style.display = "";
           }
         } catch (_) {}
       }
