@@ -26,7 +26,7 @@ from db import (
     init_db, add_account, get_accounts, get_account,
     delete_account, store_transactions, get_transactions, update_last_synced,
     set_auto_sync, set_needs_login, set_last_url, set_account_balance,
-    set_plaid_item_id,
+    set_plaid_item_id, get_latest_transaction_date,
 )
 
 
@@ -72,6 +72,25 @@ def _categorize_scraped(transactions: list[dict]) -> list[dict]:
         print(f"WARNING: categorization failed: {exc}")
 
     return transactions
+
+
+def _smart_since_date(account_id: int, fallback_days: int = 365) -> datetime:
+    """Return the best since_date for a re-sync of account_id.
+
+    Priority:
+      1. Date of the most recently stored transaction minus 1 day (to catch
+         same-day transactions and avoid missing anything at the boundary).
+      2. Fallback: now - fallback_days (used when the account has no stored
+         transactions at all, e.g. first-time connect).
+
+    Using the latest stored transaction date rather than last_synced_at means
+    even if auto-sync was failing for months we never re-scrape more than 1
+    extra day of already-known transactions.
+    """
+    latest = get_latest_transaction_date(account_id)
+    if latest:
+        return latest - timedelta(days=1)
+    return datetime.now() - timedelta(days=fallback_days)
 
 
 def _period_to_since_date(period: str) -> datetime | None:
@@ -866,12 +885,8 @@ class DemoHandler(SimpleHTTPRequestHandler):
         body = json.loads(self.rfile.read(length)) if length else {}
         period = body.get("period", account["sync_period"] or "1m")
 
-        # Delta sync: only fetch transactions since the last sync (or 1 year if never synced).
-        last_sync = account.get("last_synced_at")
-        if last_sync:
-            since_date = datetime.fromisoformat(last_sync)
-        else:
-            since_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=365)
+        # Delta sync: only fetch since the latest stored transaction (not last_synced_at).
+        since_date = _smart_since_date(account_id)
 
         try:
             session_path = ROOT / "data" / "sessions" / f"{account_id}.json"
@@ -916,13 +931,9 @@ class DemoHandler(SimpleHTTPRequestHandler):
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Account not found"})
             return
 
-        # Only fetch since last sync — no need to re-download what we already have
-        last_sync = account.get("last_synced_at")
-        since_date = (
-            datetime.fromisoformat(last_sync)
-            if last_sync
-            else datetime.now() - timedelta(days=365)
-        )
+        # Only fetch since the latest transaction we already have — never re-scrape
+        # the full history just because last_synced_at is stale (e.g. after session expiry).
+        since_date = _smart_since_date(account_id)
 
         try:
             session_path = ROOT / "data" / "sessions" / f"{account_id}.json"
@@ -1084,7 +1095,9 @@ def _run_due_syncs() -> None:
                 continue
         session_path = ROOT / "data" / "sessions" / f"{acct['id']}.json"
         last_url = acct.get("last_url")
-        since_date = datetime.fromisoformat(last_sync) if last_sync else None
+        # Use latest stored transaction date (not last_synced_at) so we stay minimal
+        # even if auto-sync was failing for a while due to session expiry.
+        since_date = _smart_since_date(acct["id"])
         bank_key = acct["bank_key"]
         print(f"AUTO-SYNC: syncing {acct['display_name']}…")
 

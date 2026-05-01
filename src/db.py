@@ -334,6 +334,29 @@ def get_transactions_for_account_raw(account_id: int) -> list[dict]:
     return [doc.to_dict() for doc in docs]
 
 
+def get_latest_transaction_date(account_id: int) -> datetime | None:
+    """Return the date of the most recently dated transaction stored for this account.
+
+    Used to compute since_date for re-syncs so we never re-scrape more than
+    1 day's worth of already-stored transactions, regardless of when the last
+    sync actually ran.  Returns None if the account has no stored transactions.
+    """
+    db = _get_db()
+    docs = db.collection("transactions").where("account_id", "==", account_id).get()
+    latest_iso: str | None = None
+    for doc in docs:
+        raw = (doc.to_dict().get("date") or "").strip()
+        iso = _normalize_date(raw)
+        if iso and (latest_iso is None or iso > latest_iso):
+            latest_iso = iso
+    if latest_iso:
+        try:
+            return datetime.strptime(latest_iso, "%Y-%m-%d")
+        except ValueError:
+            pass
+    return None
+
+
 def get_uncategorized_transactions(limit: int = 5000) -> list[dict]:
     db = _get_db()
     all_docs = db.collection("transactions").limit(limit * 3).get()
