@@ -1301,10 +1301,23 @@
       function _renderTopMerchants(ins, fmt) {
         const _SKIP_CATS = new Set(["Income", "Transfer", "Debt Payments"]);
         const cats = (ins.by_category || []).filter(c => !_SKIP_CATS.has(c.category));
-        const allMerchants = (ins.top_merchants && ins.top_merchants.length
+
+        // Normalize + re-group merchant list coming from the API so that ACH metadata
+        // variants (different ID: tokens per payment) collapse into one row even if
+        // the server-side grouping didn't catch them all.
+        const rawMerchants = (ins.top_merchants && ins.top_merchants.length
           ? ins.top_merchants
           : cats.slice(0, 10).map(c => ({ name: c.category, total: c.total }))
-        ).slice(0, 10);
+        );
+        const merged = {};
+        for (const m of rawMerchants) {
+          const key = _normalizeMerchant(m.name).toLowerCase();
+          if (!merged[key]) merged[key] = { name: _normalizeMerchant(m.name), total: 0 };
+          merged[key].total += m.total;
+        }
+        const allMerchants = Object.values(merged)
+          .sort((a, b) => b.total - a.total)
+          .slice(0, 10);
         const maxM  = allMerchants.reduce((mx, m) => Math.max(mx, m.total), 0) || 1;
         const topEl = document.getElementById("insightsTopMerchants");
         if (!allMerchants.length) {
