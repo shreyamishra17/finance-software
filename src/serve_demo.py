@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import queue as _queue
+import re
 import tempfile
 import threading
 import time
@@ -34,6 +35,41 @@ ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 WEB_ROOT = ROOT / "website"
 
+# ── ACH / BofA metadata stripping ────────────────────────────────────────────
+_ACH_DES_RE   = re.compile(r'\s+DES\s*:.*$', re.IGNORECASE)
+_ACH_ID_RE    = re.compile(r'\s+ID\s*:\s*\S+.*$', re.IGNORECASE)
+_ACH_INDN_RE  = re.compile(r'\s+INDN\s*:.*$', re.IGNORECASE)
+_ACH_COID_RE  = re.compile(r'\s+CO\s+ID\s*:.*$', re.IGNORECASE)
+_ACH_HOLD_RE  = re.compile(r'^ACH\s+HOLD\s+', re.IGNORECASE)
+_ACH_PMTS_RE  = re.compile(r'\s+(WEB\s+)?PMTS\s+ON\s+\d{1,2}/\d{1,2}\s*$', re.IGNORECASE)
+_ACH_WEB_RE   = re.compile(r'\s+WEB\s*$', re.IGNORECASE)
+_VIEW_EDIT_RE = re.compile(r'\s*View/Edit\s*$', re.IGNORECASE)
+
+
+def _normalize_merchant_name(raw: str) -> str:
+    """Strip BofA/ACH metadata so all payment variants of the same merchant group together.
+
+    Examples:
+      "GARDENHOMESMANAG DES:WEB PMTS ID:CS06RL INDN:... WEB View/Edit" → "Gardenhomesmanag"
+      "ACH HOLD GARDENHOMESMANAG WEB PMTS ON 04/29"                    → "Gardenhomesmanag"
+      "DISCOVER DES:E-PAYMENT ID:3384 INDN:MISHRA SHREYA CO ID:..."    → "Discover"
+    """
+    s = (raw or "").strip()
+    s = _VIEW_EDIT_RE.sub("", s).strip()
+    des = _ACH_DES_RE.search(s)
+    if des:
+        s = s[:des.start()].strip()
+    else:
+        s = _ACH_ID_RE.sub("", s).strip()
+        s = _ACH_INDN_RE.sub("", s).strip()
+        s = _ACH_COID_RE.sub("", s).strip()
+    s = _ACH_HOLD_RE.sub("", s).strip()
+    s = _ACH_PMTS_RE.sub("", s).strip()
+    s = _ACH_WEB_RE.sub("", s).strip()
+    if s and s == s.upper():
+        s = s.title()
+    return s or raw
+
 
 def _categorize_scraped(transactions: list[dict]) -> list[dict]:
     """
@@ -44,13 +80,17 @@ def _categorize_scraped(transactions: list[dict]) -> list[dict]:
     if not transactions:
         return transactions
 
-    # Step 1: clean every merchant name through the same pipeline used for PDF parsing
+    # Step 1: clean every merchant name through the same pipeline used for PDF parsing.
+    # Pre-strip BofA/ACH metadata (DES:, INDN:, CO ID:, ACH HOLD, etc.) first so
+    # the merchant extractor gets a clean base string without unique transaction IDs.
     for txn in transactions:
         raw = txn.get("description", "")
+        # Pre-process: strip ACH structured metadata before calling merchant_clean
+        pre = _normalize_merchant_name(raw) if raw else raw
         try:
-            txn["merchant_clean"] = _merchant_clean_fn(raw)
+            txn["merchant_clean"] = _merchant_clean_fn(pre)
         except Exception:
-            txn["merchant_clean"] = raw
+            txn["merchant_clean"] = pre or raw
 
     # Step 2: build categorizer input with cleaned names
     cat_input = [
@@ -667,10 +707,19 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 continue
             atype = t.get("amount_type") or t.get("type") or "debit"
             if atype != "credit":
-                name = t.get("merchant_clean") or t.get("description") or "Unknown"
-                merchant_totals[name] = round(merchant_totals.get(name, 0.0) + abs(amt), 2)
+                raw_name = t.get("merchant_clean") or t.get("description") or "Unknown"
+                name = _normalize_merchant_name(raw_name)
+                key = name.lower()   # case-insensitive grouping key
+                if key not in merchant_totals:
+                    merchant_totals[key] = {"name": name, "total": 0.0}
+                # Prefer the shorter/cleaner display name (e.g. merchant_clean over raw desc)
+                if t.get("merchant_clean"):
+                    clean = _normalize_merchant_name(t["merchant_clean"])
+                    if len(clean) < len(merchant_totals[key]["name"]):
+                        merchant_totals[key]["name"] = clean
+                merchant_totals[key]["total"] = round(merchant_totals[key]["total"] + abs(amt), 2)
         top_merchants = sorted(
-            [{"name": k, "total": v} for k, v in merchant_totals.items()],
+            [{"name": v["name"], "total": v["total"]} for v in merchant_totals.values()],
             key=lambda x: x["total"], reverse=True
         )[:10]
 

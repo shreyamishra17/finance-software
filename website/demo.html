@@ -263,6 +263,44 @@
         return txns;
       })();
 
+      // ── Merchant name normalizer ─────────────────────────────────────────
+      // Strips BofA/ACH metadata noise so all variants of the same merchant
+      // collapse into a single group in the insights charts.
+      //
+      // Handles formats like:
+      //   "GARDENHOMESMANAG DES:WEB PMTS ID:CS06RL INDN:ShreyaMishra CO ID:XXXXX27993 WEB View/Edit"
+      //   "ACH HOLD GARDENHOMESMANAG WEB PMTS ON 04/29"
+      //   "DISCOVER DES:E-PAYMENT ID:3384 INDN:MISHRA SHREYA CO ID:XXXXX20270 WEB"
+      //   "ClickPay DES:PROPRTYPAY ID:65202464 INDN:Shreya Mishra CO ID: XXXXX3316..."
+      function _normalizeMerchant(raw) {
+        if (!raw) return "Unknown";
+        let s = raw.trim();
+        // Remove trailing "View/Edit" that BofA appends to ACH rows
+        s = s.replace(/\s*View\/Edit\s*$/i, "").trim();
+        // Structured ACH format: keep only the prefix BEFORE " DES:"
+        // e.g. "GARDENHOMESMANAG DES:WEB PMTS ID:..." → "GARDENHOMESMANAG"
+        const desMatch = s.match(/^(.*?)\s+DES\s*:/i);
+        if (desMatch) {
+          s = desMatch[1].trim();
+        } else {
+          // Strip remaining ACH metadata if DES: wasn't present
+          s = s.replace(/\s+ID\s*:\s*\S+.*/i, "").trim();
+          s = s.replace(/\s+INDN\s*:.*/i, "").trim();
+          s = s.replace(/\s+CO\s+ID\s*:.*/i, "").trim();
+        }
+        // Strip "ACH HOLD " prefix (appears on pending ACH rows)
+        s = s.replace(/^ACH\s+HOLD\s+/i, "").trim();
+        // Strip trailing "WEB PMTS ON MM/DD" or similar date-qualified suffixes
+        s = s.replace(/\s+(WEB\s+)?PMTS\s+ON\s+\d{1,2}\/\d{1,2}\s*$/i, "").trim();
+        // Strip lone trailing "WEB" channel indicator
+        s = s.replace(/\s+WEB\s*$/i, "").trim();
+        // Title-case if all-caps (e.g. "GARDENHOMESMANAG" → "Gardenhomesmanag")
+        if (s === s.toUpperCase()) {
+          s = s.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+        }
+        return s || raw;
+      }
+
       // ── Client-side insights computation (for offline accounts) ──────────
       function _computeOfflineInsights(txns, acct, period) {
         const now = new Date();
@@ -289,10 +327,16 @@
             if (!byCat[t.category]) byCat[t.category] = { category: t.category, total: 0, count: 0 };
             byCat[t.category].total  += n;
             byCat[t.category].count += 1;
-            const m = t.merchant_clean || t.description;
-            if (!byMerch[m]) byMerch[m] = { name: m, total: 0, count: 0 };
-            byMerch[m].total  += n;
-            byMerch[m].count += 1;
+            const mRaw = t.merchant_clean || t.description || "";
+            const mKey = _normalizeMerchant(mRaw).toLowerCase(); // lowercase = grouping key
+            const mDisplay = _normalizeMerchant(mRaw);           // title-cased = display name
+            if (!byMerch[mKey]) byMerch[mKey] = { name: mDisplay, total: 0, count: 0 };
+            // Prefer the shorter/cleaner display name (merchant_clean wins over raw description)
+            if (t.merchant_clean && _normalizeMerchant(t.merchant_clean).length < byMerch[mKey].name.length) {
+              byMerch[mKey].name = _normalizeMerchant(t.merchant_clean);
+            }
+            byMerch[mKey].total  += n;
+            byMerch[mKey].count += 1;
           }
         }
         return {
