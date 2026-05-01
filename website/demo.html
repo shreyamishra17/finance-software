@@ -632,7 +632,10 @@
               if (rawUpper.includes("ZELLE") && !merchUpper.includes("ZELLE")) {
                 merchant = `ZELLE ${merchant}`.trim();
               }
-              return `<tr class="txn-row" onclick="toggleTxnDetail(this)"><td>${t.date || ""}</td><td>${merchant}</td><td>${amount}</td></tr><tr class="txn-detail" hidden><td colspan="3" class="txn-raw">Raw: ${t.raw_description || ""} &nbsp;·&nbsp; ${amount}</td></tr>`;
+              const dateDisplay = t.date
+                ? t.date
+                : `<span class="txn-date-pending">Pending</span>`;
+              return `<tr class="txn-row${t.date ? "" : " txn-pending"}" onclick="toggleTxnDetail(this)"><td>${dateDisplay}</td><td>${merchant}</td><td>${amount}</td></tr><tr class="txn-detail" hidden><td colspan="3" class="txn-raw">Raw: ${t.raw_description || ""} &nbsp;·&nbsp; ${amount}</td></tr>`;
             }
           )
           .join("");
@@ -2091,7 +2094,11 @@
 
       function _renderSidebarAccount(acct) {
         const needsAuth  = _acctNeedsReauth(acct);
-        const dotColor   = needsAuth ? "#ef4444" : (ACCT_TYPE_COLORS[acct.account_type] || "#9ca3af");
+        const dotColor   = needsAuth
+          ? "#ef4444"                                          // red  — session expired / needs re-login
+          : acct.last_synced_at
+            ? "#22c55e"                                        // green — connected & synced
+            : "#9ca3af";                                       // gray  — added but never synced yet
         const hint       = acct.account_hint ? ` · ${acct.account_hint}` : "";
         const typeStr    = acct.account_type
           ? acct.account_type.charAt(0).toUpperCase() + acct.account_type.slice(1) + " account"
