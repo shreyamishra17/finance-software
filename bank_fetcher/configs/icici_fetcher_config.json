@@ -1,0 +1,90 @@
+{
+    "bank_key": "icici",
+    "bank_display_name": "ICICI Bank",
+    "account_type": "checking",
+    "keyring_service": "fifo_bank_fetcher",
+    "keyring_username_key": "icici_username",
+    "keyring_password_key": "icici_password",
+    "keyring_totp_secret_key": "icici_totp_secret",
+    "mfa_mode": "otp_interactive",
+    "headless": false,
+    "timeouts_ms": {
+        "page_load": 60000,
+        "element_wait": 30000,
+        "download_wait": 60000
+    },
+    "navigation": {
+        "logout_url": "https://www.icicibank.com/logout"
+    },
+    "interactive_login_steps": [
+        {
+            "action": "goto",
+            "url": "https://www.icicibank.com/personal-banking/insta-banking/internet-banking"
+        },
+        {
+            "action": "inject_banner",
+            "message": "FIFO: Log into ICICI Bank Internet Banking, then navigate to your account \u2192 Statement / Transaction History. FIFO will close automatically once transactions are found."
+        },
+        {
+            "action": "wait_for_transactions",
+            "timeout": 300000,
+            "min_rows": 3
+        }
+    ],
+    "login_steps": [
+        {
+            "action": "goto",
+            "url": "https://www.icicibank.com/personal-banking/insta-banking/internet-banking"
+        },
+        {
+            "action": "wait_for_selector",
+            "selector": "#AuthenticationFG\\.userId, input[name='AuthenticationFG.userId'], #cust-id"
+        },
+        {
+            "action": "fill",
+            "selector": "#AuthenticationFG\\.userId, input[name='AuthenticationFG.userId'], #cust-id",
+            "value": "$username"
+        },
+        {
+            "action": "fill",
+            "selector": "#AuthenticationFG\\.password, input[name='AuthenticationFG.password'], #password",
+            "value": "$password"
+        },
+        {
+            "action": "click",
+            "selector": "button[type='submit'], input[type='submit'], #login-btn"
+        },
+        {
+            "action": "maybe_mfa",
+            "probe_selector": "input[name*='otp'], input[id*='otp'], #otp",
+            "probe_timeout": 8000
+        },
+        {
+            "action": "wait_for_url",
+            "pattern": "**/home**",
+            "timeout": 60000
+        }
+    ],
+    "transactions_steps": [],
+    "transactions_config": {
+        "row_selector": "tr.transaction-row, tr[class*='txn'], tr[id*='txn'], table.statement-table tbody tr, table[id*='statement'] tbody tr",
+        "view_more_selector": "",
+        "columns": {
+            "date": "td:nth-child(1)",
+            "description": "td:nth-child(3)",
+            "debit_amount": "td:nth-child(4)",
+            "credit_amount": "td:nth-child(5)",
+            "balance": "td:nth-child(6)"
+        }
+    },
+    "browser_engine": "chromium",
+    "_notes": [
+        "ICICI statement table columns (typical layout):",
+        "  1=Transaction Date, 2=Value Date, 3=Narration/Description,",
+        "  4=Debit (Dr), 5=Credit (Cr), 6=Balance",
+        "The base_crawler reads debit_amount and credit_amount separately.",
+        "If auto-discovery fires it will override row_selector automatically.",
+        "For mini-statement or alternate layouts the column indices may shift —",
+        "adjust td:nth-child indices if scrape returns wrong amounts."
+    ]
+}

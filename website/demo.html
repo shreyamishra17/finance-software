@@ -801,6 +801,25 @@
           url: "https://portal.discover.com/",
           bookmarkletJs: `(function(){var sels=['[data-testid="purchase-list-item"]','[data-testid="transaction-row"]','[data-testid="activity-row"]','li[class*="transaction"]','div[class*="transaction-item"]','[role="row"]'];var rows=[];for(var i=0;i<sels.length;i++){rows=Array.from(document.querySelectorAll(sels[i]));if(rows.length)break;}if(!rows.length){alert('FIFO: No transactions found.\\n\\nMake sure you are on the Activity/Transactions page.');return;}var txns=rows.map(function(r){var dateSel='[data-testid*="date"],[class*="date"],[class*="Date"]';var descSel='[data-testid*="merchant"],[data-testid*="description"],[class*="merchant"],[class*="description"],[class*="name"]';var amtSel='[data-testid*="amount"],[class*="amount"],[class*="Amount"]';return{date:(r.querySelector(dateSel)||{}).innerText||'',description:(r.querySelector(descSel)||{}).innerText||'',amount:(r.querySelector(amtSel)||{}).innerText||''};}).filter(function(t){return t.description.trim();});fetch('{ORIGIN}/api/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bank_key:'discover',transactions:txns})}).then(function(r){return r.json();}).then(function(d){alert('FIFO: Imported '+d.count+' transactions!\\nYou can close this tab.');}).catch(function(e){alert('FIFO Error: '+e.message+'\\n\\nMake sure FIFO is running at {ORIGIN}');});})();`,
         },
+        icici: {
+          name: "ICICI Bank",
+          url: "https://www.icicibank.com/personal-banking/insta-banking/internet-banking",
+          bookmarkletJs: `(function(){
+            var rows=Array.from(document.querySelectorAll('table.statement-table tbody tr,table[id*="statement"] tbody tr,table[class*="transaction"] tbody tr,[class*="txnTable"] tbody tr,table tbody tr')).filter(function(r){return r.querySelectorAll('td').length>=4;});
+            if(!rows.length){alert('FIFO: No transactions found.\\n\\nMake sure you are on the Account Statement page and the table is visible.');return;}
+            var txns=rows.map(function(r){var cells=r.querySelectorAll('td');
+              var date=(cells[0]||{}).innerText||'';
+              var desc=(cells[2]||{}).innerText||'';
+              var dr=(cells[3]||{}).innerText||'';
+              var cr=(cells[4]||{}).innerText||'';
+              var isEmpty=function(v){v=v.replace(/[,\s₹]/g,'').trim();return !v||v==='-'||v==='0'||v==='0.00';};
+              var amount=isEmpty(dr)?cr:dr;
+              var type=isEmpty(dr)?'credit':'debit';
+              return{date:date.trim(),description:desc.trim(),amount:amount.trim(),amount_type:type};
+            }).filter(function(t){return t.description.trim();});
+            fetch('{ORIGIN}/api/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bank_key:'icici',transactions:txns})}).then(function(r){return r.json();}).then(function(d){alert('FIFO: Imported '+d.count+' transactions!\\nYou can close this tab.');}).catch(function(e){alert('FIFO Error: '+e.message+'\\n\\nMake sure FIFO is running at {ORIGIN}');});
+          })();`,
+        },
       };
 
       let currentBookmarkletBank = null;
@@ -1371,6 +1390,13 @@
         td:           "td.com",
         pnc:          "pnc.com",
         sofi:         "sofi.com",
+        icici:        "icicibank.com",
+        icicibank:    "icicibank.com",
+        hdfc:         "hdfcbank.com",
+        hdfcbank:     "hdfcbank.com",
+        sbi:          "onlinesbi.sbi",
+        axis:         "axisbank.com",
+        axisbank:     "axisbank.com",
       };
 
       const BANK_LOCAL_LOGOS = {
@@ -1403,6 +1429,17 @@
         "td bank": "td",
         "pnc": "pnc",
         "sofi": "sofi",
+        "icici": "icici",
+        "icici bank": "icici",
+        "icicibank": "icici",
+        "hdfc": "hdfc",
+        "hdfc bank": "hdfc",
+        "hdfcbank": "hdfc",
+        "sbi": "sbi",
+        "state bank of india": "sbi",
+        "axis": "axis",
+        "axis bank": "axis",
+        "axisbank": "axis",
       };
 
       // Fallback initials + gradient when logo unavailable

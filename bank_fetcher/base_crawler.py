@@ -581,13 +581,42 @@ class BankCrawler:
                 for row in new_rows:
                     date_text = " ".join(_text(row, col_cfg.get("date", "")).split())
                     description = _text(row, col_cfg.get("description", ""))
-                    amount_raw = _text(row, col_cfg.get("amount", ""))
-                    # Strip any trailing junk after the dollar amount (e.g. Capital One
-                    # appends "Shreya M. ...2365" after "$7.19" in the amount cell)
-                    if amount_raw:
-                        m = _AMOUNT_RE.search(amount_raw)
-                        if m:
-                            amount_raw = m.group(0)
+
+                    # ── Split debit/credit columns (Indian banks: ICICI, HDFC, etc.) ──
+                    # When debit_amount + credit_amount are configured instead of amount,
+                    # read both and use whichever is non-empty to set amount and type.
+                    _EMPTY_VALS = {"", "-", "–", "—", "0", "0.00", "nil", "n/a"}
+                    amount_type: str = "debit"
+                    if col_cfg.get("debit_amount") or col_cfg.get("credit_amount"):
+                        debit_raw  = _text(row, col_cfg.get("debit_amount",  "")).strip()
+                        credit_raw = _text(row, col_cfg.get("credit_amount", "")).strip()
+                        # Extract numeric portion from each (may contain ₹ or ,)
+                        dm = _AMOUNT_RE.search(debit_raw)  if debit_raw  else None
+                        cm = _AMOUNT_RE.search(credit_raw) if credit_raw else None
+                        debit_clean  = dm.group(0) if dm  else ""
+                        credit_clean = cm.group(0) if cm else ""
+                        d_empty = debit_clean.replace(",", "").replace(".", "").strip("0") == ""
+                        c_empty = credit_clean.replace(",", "").replace(".", "").strip("0") == ""
+                        if not d_empty and d_empty == c_empty:
+                            # Both non-empty (rare edge case): treat as debit
+                            amount_raw = debit_clean
+                            amount_type = "debit"
+                        elif not d_empty:
+                            amount_raw = debit_clean
+                            amount_type = "debit"
+                        elif not c_empty:
+                            amount_raw = credit_clean
+                            amount_type = "credit"
+                        else:
+                            amount_raw = ""   # skip — both columns blank (header/spacer row)
+                    else:
+                        amount_raw = _text(row, col_cfg.get("amount", ""))
+                        # Strip any trailing junk after the dollar amount (e.g. Capital One
+                        # appends "Shreya M. ...2365" after "$7.19" in the amount cell)
+                        if amount_raw:
+                            m = _AMOUNT_RE.search(amount_raw)
+                            if m:
+                                amount_raw = m.group(0)
                     # Capital One appends the category as the last word of the description
                     # e.g. "Whole Foods Market Grocery" → strip trailing known category words
                     if description:
@@ -625,8 +654,9 @@ class BankCrawler:
                         done = True
                         break
 
-                    # Infer debit/credit from type column or amount sign
-                    if col_cfg.get("amount_type"):
+                    # Infer debit/credit from type column or amount sign.
+                    # Skip if already determined by the split debit/credit column path above.
+                    if not (col_cfg.get("debit_amount") or col_cfg.get("credit_amount")) and col_cfg.get("amount_type"):
                         amount_type_text = _text(row, col_cfg["amount_type"]).lower()
                         # BOA column 3 shows human-readable labels like "Direct Deposit",
                         # "Zelle Credit", "Refund" — check for any deposit/credit keyword.
@@ -641,7 +671,8 @@ class BankCrawler:
                         else:
                             # Column has a dollar amount or unknown text — fall back to sign
                             amount_type = "credit" if amount_raw.startswith("+") else "debit"
-                    else:
+                    elif not (col_cfg.get("debit_amount") or col_cfg.get("credit_amount")):
+                        # Sign-based fallback — only when no split columns and no type column
                         amount_type = "credit" if amount_raw.startswith("+") else "debit"
 
                     balance_raw = _text(row, col_cfg.get("balance", ""))
