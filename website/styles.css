@@ -2696,6 +2696,13 @@ body.demo-page::after {
   border-radius: 28px;
   box-shadow: 0 18px 42px rgba(31, 41, 55, 0.08);
 }
+.demo-empty-select {
+  padding: 36px 32px;
+  gap: 10px;
+  background: rgba(255,255,255,0.7);
+  box-shadow: 0 4px 16px rgba(31,41,55,0.04);
+  border-color: rgba(220,214,204,0.5);
+}
 .demo-empty-icon { font-size: 52px; }
 .demo-empty-title {
   font-family: "DM Serif Display", serif;
