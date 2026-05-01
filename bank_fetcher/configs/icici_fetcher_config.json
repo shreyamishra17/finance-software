@@ -19,7 +19,7 @@
     "interactive_login_steps": [
         {
             "action": "goto",
-            "url": "https://www.icicibank.com/personal-banking/insta-banking/internet-banking"
+            "url": "https://retailnetbanking.icicibank.in/login-page"
         },
         {
             "action": "inject_banner",
@@ -34,7 +34,7 @@
     "login_steps": [
         {
             "action": "goto",
-            "url": "https://www.icicibank.com/personal-banking/insta-banking/internet-banking"
+            "url": "https://retailnetbanking.icicibank.in/login-page"
         },
         {
             "action": "wait_for_selector",
