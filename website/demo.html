@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Demo — FIFO</title>
     <meta name="description" content="Upload a PDF and preview it in the browser." />
-    <link rel="stylesheet" href="styles.css?v=19" />
+    <link rel="stylesheet" href="styles.css?v=20" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231f5f55'/><text x='50%25' y='50%25' font-family='system-ui,sans-serif' font-size='20' font-weight='800' fill='white' text-anchor='middle' dominant-baseline='central'>F</text></svg>" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   </head>
@@ -803,7 +803,7 @@
         },
         icici: {
           name: "ICICI Bank",
-          url: "https://retailnetbanking.icicibank.in/login-page",
+          url: "https://retailnetbanking.icici.bank.in/login-page",
           bookmarkletJs: `(function(){
             var rows=Array.from(document.querySelectorAll('table.statement-table tbody tr,table[id*="statement"] tbody tr,table[class*="transaction"] tbody tr,[class*="txnTable"] tbody tr,table tbody tr')).filter(function(r){return r.querySelectorAll('td').length>=4;});
             if(!rows.length){alert('FIFO: No transactions found.\\n\\nMake sure you are on the Account Statement page and the table is visible.');return;}
@@ -1029,9 +1029,11 @@
           if (overrideBalance) ins.current_balance = overrideBalance;
           if (!String(ins.current_balance || "").trim()) {
             const accounts = await _apiFetch("/api/accounts").then(r => r.json()).catch(() => []);
-            const acctMeta = accounts.find(a => a.id === accountId) || null;
+            const acctMeta = accounts.find(a => Number(a.id) === Number(accountId)) || _liveAcctMetaCache[accountId] || null;
             if (acctMeta?.account_balance) {
               ins.current_balance = acctMeta.account_balance;
+            } else if (acctMeta && /(sandbox|demo)/i.test(acctMeta.display_name || "")) {
+              ins.current_balance = SANDBOX_DEFAULT_BALANCE;
             }
           }
           _renderInsights(ins, monthly, period);
@@ -1390,8 +1392,8 @@
         td:           "td.com",
         pnc:          "pnc.com",
         sofi:         "sofi.com",
-        icici:        "icicibank.in",
-        icicibank:    "icicibank.in",
+        icici:        "icici.bank.in",
+        icicibank:    "icici.bank.in",
         hdfc:         "hdfcbank.com",
         hdfcbank:     "hdfcbank.com",
         sbi:          "onlinesbi.sbi",
@@ -1758,9 +1760,24 @@
           return;
         }
 
-        const acctResp = await _apiFetch(`/api/accounts/${accountId}/transactions?period=all`);
+        // Show account view immediately with loading skeleton so the switch feels instant
+        showAccountView();
+        const _cachedMeta = _liveAcctMetaCache[accountId];
+        if (_cachedMeta) {
+          const cachedLabel = _cachedMeta.display_name.replace(/\s*\(Sandbox\)\s*/i, "").replace(/\s*Sandbox\s*/i, "").trim();
+          document.getElementById("resultsHeading").textContent = cachedLabel;
+          document.getElementById("resultsInfo").textContent = "";
+        }
+        document.getElementById("resultsSummary").innerHTML = `<div class="skeleton-summary-cards"><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div></div>`;
+        document.getElementById("resultsBody").innerHTML = `<tr><td colspan="3" style="padding:32px;text-align:center;color:#9ca3af;font-size:13px">Loading…</td></tr>`;
+
+        // Fetch transactions and account list in parallel for speed
+        const [acctResp, accountsResp] = await Promise.all([
+          _apiFetch(`/api/accounts/${accountId}/transactions?period=all`),
+          _apiFetch("/api/accounts"),
+        ]);
         const txns = await acctResp.json();
-        const accounts = await (await _apiFetch("/api/accounts")).json();
+        const accounts = await accountsResp.json();
         const acctMeta = accounts.find(a => a.id === accountId) || null;
         const overrideBalance = _accountBalanceOverrides.get(accountId);
         if (acctMeta && overrideBalance) acctMeta.account_balance = overrideBalance;
@@ -1794,15 +1811,15 @@
         txns.forEach(t => {
           const n = parseAmount(t.amount);
           if (n === null) return;
-          if (isCreditCard) {
-            if (n < 0) totalIncome += Math.abs(n);   // payment or refund
-            else totalExpenses += n;                  // charge
-          } else {
-            const atype = (t.amount_type || t.type || "").toLowerCase();
-            const isCredit = atype === "credit" || (atype === "" && n > 0);
-            if (isCredit) totalIncome += Math.abs(n);
-            else totalExpenses += Math.abs(n);
-          }
+          // For both credit cards and checking: use amount_type field.
+          // Credit card:  amount_type="credit" → payment/refund (money in)
+          //               amount_type="debit"  → charge (money out)
+          // Checking:     amount_type="credit" → income/deposit
+          //               amount_type="debit"  → expense/withdrawal
+          const atype = (t.amount_type || t.type || "").toLowerCase();
+          const isCredit = atype === "credit" || (atype === "" && n > 0);
+          if (isCredit) totalIncome += Math.abs(n);
+          else totalExpenses += Math.abs(n);
         });
         const netChange = totalIncome - totalExpenses;
 
@@ -1862,11 +1879,9 @@
         // Restore insights tab visibility (hidden for PDF mode)
         const insTab = document.getElementById("mainTabInsights");
         if (insTab) insTab.style.display = "";
-        // Land on Overview only when first loading an account (not when re-rendering
-        // from a period filter click, category click, etc. while already on a tab)
-        if (!activeMainTab || activeMainTab === "overview") {
-          switchMainTab("overview");
-        }
+        // Always switch to Overview when loading a (potentially different) account.
+        // This clears any stale Insights or Transactions content from the previous account.
+        switchMainTab("overview");
         // Ensure period filter row is visible on transactions tab
         const periodRow = document.getElementById("periodFilterRow");
         if (periodRow && activeMainTab === "transactions") periodRow.style.display = "";

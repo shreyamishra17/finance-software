@@ -14,27 +14,164 @@
         "download_wait": 60000
     },
     "navigation": {
-        "logout_url": "https://www.icicibank.com/logout"
+        "logout_url": "https://retailnetbanking.icici.bank.in/logout"
     },
+
     "interactive_login_steps": [
         {
             "action": "goto",
-            "url": "https://retailnetbanking.icicibank.in/login-page"
+            "url": "https://retailnetbanking.icici.bank.in/login-page"
         },
         {
             "action": "inject_banner",
-            "message": "FIFO: Log into ICICI Bank Internet Banking, then navigate to your account \u2192 Statement / Transaction History. FIFO will close automatically once transactions are found."
+            "message": "FIFO: Log in to ICICI Bank — we'll navigate to your statement automatically once you're in."
         },
         {
-            "action": "wait_for_transactions",
-            "timeout": 300000,
-            "min_rows": 3
+            "action": "wait_for_url",
+            "pattern": "**/overview**",
+            "timeout": 300000
         }
     ],
+
+    "transactions_steps": [
+        {
+            "action": "sleep",
+            "seconds": 3,
+            "_comment": "Let the overview page fully settle after login"
+        },
+        {
+            "action": "inject_banner",
+            "message": "FIFO: Opening your account statement…"
+        },
+        {
+            "action": "click_text",
+            "text": "Accounts",
+            "fallback_selector": "a[href*='account'], li[class*='account'] a",
+            "timeout": 15000,
+            "_comment": "Click Accounts in the left nav to reveal the account cards"
+        },
+        {
+            "action": "sleep",
+            "seconds": 2,
+            "_comment": "Let account cards render (Angular SPA — no URL change)"
+        },
+        {
+            "action": "wait_for_selector",
+            "selector": "text=View Statement",
+            "timeout": 20000,
+            "_comment": "Wait until the View Statement button is visible before clicking"
+        },
+        {
+            "action": "click_text",
+            "text": "View Statement",
+            "fallback_selector": "button[class*='viewStatement'], [class*='view-statement'] button, [id*='viewStatement']",
+            "timeout": 15000,
+            "_comment": "Click View Statement to open the account statement panel"
+        },
+        {
+            "action": "sleep",
+            "seconds": 4,
+            "_comment": "Wait for SPA route to settle — no networkidle on Angular"
+        },
+        {
+            "action": "inject_banner",
+            "message": "FIFO: Opening Detailed Statement tab…"
+        },
+        {
+            "action": "click_icase",
+            "text": "detailed statement",
+            "selectors": "button, [role='tab'], li, a, div[class*='tab'], span[class*='tab'], div[class*='Tab'], li[class*='tab']",
+            "exact": false,
+            "max_text_len": 40,
+            "timeout": 20000,
+            "_comment": "Case-insensitive tab click using Playwright inner_text + proper .click()"
+        },
+        {
+            "action": "sleep",
+            "seconds": 3,
+            "_comment": "Wait for Detailed Statement panel to render its Date/Filter controls"
+        },
+        {
+            "action": "inject_banner",
+            "message": "FIFO: Selecting Last 1 Year period…"
+        },
+        {
+            "action": "click_icase",
+            "text": "date",
+            "selectors": "button, div[class*='filter'], span[class*='filter'], div[class*='sort'], button[class*='sort']",
+            "exact": false,
+            "max_text_len": 8,
+            "timeout": 10000,
+            "_comment": "Open the Date filter dropdown — max_text_len=8 skips 'Date\\nFilter' wrapper (11 chars)"
+        },
+        {
+            "action": "sleep",
+            "seconds": 1
+        },
+        {
+            "action": "click_icase",
+            "text": "transaction period",
+            "selectors": "button, div, span, li, label",
+            "exact": false,
+            "max_text_len": 22,
+            "timeout": 8000,
+            "_comment": "Select the Transaction Period radio — max_text_len=22 skips the combined wrapper (34 chars)"
+        },
+        {
+            "action": "sleep",
+            "seconds": 1
+        },
+        {
+            "action": "click_icase",
+            "text": "today",
+            "selectors": "button, select, div, span, [role='combobox'], [role='option']",
+            "exact": true,
+            "max_text_len": 8,
+            "timeout": 8000,
+            "_comment": "Open the period dropdown — area-sort picks smallest element (actual trigger, not parent wrapper)"
+        },
+        {
+            "action": "sleep",
+            "seconds": 2,
+            "_comment": "Wait for dropdown list to fully render"
+        },
+        {
+            "action": "click_icase",
+            "text": "last 1 year",
+            "selectors": "li, div, span, button, option",
+            "exact": false,
+            "max_text_len": 20,
+            "timeout": 10000,
+            "_comment": "Select the Last 1 Year preset — exact:false handles any extra whitespace"
+        },
+        {
+            "action": "sleep",
+            "seconds": 1
+        },
+        {
+            "action": "click_icase",
+            "text": "apply filter",
+            "selectors": "button, div, span",
+            "exact": false,
+            "max_text_len": 15,
+            "timeout": 8000,
+            "_comment": "Click Apply Filter to load the full year of transactions"
+        },
+        {
+            "action": "sleep",
+            "seconds": 8,
+            "_comment": "Let Angular finish re-rendering the full year of data (longer sleep avoids wait_for_selector instability)"
+        },
+        {
+            "action": "inject_banner",
+            "message": "FIFO: Statement loaded — scraping all pages…"
+        }
+    ],
+
     "login_steps": [
         {
             "action": "goto",
-            "url": "https://retailnetbanking.icicibank.in/login-page"
+            "url": "https://retailnetbanking.icici.bank.in/login-page"
         },
         {
             "action": "wait_for_selector",
@@ -61,30 +198,31 @@
         },
         {
             "action": "wait_for_url",
-            "pattern": "**/home**",
+            "pattern": "**/overview**",
             "timeout": 60000
         }
     ],
-    "transactions_steps": [],
+
     "transactions_config": {
-        "row_selector": "tr.transaction-row, tr[class*='txn'], tr[id*='txn'], table.statement-table tbody tr, table[id*='statement'] tbody tr",
-        "view_more_selector": "",
+        "row_selector": "table tbody tr",
+        "pagination_style": "next_page",
+        "view_more_selector": "button[class*='next'], button[class*='Next'], li.next a, a[aria-label='Next'], button[aria-label='Next page'], [class*='pagination'] button:last-child",
         "columns": {
-            "date": "td:nth-child(1)",
-            "description": "td:nth-child(3)",
-            "debit_amount": "td:nth-child(4)",
-            "credit_amount": "td:nth-child(5)",
-            "balance": "td:nth-child(6)"
+            "date":          "td:nth-child(1)",
+            "description":   "td:nth-child(2)",
+            "credit_amount": "td:nth-child(4)",
+            "debit_amount":  "td:nth-child(5)",
+            "balance":       "td:nth-child(6)"
         }
     },
+
     "browser_engine": "chromium",
     "_notes": [
-        "ICICI statement table columns (typical layout):",
-        "  1=Transaction Date, 2=Value Date, 3=Narration/Description,",
-        "  4=Debit (Dr), 5=Credit (Cr), 6=Balance",
-        "The base_crawler reads debit_amount and credit_amount separately.",
-        "If auto-discovery fires it will override row_selector automatically.",
-        "For mini-statement or alternate layouts the column indices may shift —",
-        "adjust td:nth-child indices if scrape returns wrong amounts."
+        "ICICI Detailed Statement table columns (confirmed from screenshot):",
+        "  1=Transaction Date, 2=Transaction Remark, 3=Credit, 4=Debit, 5=Balance",
+        "  (NO Cheque No column in Detailed Statement — that only appears in Last 10 Transactions)",
+        "Date filter uses 'Transaction Period → Last 1 Year' preset — simpler than date pickers.",
+        "Angular SPA: no wait_for_load_state networkidle — use sleep steps instead.",
+        "text= selectors are case-sensitive against DOM textContent (not CSS-rendered text)."
     ]
 }
