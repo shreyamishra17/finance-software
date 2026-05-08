@@ -40,6 +40,12 @@
             "_comment": "Let the overview page fully settle after login"
         },
         {
+            "action": "capture",
+            "key": "investment_balance",
+            "expression": "() => { try { const els = Array.from(document.querySelectorAll('*')); for (const el of els) { if (el.children.length > 3) continue; const cls = (el.className || '').toString().toLowerCase(); const txt = (el.innerText || '').trim(); if (!txt) continue; if (/(invest|mf|mutual|portfolio|wealth)/i.test(cls)) { const m = txt.match(/[\\d,]+\\.\\d{2}/); if (m && parseFloat(m[0].replace(/,/g,'')) > 10000) return m[0]; } } const amtRe = /^\\d{1,3}(?:,\\d{2})*(?:,\\d{3})\\.\\d{2}$/; for (const el of els) { if (el.children.length > 0) continue; const txt = (el.innerText || '').trim(); if (amtRe.test(txt)) { const val = parseFloat(txt.replace(/,/g,'')); if (val > 100000) return txt; } } return null; } catch(e) { return null; } }",
+            "_comment": "Capture ICICI investment portfolio value from the overview page. Looks for amounts near investment/MF class names, falls back to any large Indian-format amount (>1 lakh). If it captures the wrong value, inspect the page DOM and refine this expression."
+        },
+        {
             "action": "inject_banner",
             "message": "FIFO: Opening your account statement…"
         },
@@ -163,6 +169,12 @@
             "_comment": "Let Angular finish re-rendering the full year of data (longer sleep avoids wait_for_selector instability)"
         },
         {
+            "action": "wait_for_selector",
+            "selector": "table tbody tr",
+            "timeout": 30000,
+            "_comment": "Don't start scraping until the transaction rows are actually in the DOM"
+        },
+        {
             "action": "inject_banner",
             "message": "FIFO: Statement loaded — scraping all pages…"
         }
@@ -204,23 +216,29 @@
     ],
 
     "transactions_config": {
-        "row_selector": "table tbody tr",
+        "row_selector": "tr.transfer:not(.trans_space)",
+        "_row_selector_note": "ICICI renders each date-group with TWO tables: mobile (tr.transfer.trans_space, 3-col) and desktop (tr.transfer without trans_space, 5-col). We use only the desktop rows to avoid duplicates and to get the balance column.",
         "pagination_style": "next_page",
-        "view_more_selector": "button[class*='next'], button[class*='Next'], li.next a, a[aria-label='Next'], button[aria-label='Next page'], [class*='pagination'] button:last-child",
+        "view_more_selector": "",
+        "_view_more_selector_disabled": "Using JS Strategy 2 only — finds > button right of 'Page N of N' text. The CSS selector was accidentally matching the DOWNLOAD DETAILS button.",
         "columns": {
-            "date":          "td:nth-child(1)",
-            "description":   "td:nth-child(2)",
-            "credit_amount": "td:nth-child(4)",
-            "debit_amount":  "td:nth-child(5)",
-            "balance":       "td:nth-child(6)"
+            "date":          "",
+            "_date_note":    "No date column in rows. Date lives in ancestor div.transaction > div.date (p.date-1=day, p.date-2=month). Year from sibling div.date-transaction-top p.date. base_crawler DOM finder uses closest('div.transaction') to assemble the full date.",
+            "description":   "td.remarks-details p.name",
+            "credit_amount": "td.credit p",
+            "debit_amount":  "td.debit p",
+            "balance":       "td.balance p"
         }
     },
 
     "browser_engine": "chromium",
     "_notes": [
-        "ICICI Detailed Statement table columns (confirmed from screenshot):",
-        "  1=Transaction Date, 2=Transaction Remark, 3=Credit, 4=Debit, 5=Balance",
-        "  (NO Cheque No column in Detailed Statement — that only appears in Last 10 Transactions)",
+        "ICICI Detailed Statement — actual 3-column <tr> structure (confirmed from icici_rows_debug.html):",
+        "  td:nth-child(1) = td.remarks-details  →  category label + description in p.remark-pos",
+        "  td:nth-child(2) = td.credit (cr-mob) OR td.debit  →  amount in <p> child",
+        "  td:nth-child(3) = td.arrow-mob  →  SVG chevron, no text",
+        "  NO date column in rows — date is in a parent/sibling element outside <tbody>.",
+        "  base_crawler JS DOM-context finder walks up from each row to find nearest date string.",
         "Date filter uses 'Transaction Period → Last 1 Year' preset — simpler than date pickers.",
         "Angular SPA: no wait_for_load_state networkidle — use sleep steps instead.",
         "text= selectors are case-sensitive against DOM textContent (not CSS-rendered text)."

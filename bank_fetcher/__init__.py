@@ -65,10 +65,11 @@ def scrape_recent_transactions(
     bank_key: str,
     since_date: datetime | None = None,
     session_save_path: Path | None = None,
-) -> tuple[list[dict], str | None, str, str]:
+) -> tuple[list[dict], str | None, str, str, dict]:
     """
     Login to bank via browser automation and scrape transactions since since_date.
-    Returns (transactions, transactions_page_url, ending_balance, starting_balance).
+    Returns (transactions, transactions_page_url, ending_balance, starting_balance, extra_values).
+    extra_values holds any values captured via "capture" steps (e.g. investment_balance).
     If session_save_path provided, saves session state there for headless reuse.
     """
     fetcher_cfg = _load_fetcher_config(bank_key)
@@ -82,10 +83,11 @@ def scrape_recent_transactions(
             "description": r.description,
             "amount": r.amount,
             "type": r.amount_type,
+            "balance": r.balance,
         }
         for r in records
     ]
-    return txns, last_url, crawler._ending_balance, crawler._starting_balance
+    return txns, last_url, crawler._ending_balance, crawler._starting_balance, crawler._extra_values
 
 
 def scrape_automated(

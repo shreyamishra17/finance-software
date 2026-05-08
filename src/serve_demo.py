@@ -27,7 +27,7 @@ from db import (
     init_db, add_account, get_accounts, get_account,
     delete_account, store_transactions, get_transactions, update_last_synced,
     set_auto_sync, set_needs_login, set_last_url, set_account_balance,
-    set_plaid_item_id, get_latest_transaction_date,
+    set_plaid_item_id, get_latest_transaction_date, set_investment_balance,
 )
 
 
@@ -183,7 +183,8 @@ def _smart_connect_worker(
         session["status"] = "logging_in"
         cfg = _load_fetcher_config(bank_key)
         display_name = cfg.get("bank_display_name", bank_key)
-        account_id = add_account(bank_key, display_name, sync_period="1y")
+        acct_type = cfg.get("account_type", "checking")
+        account_id = add_account(bank_key, display_name, sync_period="1y", account_type=acct_type)
         session["account_id"] = account_id
 
         since_date = datetime.now() - timedelta(days=365)
@@ -245,6 +246,10 @@ class DemoHandler(SimpleHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/version":
             self._send_json(HTTPStatus.OK, {"version": "v3", "smart_connect": True})
+            return
+        # Debug endpoint: /api/debug/raw-transactions?bank=icici&limit=10
+        if path == "/api/debug/raw-transactions":
+            self._handle_debug_raw_transactions()
             return
         if path == "/api/accounts":
             self._handle_get_accounts()
@@ -591,8 +596,9 @@ class DemoHandler(SimpleHTTPRequestHandler):
 
             cfg = _load_fetcher_config(bank_key)
             display_name = cfg.get("bank_display_name", bank_key)
+            acct_type = cfg.get("account_type", "checking")
 
-            account_id = add_account(bank_key, display_name, sync_period="1y")
+            account_id = add_account(bank_key, display_name, sync_period="1y", account_type=acct_type)
             _categorize_scraped(transactions)
             store_transactions(account_id, transactions)
             update_last_synced(account_id, datetime.now())
@@ -649,6 +655,41 @@ class DemoHandler(SimpleHTTPRequestHandler):
         """GET /api/accounts — list all connected accounts."""
         self._send_json(HTTPStatus.OK, get_accounts())
 
+    def _handle_debug_raw_transactions(self) -> None:
+        """GET /api/debug/raw-transactions?bank=<key>&limit=<n>
+        Returns raw Firestore transaction data for the named bank, useful for diagnosing
+        date/amount storage issues without needing firebase-admin directly.
+        """
+        qs = parse_qs(urlparse(self.path).query)
+        bank_key = qs.get("bank", ["icici"])[0]
+        limit = int(qs.get("limit", ["20"])[0])
+        accounts = get_accounts()
+        acct = next((a for a in accounts if a.get("bank_key") == bank_key), None)
+        if not acct:
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": f"No account with bank_key={bank_key!r}"})
+            return
+        aid = acct["id"]
+        txns = get_transactions(aid)
+        sample = txns[:limit]
+        summary = {
+            "account_id": aid,
+            "bank_key": bank_key,
+            "total_transactions": len(txns),
+            "null_dates": sum(1 for t in txns if not t.get("date")),
+            "iso_dates": sum(1 for t in txns if (t.get("date") or "").count("-") == 2),
+            "other_dates": sum(1 for t in txns if t.get("date") and (t.get("date") or "").count("-") != 2),
+            "sample": [
+                {
+                    "date": t.get("date"),
+                    "description": (t.get("description") or "")[:50],
+                    "amount": t.get("amount"),
+                    "amount_type": t.get("amount_type"),
+                }
+                for t in sample
+            ],
+        }
+        self._send_json(HTTPStatus.OK, summary)
+
     def _handle_get_transactions(self, account_id: int) -> None:
         """GET /api/accounts/<id>/transactions?period= — return stored transactions."""
         if get_account(account_id) is None:
@@ -657,7 +698,14 @@ class DemoHandler(SimpleHTTPRequestHandler):
         qs = parse_qs(urlparse(self.path).query)
         period = qs.get("period", ["all"])[0]
         since_date = _period_to_since_date(period)
-        self._send_json(HTTPStatus.OK, get_transactions(account_id, since_date=since_date))
+        txns = get_transactions(account_id, since_date=since_date)
+        # Ensure frontend field names are available regardless of how the transaction was stored.
+        # Firestore stores "amount_type" (from scraper); frontend JS expects "amount_type" directly
+        # but also reads t.txn_type in some paths — keep both in sync.
+        for t in txns:
+            if "amount_type" not in t and "type" in t:
+                t["amount_type"] = t["type"]
+        self._send_json(HTTPStatus.OK, txns)
 
     def _handle_get_insights(self, account_id: int) -> None:
         """GET /api/accounts/<id>/insights?period= — category totals, income, expenses."""
@@ -725,12 +773,37 @@ class DemoHandler(SimpleHTTPRequestHandler):
 
         account = get_account(account_id)
         current_balance = account.get("account_balance", "") if account else ""
+        acct_type = (account.get("account_type") or "").lower() if account else ""
+        # Fallback: infer account_type from the bank's JSON config file for accounts
+        # that were connected before this field was added to the DB schema.
+        # Read the JSON directly — no bank_fetcher import needed.
+        if not acct_type and account:
+            try:
+                _bk = account.get("bank_key", "")
+                _cfg_path = ROOT / "bank_fetcher" / "configs" / f"{_bk}_fetcher_config.json"
+                if _cfg_path.exists():
+                    import json as _json
+                    _cfg = _json.loads(_cfg_path.read_text())
+                    acct_type = (_cfg.get("account_type") or "checking").lower()
+            except Exception:
+                pass
+        if not acct_type:
+            acct_type = "checking"
+
+        # For credit cards: charges = expenses, payments = income, unpaid = charges - payments
+        total_charges  = round(total_expenses, 2) if acct_type == "credit" else 0.0
+        total_payments = round(total_income, 2)   if acct_type == "credit" else 0.0
+        unpaid_charges = round(max(0.0, total_charges - total_payments), 2)
 
         self._send_json(HTTPStatus.OK, {
-            "total_income": round(total_income, 2),
+            "account_type":   acct_type,
+            "total_income":   round(total_income, 2),
             "total_expenses": round(total_expenses, 2),
-            "net": round(total_income - total_expenses, 2),
+            "net":            round(total_income - total_expenses, 2),
             "current_balance": current_balance,
+            "total_charges":  total_charges,
+            "total_payments": total_payments,
+            "unpaid_charges": unpaid_charges,
             "by_category": sorted(by_category.values(), key=lambda x: x["total"]),
             "top_merchants": top_merchants,
         })
@@ -892,9 +965,10 @@ class DemoHandler(SimpleHTTPRequestHandler):
         try:
             cfg = _load_fetcher_config(bank_key)
             display_name = cfg.get("bank_display_name", bank_key)
-            account_id = add_account(bank_key, display_name, sync_period=period)
+            acct_type = cfg.get("account_type", "checking")
+            account_id = add_account(bank_key, display_name, sync_period=period, account_type=acct_type)
             session_path = ROOT / "data" / "sessions" / f"{account_id}.json"
-            transactions, last_url, ending_balance, starting_balance = scrape_recent_transactions(
+            transactions, last_url, ending_balance, starting_balance, extra_vals = scrape_recent_transactions(
                 bank_key=bank_key, since_date=since_date, session_save_path=session_path
             )
             _categorize_scraped(transactions)
@@ -904,6 +978,9 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 set_last_url(account_id, last_url)
             if ending_balance:
                 set_account_balance(account_id, ending_balance)
+            inv_bal = extra_vals.get("investment_balance", "")
+            if inv_bal:
+                set_investment_balance(account_id, inv_bal)
             set_needs_login(account_id, False)
             account = get_account(account_id)
             self._send_json(HTTPStatus.OK, {
@@ -918,12 +995,18 @@ class DemoHandler(SimpleHTTPRequestHandler):
             self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
 
     def _handle_sync_account(self, account_id: int) -> None:
-        """POST /api/accounts/<id>/sync — re-scrape and update stored transactions."""
+        """
+        POST /api/accounts/<id>/sync — silent background sync using saved session.
+
+        Never opens a browser. If the session is missing or expired, returns a 422
+        so the frontend can prompt the user to click Re-login instead.
+        """
         import sys as _sys
         _proj_root = str(ROOT)
         if _proj_root not in _sys.path:
             _sys.path.insert(0, _proj_root)
-        from bank_fetcher import scrape_recent_transactions
+        from bank_fetcher import scrape_recent_transactions_headless
+        from bank_fetcher.base_crawler import SessionExpiredError
 
         account = get_account(account_id)
         if account is None:
@@ -934,34 +1017,47 @@ class DemoHandler(SimpleHTTPRequestHandler):
         body = json.loads(self.rfile.read(length)) if length else {}
         period = body.get("period", account["sync_period"] or "1m")
 
-        # Delta sync: only fetch since the latest stored transaction (not last_synced_at).
-        since_date = _smart_since_date(account_id)
+        since_date   = _smart_since_date(account_id)
+        bank_key     = account["bank_key"]
+        session_path = ROOT / "data" / "sessions" / f"{account_id}.json"
+        last_url     = account.get("last_url")
+
+        # No saved session → user must log in first
+        if not session_path.exists() or not last_url:
+            set_needs_login(account_id, True)
+            self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {
+                "error": "No saved session — please click ↩ Re-login to authenticate."
+            })
+            return
 
         try:
-            session_path = ROOT / "data" / "sessions" / f"{account_id}.json"
-            transactions, last_url, ending_balance, starting_balance = scrape_recent_transactions(
-                bank_key=account["bank_key"],
+            txns = scrape_recent_transactions_headless(
+                bank_key=bank_key,
                 since_date=since_date,
-                session_save_path=session_path,
+                session_path=session_path,
+                account_url=last_url,
             )
-            _categorize_scraped(transactions)
-            store_transactions(account_id, transactions)
-            update_last_synced(account_id, datetime.now())
-            if last_url:
-                set_last_url(account_id, last_url)
-            if ending_balance:
-                set_account_balance(account_id, ending_balance)
-            set_needs_login(account_id, False)
-            self._send_json(HTTPStatus.OK, {
-                "account": get_account(account_id),
-                "period": period,
-                "count": len(transactions),
-                "transactions": transactions,
-                "ending_balance": ending_balance,
-                "starting_balance": starting_balance,
+            print(f"SYNC: {account['display_name']} — {len(txns)} transactions", flush=True)
+        except SessionExpiredError:
+            set_needs_login(account_id, True)
+            self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {
+                "error": "Session expired — please click ↩ Re-login to authenticate again."
             })
+            return
         except Exception as exc:
             self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+            return
+
+        _categorize_scraped(txns)
+        store_transactions(account_id, txns)
+        update_last_synced(account_id, datetime.now())
+        set_needs_login(account_id, False)
+        self._send_json(HTTPStatus.OK, {
+            "account":      get_account(account_id),
+            "period":       period,
+            "count":        len(txns),
+            "transactions": txns,
+        })
 
     def _handle_relogin_account(self, account_id: int) -> None:
         """
@@ -986,7 +1082,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
 
         try:
             session_path = ROOT / "data" / "sessions" / f"{account_id}.json"
-            transactions, last_url, ending_balance, starting_balance = scrape_recent_transactions(
+            transactions, last_url, ending_balance, starting_balance, extra_vals = scrape_recent_transactions(
                 bank_key=account["bank_key"],
                 since_date=since_date,
                 session_save_path=session_path,
@@ -998,6 +1094,9 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 set_last_url(account_id, last_url)
             if ending_balance:
                 set_account_balance(account_id, ending_balance)
+            inv_bal = extra_vals.get("investment_balance", "")
+            if inv_bal:
+                set_investment_balance(account_id, inv_bal)
             set_needs_login(account_id, False)
             self._send_json(HTTPStatus.OK, {
                 "account":   get_account(account_id),
@@ -1069,7 +1168,8 @@ class DemoHandler(SimpleHTTPRequestHandler):
             if match:
                 account_id = match["id"]
             else:
-                account_id = add_account(bank_key, display_name, sync_period="all")
+                acct_type_bm = cfg.get("account_type", "checking") if cfg else "checking"
+            account_id = add_account(bank_key, display_name, sync_period="all", account_type=acct_type_bm)
 
         _categorize_scraped(transactions)
         store_transactions(account_id, transactions)
@@ -1129,6 +1229,9 @@ class DemoHandler(SimpleHTTPRequestHandler):
 
 def _run_due_syncs() -> None:
     """Check all accounts and headlessly sync any that are overdue."""
+    import sys as _sys
+    if str(ROOT) not in _sys.path:
+        _sys.path.insert(0, str(ROOT))
     from bank_fetcher import _load_fetcher_config, scrape_recent_transactions_headless  # noqa: PLC0415
     from bank_fetcher.base_crawler import SessionExpiredError  # noqa: PLC0415
     from bank_fetcher.credential_manager import get_credentials  # noqa: PLC0415

@@ -47,6 +47,14 @@ CREATE TABLE IF NOT EXISTS transactions (
     UNIQUE(account_id, date, description, amount)
 );
 
+CREATE TABLE IF NOT EXISTS merchant_category_overrides (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    merchant_key    TEXT    NOT NULL UNIQUE,
+    merchant_label  TEXT    NOT NULL,
+    category        TEXT    NOT NULL,
+    updated_at      TEXT    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS account_sessions (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     account_id       INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -380,6 +388,96 @@ def update_transaction_categories(
                     txn.get("amount", ""),
                 ),
             )
+
+
+def _merchant_key(text: str) -> str:
+    return " ".join(
+        "".join(ch if ch.isalnum() else " " for ch in (text or "").upper()).split()
+    )
+
+
+def get_transaction(transaction_id: int) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """SELECT t.*, a.display_name AS bank_name
+               FROM transactions t
+               JOIN accounts a ON a.id = t.account_id
+               WHERE t.id = ?""",
+            (transaction_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_transaction_category(
+    transaction_id: int,
+    category: str,
+    merchant_clean: str | None = None,
+) -> None:
+    with _connect() as conn:
+        if merchant_clean is None:
+            conn.execute(
+                "UPDATE transactions SET category = ? WHERE id = ?",
+                (category, transaction_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE transactions SET category = ?, merchant_clean = ? WHERE id = ?",
+                (category, merchant_clean, transaction_id),
+            )
+
+
+def get_category_override(merchant_text: str) -> str | None:
+    key = _merchant_key(merchant_text)
+    if not key:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT category FROM merchant_category_overrides WHERE merchant_key = ?",
+            (key,),
+        ).fetchone()
+    return str(row["category"]) if row and row["category"] else None
+
+
+def upsert_category_override(merchant_text: str, category: str) -> None:
+    key = _merchant_key(merchant_text)
+    if not key or not category:
+        return
+    now = datetime.now().isoformat()
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO merchant_category_overrides
+               (merchant_key, merchant_label, category, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(merchant_key) DO UPDATE SET
+                   merchant_label = excluded.merchant_label,
+                   category = excluded.category,
+                   updated_at = excluded.updated_at""",
+            (key, merchant_text.strip() or key, category, now),
+        )
+
+
+def apply_category_override_to_existing_transactions(
+    merchant_text: str,
+    category: str,
+) -> int:
+    key = _merchant_key(merchant_text)
+    if not key or not category:
+        return 0
+    updated = 0
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, merchant_clean, description FROM transactions"
+        ).fetchall()
+        for row in rows:
+            label = row["merchant_clean"] or row["description"] or ""
+            if _merchant_key(label) != key:
+                continue
+            conn.execute(
+                "UPDATE transactions SET category = ? WHERE id = ?",
+                (category, row["id"]),
+            )
+            updated += 1
+    return updated
 
 
 def get_transactions(

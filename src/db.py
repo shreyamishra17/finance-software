@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -70,7 +71,7 @@ def _next_account_id() -> int:
 # Accounts
 # ------------------------------------------------------------------ #
 
-def add_account(bank_key: str, display_name: str, sync_period: str = "1m") -> int:
+def add_account(bank_key: str, display_name: str, sync_period: str = "1m", account_type: str = "checking") -> int:
     db = _get_db()
     existing = (
         db.collection("accounts")
@@ -81,7 +82,11 @@ def add_account(bank_key: str, display_name: str, sync_period: str = "1m") -> in
     )
     if existing:
         doc = existing[0]
-        doc.reference.update({"sync_period": sync_period})
+        updates: dict = {"sync_period": sync_period}
+        # Backfill account_type if it wasn't stored on first connect
+        if not doc.to_dict().get("account_type"):
+            updates["account_type"] = account_type
+        doc.reference.update(updates)
         return int(doc.get("id"))
 
     account_id = _next_account_id()
@@ -90,6 +95,7 @@ def add_account(bank_key: str, display_name: str, sync_period: str = "1m") -> in
         "id":                  account_id,
         "bank_key":            bank_key,
         "display_name":        display_name,
+        "account_type":        account_type,
         "account_hint":        None,
         "added_at":            now,
         "last_synced_at":      None,
@@ -184,21 +190,43 @@ def set_plaid_item_id(account_id: int, item_id: str) -> None:
     )
 
 
+def set_investment_balance(account_id: int, balance: str) -> None:
+    """Store the investment portfolio value (e.g. mutual funds) scraped from the bank overview."""
+    _get_db().collection("accounts").document(str(account_id)).update({"investment_balance": balance})
+
+
 # ------------------------------------------------------------------ #
 # Transactions
 # ------------------------------------------------------------------ #
 
-def _normalize_date(raw: str) -> str:
-    for fmt in ("%m/%d/%Y", "%Y-%m-%d"):
+def _normalize_date_store(raw: str) -> str:
+    """Normalize date for storage — returns raw string unchanged if format is unrecognised.
+    Handles ISO dates, Indian bank formats, and multi-date cells (e.g. ICICI "23 Apr 2026 20 Apr 2026").
+    """
+    s = (raw or "").strip()
+    if not s:
+        return s
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%d %b %Y", "%d/%m/%Y", "%d-%b-%Y", "%d-%m-%Y"):
         try:
-            return datetime.strptime(raw.strip(), fmt).strftime("%Y-%m-%d")
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
         except ValueError:
             pass
-    return raw
+    # Multi-date cell like "23 Apr 2026 20 Apr 2026" — extract the first date token
+    _DATE_RE = re.compile(
+        r'\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{4}'
+        r'|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:,?\s+\d{4})?',
+        re.IGNORECASE,
+    )
+    m = _DATE_RE.search(s)
+    if m:
+        candidate = m.group(0).strip()
+        if candidate != s:
+            return _normalize_date_store(candidate)
+    return s
 
 
-def _txn_doc_id(account_id: int, date: str, description: str, amount: str) -> str:
-    key = f"{account_id}|{date}|{description}|{amount}"
+def _txn_doc_id(account_id: int, date: str, description: str, amount: str, balance: str = "") -> str:
+    key = f"{account_id}|{date}|{description}|{amount}|{balance}"
     return hashlib.sha1(key.encode("utf-8")).hexdigest()
 
 
@@ -210,10 +238,10 @@ def store_transactions(account_id: int, transactions: list[dict]) -> int:
     batch_count = 0
 
     for txn in transactions:
-        date = _normalize_date(txn.get("date", "") or "")
+        date = _normalize_date_store(txn.get("date", "") or "")
         description = txn.get("description", "")
         amount = txn.get("amount", "")
-        doc_id = _txn_doc_id(account_id, date, description, amount)
+        doc_id = _txn_doc_id(account_id, date, description, amount, txn.get("balance", ""))
         ref = db.collection("transactions").document(doc_id)
 
         existing = ref.get()
@@ -256,7 +284,7 @@ def update_transaction_categories(account_id: int, transactions: list[dict]) -> 
         merchant = txn.get("merchant_clean") or txn.get("description", "")
         if not category and not merchant:
             continue
-        date = _normalize_date(txn.get("date", "") or "")
+        date = _normalize_date_store(txn.get("date", "") or "")
         doc_id = _txn_doc_id(account_id, date, txn.get("description", ""), txn.get("amount", ""))
         ref = db.collection("transactions").document(doc_id)
         batch.update(ref, {"category": category, "merchant_clean": merchant})
@@ -273,23 +301,31 @@ def _normalize_date(raw: str) -> str | None:
     """Normalize any bank date string to YYYY-MM-DD for comparison.
     Returns None for unparseable strings like 'Pending' (those always pass the filter).
     Banks use many formats: MM/DD/YYYY (Capital One), YYYY-MM-DD (BofA), 'May 5' etc.
+    Also handles ICICI multi-date cells like "23 Apr 2026 20 Apr 2026".
     """
-    import re as _re
-    s = raw.strip()
+    s = raw.strip() if raw else ""
     if not s:
         return None
-    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y", "%b %d, %Y", "%b %d %Y"):
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y", "%b %d, %Y", "%b %d %Y",
+                "%d %b %Y", "%d/%m/%Y", "%d-%b-%Y", "%d-%m-%Y"):
         try:
             return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
         except ValueError:
             pass
     # "May 5" or "May 05" — no year, assume current year
-    m = _re.match(r'^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})$', s, _re.I)
+    m = re.match(r'^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})$', s, re.I)
     if m:
         try:
             return datetime.strptime(f"{m.group(1)} {m.group(2)} {datetime.now().year}", "%b %d %Y").strftime("%Y-%m-%d")
         except ValueError:
             pass
+    # Multi-date cell like "23 Apr 2026 20 Apr 2026" — extract the first date token
+    m2 = re.search(
+        r'\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{4})',
+        s, re.IGNORECASE
+    )
+    if m2 and m2.group(1).strip() != s:
+        return _normalize_date(m2.group(1).strip())
     return None  # "Pending", "Processing", etc. → always include
 
 

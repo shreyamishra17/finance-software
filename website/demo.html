@@ -190,6 +190,7 @@
       const categorySummary = document.getElementById("categorySummary");
       const categoryBlock = document.getElementById("categoryBlock");
       const categoryTotal = document.getElementById("categoryTotal");
+      const MANUAL_CATEGORY_OPTIONS = ["Auto & Transport","Entertainment","Finance","Food & Drink","Government & Legal","Groceries","Health","Housing","Income","Miscellaneous","Money Transfer","Personal Care","Shopping","Travel","Uncategorized","Utilities & Bills"];
 
       let lastPayload = null;
       let activeCategory = "All";
@@ -459,29 +460,67 @@
 
       function parseAmount(amountStr) {
         if (!amountStr) return null;
-        const s = String(amountStr).replace(/[$,\s]/g, "");
+        const s = String(amountStr).replace(/[₹$,\s]/g, "");
         const n = parseFloat(s);
         return isNaN(n) ? null : n;
       }
 
+      // Format a date string for display.
+      // ISO "2026-04-27" → "27 Apr 2026". Bank-pending strings → null (shows Pending badge).
+      function _formatDate(dateStr) {
+        if (!dateStr) return null;
+        const s = String(dateStr).trim();
+        if (!s) return null;
+        if (/^(pending|processing)$/i.test(s)) return null;
+        // ISO date "2026-04-23" → "23 Apr 2026"
+        const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (iso) {
+          const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+          const d = parseInt(iso[3], 10);
+          const mon = parseInt(iso[2], 10) - 1;
+          const y = parseInt(iso[1], 10);
+          return `${d} ${months[mon]} ${y}`;
+        }
+        // ICICI raw format: "23 Apr 2026 20 Apr 2026" (transaction date + value date)
+        // or "23 Apr 2026" — extract just the first date token
+        const dmy = s.match(/(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{4})/i);
+        if (dmy) return `${parseInt(dmy[1])} ${dmy[2].charAt(0).toUpperCase()+dmy[2].slice(1,3).toLowerCase()} ${dmy[3]}`;
+        // US-style "MM/DD/YYYY"
+        const mdy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+        if (mdy) {
+          const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+          return `${parseInt(mdy[2])} ${months[parseInt(mdy[1])-1]} ${mdy[3]}`;
+        }
+        return s;  // return as-is for any other non-empty format
+      }
+
       // Normalize an amount for display based on account type.
       // Credit accounts: bank stores charges positive, payments negative.
-      //   → flip: charges show as -$X (money out), payments/refunds as +$X (money in)
-      // Checking accounts: use txn_type to determine sign (existing convention).
+      //   → flip: charges show as -₹X (money out), payments/refunds as +₹X (money in)
+      // Checking accounts: use txn_type to determine sign.
+      //   "debit"/"withdrawals"/"fee" → negative (expense); "credit" → positive (income)
+      // currSym defaults to "$"; pass "₹" for Indian accounts.
       // This is the ONLY place sign normalization lives — no per-bank hardcoding.
-      function _displayAmt(rawAmount, txnType, isCreditAcct) {
+      function _displayAmt(rawAmount, txnType, isCreditAcct, currSym) {
+        currSym = currSym || "$";
         const n = parseAmount(rawAmount);
         if (n === null) return rawAmount;
-        const abs = Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const numLocale = currSym === "₹" ? "en-IN" : "en-US";
+        const abs = Math.abs(n).toLocaleString(numLocale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         if (isCreditAcct) {
-          if (n > 0) return `-$${abs}`;       // charge → negative (money out)
-          if (n < 0) return `+$${abs}`;       // payment/refund → positive (money in)
-          return `$0.00`;
+          if (n > 0) return `-${currSym}${abs}`;   // charge → negative (money out)
+          if (n < 0) return `+${currSym}${abs}`;   // payment/refund → positive (money in)
+          return `${currSym}0.00`;
         } else {
           const type = (txnType || "").toLowerCase();
-          if ((type === "withdrawals" || type === "fee") &&
+          // Debit/expense: "debit" (Indian banks) or "withdrawals"/"fee" (US banks)
+          if ((type === "debit" || type === "withdrawals" || type === "fee") &&
               !String(rawAmount).startsWith("-") && !String(rawAmount).startsWith("(")) {
-            return `-${rawAmount}`;
+            return `-${currSym}${abs}`;
+          }
+          // Credit/income → show as positive with + prefix
+          if (type === "credit" && !String(rawAmount).startsWith("+")) {
+            return `+${currSym}${abs}`;
           }
           return rawAmount;
         }
@@ -604,12 +643,13 @@
         // Show total spending for the selected category
         if (categoryFilter && categoryFilter !== "All") {
           let total = 0;
+          const _sym = payload._currSym || "$";
           filteredTxns.forEach((t) => {
-            const n = parseAmount(_displayAmt(t.amount || "", t.txn_type, isCreditAcct));
+            const n = parseAmount(_displayAmt(t.amount || "", t.txn_type, isCreditAcct, _sym));
             if (n !== null) total += n;
           });
           const sign = total < 0 ? "-" : total > 0 ? "+" : "";
-          const formatted = `$${Math.abs(total).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+          const formatted = `${_sym}${Math.abs(total).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
           categoryTotal.textContent = `${categoryFilter}: ${sign}${formatted} across ${filteredTxns.length} transaction${filteredTxns.length !== 1 ? "s" : ""}`;
           categoryTotal.hidden = false;
         } else {
@@ -621,7 +661,7 @@
         resultsBody.innerHTML = filteredTxns
           .map(
             (t) => {
-              const amount = _displayAmt(t.amount || "", t.txn_type, isCreditAcct);
+              const amount = _displayAmt(t.amount || "", t.txn_type, isCreditAcct, payload._currSym || "$");
               const raw = t.raw_description || "";
               let merchant = t.merchant_clean || raw || "";
               const rawUpper = raw.toUpperCase();
@@ -632,10 +672,16 @@
               if (rawUpper.includes("ZELLE") && !merchUpper.includes("ZELLE")) {
                 merchant = `ZELLE ${merchant}`.trim();
               }
-              const dateDisplay = t.date
-                ? t.date
+              const formattedDate = _formatDate(t.date);
+              const dateDisplay = formattedDate
+                ? formattedDate
                 : `<span class="txn-date-pending">Pending</span>`;
-              return `<tr class="txn-row${t.date ? "" : " txn-pending"}" onclick="toggleTxnDetail(this)"><td>${dateDisplay}</td><td>${merchant}</td><td>${amount}</td></tr><tr class="txn-detail" hidden><td colspan="3" class="txn-raw">Raw: ${t.raw_description || ""} &nbsp;·&nbsp; ${amount}</td></tr>`;
+              const category = t.category || "Uncategorized";
+              const chipStyle = "margin-top:6px;display:inline-flex;align-items:center;border:1px solid #d6dbe4;background:#f7f8fb;color:#475467;border-radius:999px;padding:4px 10px;font-size:12px;line-height:1.2;";
+              const categoryChip = (!_isPdfMode && t.id)
+                ? `<button class="txn-category-chip" style="${chipStyle}cursor:pointer;" onclick="editTxnCategory(event, ${Number(t.id)}, ${JSON.stringify(merchant)}, ${JSON.stringify(category)})">${category}</button>`
+                : `<span class="txn-category-chip is-readonly" style="${chipStyle}cursor:default;">${category}</span>`;
+              return `<tr class="txn-row${formattedDate ? "" : " txn-pending"}" onclick="toggleTxnDetail(this)"><td>${dateDisplay}</td><td><div>${merchant}</div><div class="txn-category-row">${categoryChip}</div></td><td>${amount}</td></tr><tr class="txn-detail" hidden><td colspan="3" class="txn-raw">Raw: ${t.raw_description || ""} &nbsp;·&nbsp; ${amount}</td></tr>`;
             }
           )
           .join("");
@@ -651,15 +697,17 @@
           return;
         }
         categoryBlock.hidden = false;
+        const _sym = payload._currSym || "$";
+        const _locale = _sym === "₹" ? "en-IN" : "en-US";
         function fmtCardTotal(total) {
           if (total === undefined || total === null || isNaN(total)) return "";
           const sign = total < 0 ? "-" : total > 0 ? "+" : "";
-          return `${sign}$${Math.abs(total).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+          return `${sign}${_sym}${Math.abs(total).toLocaleString(_locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
         }
         const allTotal = Object.values(categoryTotals).reduce((s, v) => s + v, 0);
         // For credit cards show the balance due on the "All" pill; for others show net spending
         const allDisplayVal = payload._creditBalanceNum != null
-          ? "-$" + payload._creditBalanceNum.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          ? `-${_sym}` + payload._creditBalanceNum.toLocaleString(_locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
           : fmtCardTotal(-allTotal);
         const allCard = `<div class="result-card${
           categoryFilter === "All" ? " is-active" : ""
@@ -768,6 +816,32 @@
         if (detail && detail.classList.contains("txn-detail")) {
           detail.hidden = !detail.hidden;
           row.classList.toggle("is-expanded", !detail.hidden);
+        }
+      }
+
+      async function editTxnCategory(event, transactionId, merchant, currentCategory) {
+        event.stopPropagation();
+        const choice = window.prompt(`Set category for ${merchant}
+
+Options:
+${MANUAL_CATEGORY_OPTIONS.join(", ")}
+
+Current: ${currentCategory}`, currentCategory || "Uncategorized");
+        if (!choice) return;
+        const nextCategory = choice.trim();
+        if (!nextCategory || nextCategory === currentCategory) return;
+        try {
+          await _apiFetch(`/api/transactions/${transactionId}/category`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ category: nextCategory }),
+          });
+          if (currentAccountId) {
+            await loadAccountTransactions(currentAccountId);
+            if (activeMainTab === "insights") await loadInsights(currentAccountId, _insightsPeriod || "all");
+          }
+        } catch (err) {
+          window.alert(`Could not update category: ${err.message || err}`);
         }
       }
 
@@ -943,7 +1017,9 @@
           : (_liveAcctMetaCache[currentAccountId] || null);
 
         const filtered = _filterTxnsByPeriod(allTxns, period);
-        _renderLiveTransactions(filtered, label, acctMeta);
+        _renderLiveTransactions(filtered, label, acctMeta, true);
+        // Ensure we stay on transactions tab (not redirected to overview)
+        switchMainTab("transactions");
         if (activeMainTab === "insights") loadInsights(currentAccountId, period);
       }
 
@@ -1587,7 +1663,25 @@
         const hint     = acct.account_hint || "";
         const synced   = acct.last_synced_at ? _timeAgo(acct.last_synced_at) : "Never";
         const balVal   = acct.account_balance || "";
+        const invVal   = acct.investment_balance || "";
         const balLabel = isCreditAcct ? "Balance due" : "Balance";
+        // Compute total portfolio when both account + investment balances are known
+        const portfolioHtml = (() => {
+          if (!invVal) return "";
+          const stripNum = s => parseFloat(s.replace(/[^0-9.]/g, "")) || 0;
+          const acctNum = stripNum(balVal || "0");
+          const invNum  = stripNum(invVal);
+          const total   = acctNum + invNum;
+          const isIn    = /^\d/.test(invVal);  // Indian amounts stored without $ prefix
+          const sym     = isIn ? "₹" : "$";
+          const totalFmt = sym + total.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          return `<div style="margin-top:4px;line-height:1.3;">
+            <div style="font-size:13px;font-weight:700;color:#1f5f55;">${totalFmt}</div>
+            <div style="font-size:10px;color:#64748b;margin-top:1px;">
+              A/C&nbsp;${balVal}&nbsp;·&nbsp;Invest&nbsp;${invVal}
+            </div>
+          </div>`;
+        })();
         const txLabel  = acct.tx_count ? `${Number(acct.tx_count).toLocaleString()} transactions` : "No transactions yet";
 
         const intervalOptions = [2, 6, 12, 24].map(h =>
@@ -1618,7 +1712,7 @@
               <span class="acct-row-synced">Synced ${synced}</span>
             </div>
 
-            <!-- Right: balance (click to edit) -->
+            <!-- Right: balance (click to edit) + optional portfolio breakdown -->
             <div class="acct-row-right" onclick="event.stopPropagation()">
               <div class="acct-balance-display${balVal ? "" : " acct-balance-empty"}"
                    onclick="startBalanceEdit(this,${acct.id})" title="Click to edit balance">
@@ -1629,6 +1723,7 @@
                      onblur="saveBalance(this,${acct.id})"
                      onkeydown="if(event.key==='Enter')this.blur();if(event.key==='Escape')cancelBalanceEdit(this)" />
               <div class="acct-card-balance-label" ${balVal ? "" : 'style="display:none"'}>${balLabel}</div>
+              ${portfolioHtml}
             </div>
 
             <!-- Far right: overflow menu -->
@@ -1788,9 +1883,10 @@
         _renderLiveTransactions(txns, label, acctMeta);
       }
 
-      function _renderLiveTransactions(txns, label, acctMeta) {
+      function _renderLiveTransactions(txns, label, acctMeta, keepCurrentTab = false) {
         // Map DB format → the format renderTransactions expects
         const mapped = txns.map(t => ({
+          id: t.id,
           date: t.date || "",
           merchant_clean: t.merchant_clean || t.description || "",
           raw_description: t.description || "",
@@ -1799,7 +1895,10 @@
           category: t.category || "Uncategorized",
         }));
 
-        const fmt = v => "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const isIndian = /icici|hdfc|sbi|axis|kotak/i.test((acctMeta?.bank_key || ""));
+        const currSym = isIndian ? "₹" : "$";
+        const locale = isIndian ? "en-IN" : "en-US";
+        const fmt = v => currSym + Math.abs(v).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         const acctBalance = acctMeta ? (acctMeta.account_balance || "") : "";
         const currentBalNum = acctBalance ? parseAmount(acctBalance) : null;
         const isCreditCard = acctMeta && (acctMeta.account_type === "credit");
@@ -1857,6 +1956,7 @@
           summary_cards: summaryCards,
           _creditBalanceNum: isCreditCard ? computedBalance : null,
           _isCreditCard: isCreditCard,
+          _currSym: currSym,
         };
 
         lastPayload = payload;
@@ -1881,7 +1981,8 @@
         if (insTab) insTab.style.display = "";
         // Always switch to Overview when loading a (potentially different) account.
         // This clears any stale Insights or Transactions content from the previous account.
-        switchMainTab("overview");
+        // keepCurrentTab=true when called from filterByPeriod — stay on transactions tab.
+        if (!keepCurrentTab) switchMainTab("overview");
         // Ensure period filter row is visible on transactions tab
         const periodRow = document.getElementById("periodFilterRow");
         if (periodRow && activeMainTab === "transactions") periodRow.style.display = "";
@@ -1922,10 +2023,7 @@
         btn.textContent = "…";
         const status = document.getElementById("connectBankStatus");
         status.style.display = "block";
-        const needsLogin = false; // status determined server-side
-        status.textContent = needsLogin
-          ? "Opening browser to re-authenticate — log in to refresh the session…"
-          : "Opening browser — log in to sync your account…";
+        status.textContent = "Syncing in background…";
         try {
           const resp = await _apiFetch(`/api/accounts/${accountId}/sync`, {
             method: "POST",
@@ -1933,6 +2031,17 @@
             body: JSON.stringify({}),
           });
           const data = await resp.json();
+          if (resp.status === 422) {
+            // Session missing or expired — show message, highlight Re-login button
+            status.textContent = data.error || "Session expired — please click ↩ Re-login.";
+            // Visually pulse the Re-login button so the user knows what to do
+            const reloginBtn = btn.parentElement?.querySelector("button:last-child");
+            if (reloginBtn) {
+              reloginBtn.style.outline = "2px solid #f97316";
+              setTimeout(() => { reloginBtn.style.outline = ""; }, 3000);
+            }
+            return;
+          }
           if (!resp.ok) throw new Error(data.error || "Sync failed");
           status.textContent = `Synced — ${data.count} transaction${data.count !== 1 ? "s" : ""} fetched`;
           await loadAccounts();

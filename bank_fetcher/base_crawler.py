@@ -6,7 +6,7 @@ import plistlib
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -108,6 +108,9 @@ class BankCrawler:
         self._ending_balance: str = ""    # balance from the most-recent (first) scraped row
         self._starting_balance: str = ""  # balance from the oldest (last) scraped row
         self._mfa_callback = None         # callable() → OTP string; set by run_scrape_automated
+        self._is_automated: bool = False  # True during run_scrape_automated — disables input() blocking
+        self._since_date: Optional[datetime] = None  # stored for use in step value resolution
+        self._extra_values: dict[str, str] = {}  # arbitrary values captured via "capture" steps
 
     # ------------------------------------------------------------------ #
     # Public entry point
@@ -154,7 +157,15 @@ class BankCrawler:
 
         elif action == "wait_for_selector":
             timeout = step.get("timeout", t["element_wait"])
-            self._page.wait_for_selector(step["selector"], timeout=timeout)
+            fallback_sel = step.get("fallback_selector", "")
+            try:
+                self._page.wait_for_selector(step["selector"], timeout=timeout)
+            except PWTimeoutError:
+                if fallback_sel:
+                    print(f"  [wait_for_selector] '{step['selector']}' timed out, trying fallback '{fallback_sel}'…")
+                    self._page.wait_for_selector(fallback_sel, timeout=timeout)
+                else:
+                    raise
 
         elif action == "fill":
             value = self._resolve_value(step["value"])
@@ -313,13 +324,184 @@ class BankCrawler:
                     f"Debug files saved to {debug_dir}"
                 )
 
+        elif action == "click_text":
+            # Click the first element whose visible text matches `text` (case-insensitive).
+            # Falls back to `fallback_text` then `fallback_selector` if text match times out.
+            text = step["text"]
+            timeout = step.get("timeout", t["element_wait"])
+            fallback_text = step.get("fallback_text", "")
+            fallback = step.get("fallback_selector", "")
+            clicked = False
+            try:
+                # Playwright text selector — matches partial visible text
+                self._page.click(f"text={text}", timeout=timeout)
+                clicked = True
+            except PWTimeoutError:
+                pass
+            if not clicked and fallback_text:
+                try:
+                    print(f"  [click_text] '{text}' not found, trying fallback_text '{fallback_text}'…")
+                    self._page.click(f"text={fallback_text}", timeout=timeout)
+                    clicked = True
+                except PWTimeoutError:
+                    pass
+            if not clicked and fallback:
+                print(f"  [click_text] text variants not found, trying fallback selector…")
+                self._page.click(fallback, timeout=timeout)
+                clicked = True
+            if not clicked:
+                raise RuntimeError(
+                    f"Could not find clickable element with text '{text}'. "
+                    f"The page may have loaded differently — check the ICICI statement page."
+                ) from None
+
+        elif action == "click_icase":
+            # Case-insensitive click using JS innerText (CSS text-transform aware) to locate
+            # the element, then page.mouse.click(x, y) with real mouse events so Angular's
+            # zone-aware event handlers fire correctly.
+            text_lower = step["text"].lower()
+            exact = step.get("exact", False)
+            sel_str = step.get("selectors", "button, [role='tab'], li, a, div, span")
+            timeout_ms = step.get("timeout", t["element_wait"])
+            max_text_len = step.get("max_text_len", len(text_lower) * 4)
+            match_expr = (
+                f"txt === {repr(text_lower)}" if exact
+                else f"txt.includes({repr(text_lower)})"
+            )
+            js = f"""() => {{
+                const candidates = Array.from(document.querySelectorAll({repr(sel_str)}));
+                const results = [];
+                for (const el of candidates) {{
+                    // getBoundingClientRect works for position:fixed modals (offsetParent would be null)
+                    const r = el.getBoundingClientRect();
+                    if (r.width === 0 || r.height === 0) continue;
+                    if (r.bottom < 0 || r.top > window.innerHeight) continue;
+                    const txt = (el.innerText || '').trim().toLowerCase();
+                    if (txt.length === 0 || txt.length > {max_text_len}) continue;
+                    if ({match_expr}) {{
+                        results.push({{
+                            x: Math.round(r.left + r.width / 2),
+                            y: Math.round(r.top + r.height / 2),
+                            text: (el.innerText || '').trim(),
+                            tag: el.tagName.toLowerCase(),
+                            area: r.width * r.height
+                        }});
+                    }}
+                }}
+                // Sort by area ascending — the most specific (smallest) element is the real target,
+                // not a parent wrapper that happens to contain the same text.
+                results.sort((a, b) => a.area - b.area);
+                return results;
+            }}"""
+            deadline = time.time() + timeout_ms / 1000
+            clicked = False
+            while time.time() < deadline and not clicked:
+                try:
+                    matches = self._page.evaluate(js)
+                    if matches:
+                        # Log ALL candidates so mismatches are visible in the terminal
+                        print(f"  [click_icase] '{step['text']}' candidates: "
+                              f"{[m['text'] for m in matches]}")
+                        # Prefer interactive elements (button/select/a) over generic containers
+                        preferred = [m for m in matches if m.get("tag") in ("button", "select", "a", "input")]
+                        coords = preferred[0] if preferred else matches[0]
+                        print(f"  [click_icase] clicking '{coords['text']}' "
+                              f"at ({coords['x']}, {coords['y']})")
+                        self._page.mouse.click(coords["x"], coords["y"])
+                        clicked = True
+                    else:
+                        time.sleep(0.4)
+                except Exception as exc:
+                    print(f"  [click_icase] error: {exc}")
+                    time.sleep(0.4)
+            if not clicked:
+                raise RuntimeError(
+                    f"click_icase: no visible element found whose innerText "
+                    f"{'equals' if exact else 'contains'} '{step['text']}' "
+                    f"(selectors={sel_str!r}, max_text_len={max_text_len})"
+                )
+
+        elif action == "wait_for_selector_any":
+            # Wait until at least one of a list of selectors appears.
+            # Useful when different page states show different elements.
+            selectors = step["selectors"]  # list of CSS selector strings
+            timeout_ms = step.get("timeout", t["element_wait"])
+            deadline = time.time() + timeout_ms / 1000
+            found = None
+            while time.time() < deadline and not found:
+                for sel in selectors:
+                    try:
+                        if self._page.query_selector(sel):
+                            found = sel
+                            break
+                    except Exception:
+                        pass
+                if not found:
+                    time.sleep(0.5)
+            if not found:
+                raise RuntimeError(
+                    f"Timed out waiting for any of these selectors: {selectors}"
+                )
+            print(f"  [wait_any] Matched: {found!r}")
+
+        elif action == "evaluate":
+            # Run arbitrary JavaScript on the page.
+            # Useful for date pickers that don't respond to `fill`.
+            expression = step["expression"]
+            # Support $since_date_dmy / $today_dmy tokens inside JS
+            expression = expression.replace("$since_date_dmy", self._resolve_value("$since_date_dmy"))
+            expression = expression.replace("$today_dmy", self._resolve_value("$today_dmy"))
+            expression = expression.replace("$since_date_ymd", self._resolve_value("$since_date_ymd"))
+            expression = expression.replace("$today_ymd", self._resolve_value("$today_ymd"))
+            self._page.evaluate(expression)
+
+        elif action == "fill_and_trigger":
+            # Fill a field AND dispatch input/change events — needed for Angular's
+            # reactive forms where `fill` alone doesn't trigger ngModel updates.
+            # Supports comma-separated fallback selectors (tries each in order).
+            value = self._resolve_value(step["value"])
+            selectors = [s.strip() for s in step["selector"].split(",")]
+            filled = False
+            for sel in selectors:
+                try:
+                    el = self._page.query_selector(sel)
+                    if el:
+                        self._page.fill(sel, value)
+                        self._page.dispatch_event(sel, "input")
+                        self._page.dispatch_event(sel, "change")
+                        filled = True
+                        break
+                except Exception:
+                    continue
+            if not filled:
+                raise RuntimeError(
+                    f"fill_and_trigger: could not find any field matching: {step['selector']}"
+                )
+
+        elif action == "capture":
+            # Run JS on the page and store the string result in self._extra_values[key].
+            # Silent no-op if JS throws or returns null/undefined — never breaks the scrape flow.
+            key = step.get("key", "")
+            js  = step.get("expression", "() => null")
+            if key:
+                try:
+                    val = self._page.evaluate(js)
+                    if val:
+                        self._extra_values[key] = str(val).strip()
+                        print(f"  [capture] {key} = {self._extra_values[key]!r}")
+                    else:
+                        print(f"  [capture] {key}: JS returned null/empty — skipping")
+                except Exception as cap_exc:
+                    print(f"  [capture] {key}: JS error — {cap_exc}")
+
         elif action == "sleep":
             time.sleep(step.get("seconds", 2))
 
         else:
             raise ValueError(
                 f"Unknown step action: {action!r}. "
-                f"Valid actions: goto, wait_for_selector, fill, click, "
+                f"Valid actions: goto, wait_for_selector, fill, fill_and_trigger, "
+                f"click, click_text, click_icase, wait_for_selector_any, evaluate, "
                 f"wait_for_url, wait_for_load_state, maybe_mfa, inject_banner, "
                 f"wait_for_navigation, sleep"
             )
@@ -353,11 +535,20 @@ class BankCrawler:
             pass
 
     def _resolve_value(self, value: str) -> str:
-        """Resolve $username / $password tokens from in-memory credentials."""
+        """Resolve $username / $password / $date tokens."""
         if value == "$username":
             return self._creds.username
         if value == "$password":
             return self._creds.password
+        # Date tokens — use since_date if available, else fall back to 1 year ago
+        _since = self._since_date or (datetime.now() - timedelta(days=365))
+        _today = datetime.now()
+        if value == "$since_date_dmy":   return _since.strftime("%d/%m/%Y")
+        if value == "$today_dmy":        return _today.strftime("%d/%m/%Y")
+        if value == "$since_date_mdy":   return _since.strftime("%m/%d/%Y")
+        if value == "$today_mdy":        return _today.strftime("%m/%d/%Y")
+        if value == "$since_date_ymd":   return _since.strftime("%Y-%m-%d")
+        if value == "$today_ymd":        return _today.strftime("%Y-%m-%d")
         return value
 
     # ------------------------------------------------------------------ #
@@ -375,6 +566,7 @@ class BankCrawler:
         If session_save_path is provided, saves browser session state there for headless reuse
         and skips logout so the session stays valid.
         """
+        self._since_date = since_date  # store for $since_date_* token resolution in steps
         transactions_url: str | None = None
         bank_key = self._cfg.get("bank_key", "unknown")
         first_url = (self._cfg.get("interactive_login_steps") or [{}])[0].get("url", "N/A")
@@ -391,12 +583,25 @@ class BankCrawler:
             if len(pages) > 1:
                 self._page = pages[-1]
 
+            # Always run transactions_steps after login (may be empty for BOA-style banks
+            # that use wait_for_transactions, or a full navigation sequence for ICICI-style banks).
+            txn_steps = self._cfg.get("transactions_steps", [])
+            if txn_steps:
+                try:
+                    self._run_steps(txn_steps)
+                except (PWTimeoutError, RuntimeError) as e:
+                    # Navigation steps may timeout or fail on the final wait_for_selector
+                    # (Angular re-render instability). Log but continue — the scraper
+                    # will attempt to find rows on whatever page is currently loaded.
+                    print(f"  [warn] transactions_steps did not complete cleanly: {e}")
+                    print(f"  Continuing — will attempt scraping on current page.")
+
             txn_cfg = self._cfg.get("transactions_config", {})
             configured_sel = txn_cfg.get("row_selector", "")
 
             if not configured_sel:
-                # No selector yet — wait_for_transactions step should have set it.
-                # If it didn't (bank config doesn't use that step), try discovery now.
+                # No selector yet — wait_for_transactions step should have set it,
+                # or transactions_steps should have navigated to a scrappable page.
                 discovered = self._auto_discover_row_selector()
                 if discovered:
                     self._cfg.setdefault("transactions_config", {})["row_selector"] = discovered
@@ -404,25 +609,9 @@ class BankCrawler:
                     bank = self._cfg.get("bank_display_name", self._cfg.get("bank_key", "bank"))
                     raise RuntimeError(
                         f"{bank}: could not find any transaction rows on this page.\n"
-                        f"Debug HTML saved to /tmp/{self._cfg.get('bank_key','bank')}_debug.html\n"
+                        f"Debug HTML saved to data/debug/{self._cfg.get('bank_key','bank')}_debug.html\n"
                         f"Make sure you clicked on a specific account and the transactions list is visible."
                     )
-            else:
-                # Configured selector exists — run transactions_steps as normal
-                try:
-                    self._run_steps(self._cfg.get("transactions_steps", []))
-                except PWTimeoutError:
-                    print(f"  Configured selector timed out, trying auto-discovery…")
-                    discovered = self._auto_discover_row_selector()
-                    if discovered:
-                        self._cfg["transactions_config"]["row_selector"] = discovered
-                    else:
-                        bank = self._cfg.get("bank_display_name", self._cfg.get("bank_key", "bank"))
-                        raise RuntimeError(
-                            f"{bank}: could not find transaction rows on this page.\n"
-                            f"Debug HTML saved to /tmp/{self._cfg.get('bank_key','bank')}_debug.html\n"
-                            f"Make sure you navigated to the full transactions list."
-                        ) from None
 
             # Capture URL before scraping — needed for headless replay later
             transactions_url = self._page.url
@@ -513,6 +702,8 @@ class BankCrawler:
 
         self._creds = BankCredentials(username=username, password=password)
         self._mfa_callback = mfa_callback
+        self._is_automated = True         # prevents input() blocking during MFA
+        self._since_date = since_date  # store for $since_date_* token resolution
         transactions_url: str | None = None
 
         try:
@@ -545,6 +736,7 @@ class BankCrawler:
         finally:
             self._creds = None
             self._mfa_callback = None
+            self._is_automated = False
             # Skip logout when saving session — logout invalidates the cookies we just saved
             if not session_save_path:
                 self._safe_logout()
@@ -553,13 +745,18 @@ class BankCrawler:
     def _scrape_transactions(self, since_date: datetime | None) -> list[TransactionRecord]:
         """
         Extract transactions using transactions_config selectors.
-        Paginates by clicking view_more_selector until all rows within since_date are loaded.
-        If since_date is None, fetches everything.
+
+        pagination_style (in transactions_config):
+          "scroll"     — default; rows accumulate via infinite scroll or "Load More" button.
+          "next_page"  — each page REPLACES rows (e.g. ICICI Detailed Statement).
+                         Clicks view_more_selector to advance pages until cutoff is reached
+                         or the Next button is disabled/gone.
         """
         txn_cfg = self._cfg.get("transactions_config", {})
         row_sel = txn_cfg.get("row_selector", "")
         view_more_sel = txn_cfg.get("view_more_selector", "")
         col_cfg = txn_cfg.get("columns", {})
+        pagination_style = txn_cfg.get("pagination_style", "scroll")
 
         if not row_sel:
             raise ValueError(
@@ -568,18 +765,97 @@ class BankCrawler:
             )
 
         records: list[TransactionRecord] = []
+        seen_keys: set[str] = set()   # dedup guard for next_page mode
         done = False
         self._ending_balance = ""
         self._starting_balance = ""
+        # ── Grouped-date tracking ──────────────────────────────────────────────
+        # Some banks (e.g. ICICI Detailed Statement) display a date-only header
+        # row above each group of transactions instead of repeating the date in
+        # every transaction row.  We track the most-recently-seen date so we can
+        # assign it to the transaction rows that follow.
+        _current_group_date: str = ""
+
+        _html_dump_done = False   # only dump once per scrape session
 
         try:
             while not done:
                 rows = self._page.query_selector_all(row_sel)
-                # Only process rows we haven't seen yet
-                new_rows = rows[len(records):]
+                # "next_page" mode: each page replaces rows — process ALL rows every iteration.
+                # "scroll" mode: rows accumulate — only process the newly added tail.
+                new_rows = rows if pagination_style == "next_page" else rows[len(records):]
+                records_before_page = len(records)   # for stuck-page detection
 
+                # ── One-time HTML dump for date-cell debugging ────────────────
+                # Saves the first 20 rows' raw HTML plus the parent/sibling context
+                # of the first row so we can find where the date lives in the DOM.
+                if not _html_dump_done and new_rows:
+                    try:
+                        _debug_html = self._page.evaluate(f"""() => {{
+                            const rows = Array.from(document.querySelectorAll({repr(row_sel)})).slice(0, 20);
+                            const rowDump = rows.map((r, i) => `<!-- ROW ${{i}} -->\\n` + r.outerHTML).join('\\n\\n');
+
+                            // Walk up from first row and dump the ancestor chain
+                            // (up to 6 levels) plus each ancestor's outer HTML (first 2000 chars)
+                            // so we can see where dates are placed in the page structure.
+                            let contextDump = '\\n\\n<!-- === ANCESTOR CONTEXT (from first row) === -->';
+                            const firstRow = rows[0];
+                            if (firstRow) {{
+                                let node = firstRow.parentElement;
+                                for (let lvl = 0; lvl < 7 && node && node.tagName !== 'BODY'; lvl++) {{
+                                    const tag = node.tagName + (node.className ? '.' + (node.className.toString().trim().split(/\\s+/).join('.')) : '');
+                                    const snippet = node.outerHTML.slice(0, 3000);
+                                    contextDump += `\\n\\n<!-- ANCESTOR[${{lvl}}] ${{tag}} -->\\n${{snippet}}${{node.outerHTML.length > 3000 ? '\\n... [truncated at 3000 chars]' : ''}}`;
+                                    node = node.parentElement;
+                                }}
+                            }}
+                            return rowDump + contextDump;
+                        }}""")
+                        _debug_path = Path(__file__).resolve().parent.parent / "data" / "debug" / "icici_rows_debug.html"
+                        _debug_path.parent.mkdir(parents=True, exist_ok=True)
+                        _debug_path.write_text(_debug_html or "", encoding="utf-8")
+                        print(f"  [debug] Row HTML dumped → {_debug_path}")
+                    except Exception as _de:
+                        print(f"  [debug] HTML dump failed: {_de}")
+                    _html_dump_done = True
+
+                _diag_row_count = 0  # reset per page
                 for row in new_rows:
-                    date_text = " ".join(_text(row, col_cfg.get("date", "")).split())
+                    # ── Date extraction ─────────────────────────────────────────
+                    # If the config has an explicit date selector, use it.
+                    # If it's "" (empty), the bank has NO date column in each row
+                    # (e.g. ICICI groups rows by date with a header outside <tbody>).
+                    # In that case we leave date_text="" and let group-header tracking
+                    # or the DOM-context JS finder fill it in below.
+                    _date_selector = col_cfg.get("date", "")
+                    if _date_selector:
+                        _raw_date_cell = _text(row, _date_selector)
+                        date_text = " ".join(_raw_date_cell.split())
+                        # textContent fallback — catches dates hidden by CSS visibility
+                        if not date_text:
+                            try:
+                                _tc = row.evaluate(f"""el => {{
+                                    const cell = el.querySelector({repr(_date_selector)});
+                                    return cell ? cell.textContent.trim() : '';
+                                }}""") or ""
+                                date_text = " ".join(_tc.split())
+                            except Exception:
+                                pass
+                    else:
+                        date_text = ""  # No date column — will be filled from group header or DOM
+
+                    # Diagnostic: log first 3 rows per page
+                    _diag_row_count += 1
+                    if _diag_row_count <= 3:
+                        _date_sel = col_cfg.get("date", "")
+                        _d1 = _text(row, _date_sel) if _date_sel else "(no date col)"
+                        _d2 = _text(row, col_cfg.get("description", ""))
+                        _d3 = _text(row, col_cfg.get("credit_amount", ""))
+                        _d4 = _text(row, col_cfg.get("debit_amount", ""))
+                        _d5 = _text(row, col_cfg.get("balance", ""))
+                        print(f"  [diag row {_diag_row_count}] date={_d1!r:20} desc={_d2!r:40} "
+                              f"credit={_d3!r:12} debit={_d4!r:12} bal={_d5!r:12}")
+
                     description = _text(row, col_cfg.get("description", ""))
 
                     # ── Split debit/credit columns (Indian banks: ICICI, HDFC, etc.) ──
@@ -590,11 +866,9 @@ class BankCrawler:
                     if col_cfg.get("debit_amount") or col_cfg.get("credit_amount"):
                         debit_raw  = _text(row, col_cfg.get("debit_amount",  "")).strip()
                         credit_raw = _text(row, col_cfg.get("credit_amount", "")).strip()
-                        # Extract numeric portion from each (may contain ₹ or ,)
-                        dm = _AMOUNT_RE.search(debit_raw)  if debit_raw  else None
-                        cm = _AMOUNT_RE.search(credit_raw) if credit_raw else None
-                        debit_clean  = dm.group(0) if dm  else ""
-                        credit_clean = cm.group(0) if cm else ""
+                        # Extract numeric portion from each (may contain ₹/$, commas, or plain decimals)
+                        debit_clean  = _extract_amount_str(debit_raw)
+                        credit_clean = _extract_amount_str(credit_raw)
                         d_empty = debit_clean.replace(",", "").replace(".", "").strip("0") == ""
                         c_empty = credit_clean.replace(",", "").replace(".", "").strip("0") == ""
                         if not d_empty and d_empty == c_empty:
@@ -635,7 +909,11 @@ class BankCrawler:
                         full_text = (row.inner_text() or "").strip()
                         if full_text:
                             rx_date, rx_amount, rx_desc = _extract_from_row_text(full_text)
-                            date_text = date_text or rx_date
+                            # Only inherit rx_date if the config has an explicit date column.
+                            # When _date_selector is "" the date lives OUTSIDE the row (e.g. ICICI),
+                            # so rx_date would be a bogus match from a transaction reference number.
+                            if _date_selector:
+                                date_text = date_text or rx_date
                             amount_raw = amount_raw or rx_amount
                             description = description or rx_desc
 
@@ -645,6 +923,108 @@ class BankCrawler:
                     # (Angular CDK sometimes injects aria-live rows with full page text)
                     if description and len(description) > 150:
                         continue
+
+                    # ── Grouped-date rows (ICICI-style) ────────────────────────
+                    # Case A: date selector returned text but amount is empty
+                    #         → this IS a date-group header row; capture and skip.
+                    # Case B: no amount AND no description → spacer / header row;
+                    #         try to parse full row text as a date then skip.
+                    if (date_text and not amount_raw) or (not amount_raw and not description):
+                        _hdr_candidate = date_text or " ".join((row.inner_text() or "").split())
+                        _parsed_hdr = _parse_date(_hdr_candidate)
+                        if _parsed_hdr:
+                            _current_group_date = _parsed_hdr.strftime("%Y-%m-%d")
+                            print(f"  [date-group header] {_hdr_candidate!r} → {_current_group_date}")
+                        continue  # skip all non-transaction rows regardless
+
+                    # If this transaction row still has no date, try two strategies:
+                    # 1. JS DOM-context walk: scan sibling/ancestor elements for a date string.
+                    #    Re-run for every row so we detect date-group changes mid-page.
+                    #    (Used when dates live OUTSIDE the <table>, e.g. ICICI Angular SPA.)
+                    # 2. Fall back to the most-recently-seen group date.
+                    if not date_text:
+                        if not _date_selector:
+                            # DOM-context finder — only for banks with no date column.
+                            #
+                            # ICICI-specific: each date-group is wrapped in div.transaction
+                            # which contains div.date > p.date-1 (day) + p.date-2 (month).
+                            # The year lives in the nearest preceding div.date-transaction-top
+                            # sibling (p.date = "April 2026").
+                            #
+                            # Generic fallback: walk up the ancestor chain checking previous
+                            # siblings for a "DD Mon YYYY" formatted string.
+                            try:
+                                _dom_date = row.evaluate(r"""el => {
+                                    // ── ICICI-specific path ────────────────────────────
+                                    const txnDiv = el.closest('div.transaction');
+                                    if (txnDiv) {
+                                        const dayEl = txnDiv.querySelector('.date-1');
+                                        const monEl = txnDiv.querySelector('.date-2');
+                                        const d = dayEl ? dayEl.textContent.trim() : '';
+                                        const mo = monEl ? monEl.textContent.trim() : '';
+                                        let year = '';
+                                        // Year is in div.date-transaction-top.  Search up
+                                        // the ancestor chain (not just immediate parent) because
+                                        // on paginated pages the wrapper depth can vary.
+                                        let searchNode = txnDiv.parentElement;
+                                        while (searchNode && searchNode.tagName !== 'BODY' && !year) {
+                                            const hdr = searchNode.querySelector('.date-transaction-top .date');
+                                            if (hdr) {
+                                                const ym = (hdr.textContent || '').match(/\d{4}/);
+                                                if (ym) year = ym[0];
+                                            }
+                                            searchNode = searchNode.parentElement;
+                                        }
+                                        if (d && mo) {
+                                            if (!year) {
+                                                // Smart fallback: months numerically > current month
+                                                // must be from LAST year (e.g. Dec when today is May).
+                                                const MONS = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,
+                                                              jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+                                                const moNum = MONS[mo.toLowerCase().substring(0,3)] || 0;
+                                                const curMon = new Date().getMonth() + 1;
+                                                const curYr  = new Date().getFullYear();
+                                                year = String(moNum > curMon ? curYr - 1 : curYr);
+                                            }
+                                            return `${d} ${mo} ${year}`;
+                                        }
+                                    }
+
+                                    // ── Generic fallback for other banks ──────────────
+                                    const dateRe = /^\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4}$/i;
+                                    const looseRe = /\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4}\b/i;
+                                    let node = el;
+                                    for (let depth = 0; depth < 10; depth++) {
+                                        let sib = node.previousElementSibling;
+                                        for (let s = 0; s < 15 && sib; s++) {
+                                            const t = (sib.innerText || sib.textContent || '').trim();
+                                            if (dateRe.test(t)) return t;
+                                            const leaf = sib.querySelector('p, span, div, td');
+                                            if (leaf) {
+                                                const lt = (leaf.innerText || leaf.textContent || '').trim();
+                                                if (dateRe.test(lt)) return lt;
+                                                const m = looseRe.exec(lt);
+                                                if (m) return m[0];
+                                            }
+                                            sib = sib.previousElementSibling;
+                                        }
+                                        node = node.parentElement;
+                                        if (!node || node.tagName === 'BODY') break;
+                                    }
+                                    return null;
+                                }""")
+                                if _dom_date:
+                                    _parsed_dom = _parse_date(_dom_date.strip())
+                                    if _parsed_dom:
+                                        _new_grp = _parsed_dom.strftime("%Y-%m-%d")
+                                        if _new_grp != _current_group_date:
+                                            print(f"  [dom-date] {_dom_date!r} → {_new_grp}")
+                                            _current_group_date = _new_grp
+                            except Exception:
+                                pass
+                        # Use cached group date (updated by DOM finder above, or by in-row header)
+                        if _current_group_date:
+                            date_text = _current_group_date
 
                     row_date = _parse_date(date_text)
 
@@ -677,12 +1057,21 @@ class BankCrawler:
 
                     balance_raw = _text(row, col_cfg.get("balance", ""))
                     record = TransactionRecord(
-                        date=date_text,
+                        date=row_date.strftime("%Y-%m-%d") if row_date else date_text,
                         description=description,
                         amount=amount_raw,
                         amount_type=amount_type,
                         balance=balance_raw,
                     )
+
+                    # In next_page mode pages replace each other, so the same row can appear
+                    # each iteration if pagination gets stuck.  Skip already-seen rows.
+                    if pagination_style == "next_page":
+                        row_key = f"{record.date}|{record.description}|{record.amount}|{record.balance}"
+                        if row_key in seen_keys:
+                            continue
+                        seen_keys.add(row_key)
+
                     records.append(record)
 
                     # First appended row = most recent transaction = ending balance
@@ -695,29 +1084,229 @@ class BankCrawler:
                 if done:
                     break
 
-                # Try to load more rows: click "View More" button OR auto-scroll (infinite scroll)
-                prev_count = len(rows)
+                # ── Pagination ─────────────────────────────────────────────────
+                if pagination_style == "next_page":
+                    # Stuck-page guard: if every row on this page was already in seen_keys
+                    # (i.e. new_rows added 0 new records), the Next button click did nothing
+                    # useful — stop to avoid an infinite loop.
+                    records_before = len(records)  # captured just before the loop above ran
 
-                if view_more_sel:
-                    view_more = self._page.query_selector(view_more_sel)
-                    if view_more and view_more.is_visible():
-                        print(f"  Loading more rows via button (have {len(records)} so far)…")
-                        view_more.click()
-                        self._page.wait_for_load_state("networkidle", timeout=15000)
-                        time.sleep(1)
-                        continue
+                    # Find and click the Next button using JS + mouse.click() so Angular's
+                    # event handlers fire correctly. Strategy:
+                    # 1. Try CSS view_more_selector (works for standard banks)
+                    # 2. Fall back to JS that finds the button AFTER "Page X of Y" text
+                    #    (works for ICICI's custom Angular pagination component)
+                    next_coords = None
 
-                # No "View More" button found — try auto-scrolling for infinite scroll pages
-                print(f"  Auto-scrolling to load more rows (have {len(records)} so far)…")
-                self._page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                time.sleep(2)
-                try:
-                    self._page.wait_for_load_state("networkidle", timeout=8000)
-                except Exception:
-                    pass
-                new_count = len(self._page.query_selector_all(row_sel))
-                if new_count <= prev_count:
-                    break  # scroll loaded no new rows — we're done
+                    # Strategy 1: CSS selector
+                    if view_more_sel:
+                        next_btn = self._page.query_selector(view_more_sel)
+                        if next_btn and next_btn.is_visible():
+                            disabled = next_btn.get_attribute("disabled")
+                            aria_disabled = next_btn.get_attribute("aria-disabled")
+                            btn_class = next_btn.get_attribute("class") or ""
+                            if (disabled is not None
+                                    or aria_disabled == "true"
+                                    or "disabled" in btn_class
+                                    or "inactive" in btn_class):
+                                print(f"  [next_page] Next button disabled — last page ({len(records)} total)")
+                                break
+                            r = next_btn.bounding_box()
+                            if r:
+                                next_coords = {"x": r["x"] + r["width"] / 2,
+                                               "y": r["y"] + r["height"] / 2}
+
+                    # Strategy 2: JS — find "Page X of Y" anywhere in the DOM (it may be
+                    # below the initial viewport on long ICICI statement pages), scroll it
+                    # into view, then find the > button using vertical proximity so we never
+                    # accidentally click a date-filter button that happens to be nearby.
+                    if next_coords is None:
+                        # Step A: scroll the pagination bar into view
+                        self._page.evaluate("""() => {
+                            for (const el of document.querySelectorAll('*')) {
+                                const t = (el.innerText || '').trim();
+                                if (/^page\\s+\\d+\\s+of\\s+\\d+$/i.test(t)) {
+                                    el.scrollIntoView({block: 'center', inline: 'nearest'});
+                                    return;
+                                }
+                            }
+                            window.scrollTo(0, document.body.scrollHeight);
+                        }""")
+                        import time as _time; _time.sleep(0.6)
+
+                        # Step B: dump every leaf element near the pagination row so we can
+                        # see exactly what ICICI renders for the > arrow button.
+                        _dbg = self._page.evaluate("""() => {
+                            let pageEl = null, best = 999;
+                            for (const el of document.querySelectorAll('*')) {
+                                const t = (el.innerText || '').trim();
+                                if (!/^page\\s+\\d+\\s+of\\s+\\d+$/i.test(t)) continue;
+                                const r = el.getBoundingClientRect();
+                                if (r.width === 0 && r.height === 0) continue;
+                                if (el.children.length < best) { pageEl = el; best = el.children.length; }
+                            }
+                            if (!pageEl) return 'NO_PAGE_TEXT';
+                            const pr = pageEl.getBoundingClientRect();
+                            const cy = pr.top + pr.height / 2;
+                            const all = Array.from(document.querySelectorAll('*'))
+                                .filter(el => {
+                                    const r = el.getBoundingClientRect();
+                                    return Math.abs((r.top + r.height / 2) - cy) < 55;
+                                })
+                                .map(el => {
+                                    const r = el.getBoundingClientRect();
+                                    const txt = (el.innerText || '').trim().slice(0, 20);
+                                    const cls = (el.className || '').toString().slice(0, 40);
+                                    const aria = el.getAttribute('aria-label') || '';
+                                    return `<${el.tagName}[${el.children.length}ch] cls="${cls}" aria="${aria}" txt="${txt}" x=${Math.round(r.left)} w=${Math.round(r.width)} h=${Math.round(r.height)}>`;
+                                });
+                            return `pageY=${Math.round(cy)} pageRight=${Math.round(pr.right)} | ` + all.join('\\n  ');
+                        }""")
+                        print(f"  [pagination-debug]\n  {_dbg}")
+
+                        next_coords = self._page.evaluate("""() => {
+                            // 1. Find the "Page N of M" element — anywhere in DOM, no viewport filter.
+                            //    Prefer the smallest (leaf-like) element to avoid matching a wrapper
+                            //    whose innerText happens to include the page text among other content.
+                            let pageEl = null;
+                            for (const el of document.querySelectorAll('*')) {
+                                const t = (el.innerText || '').trim();
+                                if (!/^page\\s+\\d+\\s+of\\s+\\d+$/i.test(t)) continue;
+                                const r = el.getBoundingClientRect();
+                                if (r.width === 0 || r.height === 0) continue;
+                                // Pick element with fewest children (most specific)
+                                if (!pageEl || el.children.length < pageEl.children.length) {
+                                    pageEl = el;
+                                }
+                            }
+                            if (!pageEl) return {error: 'page_text_not_found'};
+
+                            // 2. Check if on last page
+                            const m = (pageEl.innerText || '').match(/page\\s+(\\d+)\\s+of\\s+(\\d+)/i);
+                            if (m && parseInt(m[1]) >= parseInt(m[2])) return {last: true};
+
+                            // 3. Find the > button by vertical proximity to the page text.
+                            //    After scrollIntoView the page text should be on-screen.
+                            //    The real pagination > button is on the SAME row (within 40px
+                            //    vertically) AND to the right of the page text.
+                            //    Date/filter buttons (date-cta class) are excluded explicitly.
+                            const pageRect = pageEl.getBoundingClientRect();
+                            const pageCenterY = pageRect.top + pageRect.height / 2;
+
+                            // ICICI renders pagination arrows as inline SVG elements (not
+                            // buttons or links). Must include svg in the selector.
+                            const SELECTORS = 'button, [role="button"], a, li, span, svg';
+                            // Text that definitively identifies download/export buttons (not nav arrows)
+                            const SKIP_TEXTS = ['download', 'pdf', 'xls', 'xlsx', 'csv', 'export', 'print'];
+                            const btns = Array.from(
+                                document.querySelectorAll(SELECTORS)
+                            ).filter(b => {
+                                const r = b.getBoundingClientRect();
+                                if (r.width === 0 || r.height === 0) return false;
+                                const btnCenterY = r.top + r.height / 2;
+                                // Must be on the same horizontal row as the page text (within 40px)
+                                if (Math.abs(btnCenterY - pageCenterY) > 40) return false;
+                                // Must be to the RIGHT of the page text
+                                if (r.left < pageRect.right - 5) return false;
+                                const cls = (b.className || '').toString().toLowerCase();
+                                const txt = (b.innerText || '').trim().toLowerCase();
+                                // Exclude known CTA/download button classes
+                                if (cls.includes('blue-cta') || cls.includes('date-cta') ||
+                                    cls.includes('datepicker') || cls.includes('calendar')) return false;
+                                // Exclude elements whose visible text is a download/export label
+                                if (SKIP_TEXTS.some(s => txt.includes(s))) return false;
+                                return true;
+                            });
+
+                            if (btns.length === 0) {
+                                // Debug: report ALL elements on the same horizontal row
+                                const nearby = Array.from(document.querySelectorAll('*'))
+                                    .filter(b => { const r = b.getBoundingClientRect(); return r.width > 0 && r.height > 0 && Math.abs((r.top+r.height/2)-pageCenterY) < 50 && b.children.length === 0; })
+                                    .map(b => { const r = b.getBoundingClientRect(); const txt=(b.innerText||'').trim().slice(0,25); const cls=(b.className||'').toString().slice(0,40); return `<${b.tagName}>"${txt}"[${cls}]@x${Math.round(r.left)}`; });
+                                return {error: 'no_btn_right_of_text', debug_pageY: Math.round(pageCenterY), debug_nearby: nearby.join(' | ')};
+                            }
+
+                            // Sort left-to-right: first = ">" (single step), not ">>" (jump to last)
+                            btns.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+                            const nextBtn = btns[0];
+                            const dis = nextBtn.getAttribute('disabled');
+                            const aria = nextBtn.getAttribute('aria-disabled');
+                            const cls2 = (nextBtn.className || '').toString();
+                            if (dis !== null || aria === 'true' ||
+                                cls2.includes('disabled') || cls2.includes('inactive')) {
+                                return {last: true};
+                            }
+                            // Scroll the button into the CENTER of the viewport so that
+                            // page.mouse.click(x, y) lands within the visible 800px window.
+                            // Without this, the pagination bar may be below y=800 even after
+                            // the earlier scrollIntoView (ICICI uses a tall inner scroll panel).
+                            nextBtn.scrollIntoView({block: 'center', inline: 'nearest'});
+                            // getBoundingClientRect after scroll returns viewport-relative coords
+                            const r = nextBtn.getBoundingClientRect();
+                            return {
+                                x: Math.round(r.left + r.width / 2),
+                                y: Math.round(r.top + r.height / 2),
+                                html: nextBtn.outerHTML.slice(0, 100),
+                                debug_pageY: Math.round(pageCenterY),
+                                debug_btnY: Math.round(r.top + r.height / 2),
+                            };
+                        }""")
+
+                    if next_coords is None:
+                        print(f"  [next_page] No Next button found — last page ({len(records)} total)")
+                        break
+                    if next_coords.get("last"):
+                        print(f"  [next_page] On last page — done ({len(records)} total)")
+                        break
+                    if next_coords.get("error"):
+                        debug_extra = ""
+                        if next_coords.get("debug_pageY"):
+                            debug_extra += f" pageY={next_coords['debug_pageY']}"
+                        if next_coords.get("debug_nearby"):
+                            debug_extra += f" nearby_btns=[{next_coords['debug_nearby']}]"
+                        print(f"  [next_page] JS error: {next_coords['error']}{debug_extra} — stopping")
+                        break
+
+                    btn_html = next_coords.get("html", "")
+                    debug_info = ""
+                    if next_coords.get("debug_pageY"):
+                        debug_info = f" pageY={next_coords['debug_pageY']} btnY={next_coords['debug_btnY']}"
+                    print(f"  [next_page] Clicking Next at ({next_coords['x']:.0f},{next_coords['y']:.0f}) — {len(records)} rows so far… btn={btn_html!r}{debug_info}")
+                    self._page.mouse.click(next_coords["x"], next_coords["y"])
+                    time.sleep(3)  # Angular re-renders the table — no networkidle on SPA
+
+                    # Stuck-page guard: if no new records were added after the click,
+                    # the page didn't advance — stop to avoid an infinite loop.
+                    if len(records) == records_before_page and records_before_page > 0:
+                        print(f"  [next_page] No new rows after click — pagination stuck, stopping ({len(records)} total)")
+                        break
+
+                    continue  # loop back and process the new page's rows
+
+                else:
+                    # ── Scroll / "Load More" mode (default) ──────────────────
+                    prev_count = len(rows)
+
+                    if view_more_sel:
+                        view_more = self._page.query_selector(view_more_sel)
+                        if view_more and view_more.is_visible():
+                            print(f"  Loading more rows via button (have {len(records)} so far)…")
+                            view_more.click()
+                            self._page.wait_for_load_state("networkidle", timeout=15000)
+                            time.sleep(1)
+                            continue
+
+                    # No "View More" button — try auto-scrolling for infinite scroll pages
+                    print(f"  Auto-scrolling to load more rows (have {len(records)} so far)…")
+                    self._page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    time.sleep(2)
+                    try:
+                        self._page.wait_for_load_state("networkidle", timeout=8000)
+                    except Exception:
+                        pass
+                    new_count = len(self._page.query_selector_all(row_sel))
+                    if new_count <= prev_count:
+                        break  # scroll loaded no new rows — we're done
 
         except Exception as exc:
             # If user closes the browser window mid-scrape, return whatever was collected.
@@ -761,8 +1350,8 @@ class BankCrawler:
                     if m:
                         raw = m.group(0)
                         try:
-                            val = float(raw.replace("$", "").replace(",", ""))
-                            if 0 < val < 1_000_000:
+                            val = float(raw.replace("$", "").replace("₹", "").replace(",", ""))
+                            if 0 < val < 10_000_000:  # 1 crore limit for INR accounts
                                 return raw
                         except ValueError:
                             pass
@@ -965,11 +1554,24 @@ class BankCrawler:
                 )
             otp_code = generate_totp(self._creds.totp_secret)
         else:  # otp_interactive
-            if self._mfa_callback:
+            # If a TOTP secret is stored in credentials, use it automatically
+            # (enables background sync for banks configured as otp_interactive)
+            if self._creds and self._creds.totp_secret:
+                otp_code = generate_totp(self._creds.totp_secret)
+            elif self._mfa_callback:
                 # Server-side (Smart Connect): block until the API receives the OTP
                 otp_code = self._mfa_callback()
+            elif self._is_automated:
+                # Automated mode with no TOTP and no callback — can't proceed without blocking
+                bank_name = self._cfg.get("bank_display_name", self._cfg.get("bank_key", "this bank"))
+                raise RuntimeError(
+                    f"Automated sync for {bank_name} requires a TOTP secret for OTP automation. "
+                    f"Store your TOTP secret in the keychain "
+                    f"(python -m bank_fetcher setup --bank {self._cfg['bank_key']}), "
+                    "or click Re-login to authenticate manually."
+                )
             else:
-                # Local dev: prompt in the terminal
+                # Local dev / interactive mode: prompt in the terminal
                 bank_name = self._cfg["bank_display_name"]
                 otp_code = input(f"\n[{bank_name}] Enter the OTP sent to your phone/email: ").strip()
 
@@ -1001,7 +1603,7 @@ class BankCrawler:
             print(f"  Auto-detected browser: {engine}{f' ({channel})' if channel else ''}")
 
         ctx_kwargs: dict = dict(
-            accept_downloads=True,
+            accept_downloads=False,  # never download files during scraping
             viewport={"width": 1280, "height": 800},
         )
         if storage_state is not None:
@@ -1079,6 +1681,29 @@ class BankCrawler:
         self._context = self._browser.new_context(**ctx_kwargs)
         self._page = self._context.new_page()
 
+        # Cancel any download that somehow slips through (belt-and-suspenders on top of
+        # accept_downloads=False in the context — Chrome sometimes still queues downloads
+        # in headed mode when the page triggers them natively).
+        self._page.on("download", lambda dl: dl.cancel())
+
+        # Block explicit file-export requests (PDF / XLS download buttons on ICICI etc.)
+        # so that clicking the wrong element never saves a file to disk.
+        def _abort_file_exports(route):
+            url = route.request.url.lower()
+            _DOWNLOAD_SIGNALS = (
+                "filetype=pdf", "filetype=xls", "filetype=xlsx", "filetype=csv",
+                "downloadstatement", "download_statement", "exportstatement",
+                "export_statement", "statementdownload", "/download?", "=download",
+                "format=pdf", "format=xls", "exporttype",
+            )
+            if any(sig in url for sig in _DOWNLOAD_SIGNALS):
+                print(f"  [download-block] Aborted export request: {url[:120]}")
+                route.abort()
+            else:
+                route.continue_()
+
+        self._page.route("**/*", _abort_file_exports)
+
     def _safe_logout(self) -> None:
         try:
             logout_url = self._cfg.get("navigation", {}).get("logout_url")
@@ -1147,11 +1772,27 @@ def _text(element, selector: str) -> str:
 
 _DATE_RE = re.compile(
     r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:,?\s+\d{4})?'
+    r'|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{4}'  # DD MMM YYYY
     r'|\d{1,2}/\d{1,2}(?:/\d{2,4})?'
     r'|\d{4}-\d{2}-\d{2}',
     re.IGNORECASE,
 )
-_AMOUNT_RE = re.compile(r'[-+]?\$[\d,]+\.\d{2}')
+_AMOUNT_RE = re.compile(r'[-+]?[$₹][\d,]+\.\d{2}')
+_PLAIN_AMOUNT_RE = re.compile(r'[\d,]+\.\d{2}')
+
+
+def _extract_amount_str(raw: str) -> str:
+    """Extract a numeric amount string from raw cell text.
+    Handles $12.34, ₹1,23,456.78, or plain 12,345.67 (Indian banks omit symbol in table cells).
+    """
+    if not raw:
+        return ""
+    m = _AMOUNT_RE.search(raw)
+    if m:
+        return m.group(0)
+    # Fallback: plain decimal without currency symbol (e.g. ICICI table cells)
+    m2 = _PLAIN_AMOUNT_RE.search(raw)
+    return m2.group(0) if m2 else ""
 
 
 def _extract_from_row_text(full_text: str) -> tuple[str, str, str]:
@@ -1175,13 +1816,24 @@ def _extract_from_row_text(full_text: str) -> tuple[str, str, str]:
 
 
 def _parse_date(text: str) -> datetime | None:
-    """Parse a transaction date string. Returns None for unparseable text (e.g. 'Processing')."""
-    text = " ".join(text.split())  # normalise newlines
-    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y", "%b %d %Y", "%b %d, %Y"):
+    """Parse a transaction date string. Returns None for unparseable text (e.g. 'Processing').
+    Handles multi-date cells (ICICI has both transaction date and value date) by taking the first.
+    """
+    # Normalise: collapse all whitespace so "23 Apr 2026\n20 Apr 2026" → "23 Apr 2026 20 Apr 2026"
+    text = " ".join(text.split())
+    # Try exact-match formats first
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y", "%b %d %Y", "%b %d, %Y",
+                "%d %b %Y", "%d/%m/%Y", "%d-%b-%Y", "%d-%m-%Y"):
         try:
             return datetime.strptime(text.strip(), fmt)
         except ValueError:
             continue
+    # If the full string didn't match, extract the first date token via _DATE_RE
+    m_re = _DATE_RE.search(text)
+    if m_re:
+        candidate = m_re.group(0).strip()
+        if candidate != text.strip():
+            return _parse_date(candidate)
     # Try the month-name pattern without year (assume current year)
     m = re.match(r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})$', text.strip(), re.I)
     if m:

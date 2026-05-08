@@ -3343,6 +3343,18 @@ body.demo-page::after {
   gap: 14px;
 }
 
+/* Inline skeleton for the overview summary cards while switching accounts */
+.skeleton-summary-cards {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 4px;
+}
+.skeleton-summary-cards .skeleton-card {
+  flex: 1;
+  height: 88px;
+  border-radius: 14px;
+}
+
 .skeleton-card,
 .skeleton-chart,
 .skeleton-line {
