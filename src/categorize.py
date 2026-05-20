@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass
+from datetime import datetime, date
 import re
 import shutil
 from pathlib import Path
@@ -649,6 +650,101 @@ def categorize_transactions(
             categorized[idx]["category_layer"] = "bert_unavailable"
 
     return categorized
+
+
+# ── Recurrent-income detection ────────────────────────────────────────────
+# Some employers/payers (e.g. "QUALCOMM TECHNOL") aren't in the keyword rules
+# and won't match PAYROLL/DIRECT DEP, so their deposits land as Uncategorized.
+# This post-pass groups credits by merchant_clean and promotes any group with
+# a regular cadence + consistent amount to "Income". Skipped for credit-card
+# accounts because there a "credit" means a refund/payment, not income.
+
+def _parse_txn_date(raw) -> Optional[date]:
+    if not raw:
+        return None
+    s = str(raw).strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d %b %Y", "%d/%m/%Y", "%d-%b-%Y", "%d-%m-%Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(s).date()
+    except (ValueError, TypeError):
+        return None
+
+
+def detect_recurrent_income(
+    transactions: list[dict],
+    account_type: Optional[str] = None,
+    min_occurrences: int = 3,
+    expected_periods_days: tuple = (7, 14, 15, 30, 31),
+    period_tolerance_pct: float = 0.25,
+    amount_tolerance_pct: float = 0.30,
+) -> list[dict]:
+    """Promote regular merchant-level credits to category "Income".
+
+    A merchant's credits are promoted when:
+      - there are at least `min_occurrences` of them
+      - the median day-gap between consecutive dates matches one of
+        `expected_periods_days` within `period_tolerance_pct`
+      - the per-occurrence amounts are within `amount_tolerance_pct` of their mean
+    Already-categorized Income/Transfer/Refund rows are left alone. Credit-card
+    accounts are skipped entirely (every "credit" there is a payment, not income).
+    """
+    if (account_type or "").lower() == "credit_card":
+        return transactions
+    if not transactions:
+        return transactions
+
+    groups: dict[str, list[dict]] = {}
+    for txn in transactions:
+        existing = str(txn.get("category") or "").lower()
+        if existing in {"income", "transfer", "refund"}:
+            continue
+        amount = _parse_amount_value(txn.get("amount"))
+        txn_type = str(txn.get("txn_type") or txn.get("type") or "").lower()
+        is_credit = txn_type in {"credit", "deposits", "deposit"} or (amount is not None and amount > 0)
+        if not is_credit:
+            continue
+        merchant = (txn.get("merchant_clean") or txn.get("merchant_raw") or "").strip().upper()
+        if not merchant:
+            continue
+        groups.setdefault(merchant, []).append(txn)
+
+    for merchant, txns in groups.items():
+        if len(txns) < min_occurrences:
+            continue
+        dated = [(t, _parse_txn_date(t.get("date"))) for t in txns]
+        dated = [(t, d) for t, d in dated if d is not None]
+        if len(dated) < min_occurrences:
+            continue
+        dated.sort(key=lambda td: td[1])
+        gaps = [(dated[i + 1][1] - dated[i][1]).days for i in range(len(dated) - 1)]
+        gaps = [g for g in gaps if g > 0]
+        if not gaps:
+            continue
+        median_gap = sorted(gaps)[len(gaps) // 2]
+        if not any(abs(median_gap - p) <= p * period_tolerance_pct for p in expected_periods_days):
+            continue
+        amounts = [abs(_parse_amount_value(t.get("amount")) or 0.0) for t, _ in dated]
+        amounts = [a for a in amounts if a > 0]
+        if len(amounts) < min_occurrences:
+            continue
+        mean_amt = sum(amounts) / len(amounts)
+        if mean_amt == 0:
+            continue
+        if max(abs(a - mean_amt) / mean_amt for a in amounts) > amount_tolerance_pct:
+            continue
+
+        for t, _ in dated:
+            t["category"] = "Income"
+            t["matched_rule"] = "recurrent_income_heuristic"
+            t["matched_keyword"] = merchant
+            t["category_layer"] = "recurrence_post_pass"
+            t["confidence"] = 0.85
+
+    return transactions
 
 
 if __name__ == "__main__":

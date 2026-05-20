@@ -1,29 +1,24 @@
 {
   "manifest_version": 3,
-  "name": "FIFO Bank Connector",
-  "version": "1.0.0",
-  "description": "Sync your bank transactions to FIFO — securely, from your own browser.",
+  "name": "FIFO Sync",
+  "version": "1.1.0",
+  "description": "Automatically syncs your bank transactions with FIFO in the background.",
 
   "permissions": [
     "tabs",
+    "alarms",
+    "storage",
     "scripting",
-    "storage"
+    "cookies"
   ],
-
   "host_permissions": [
-    "https://*.bankofamerica.com/*",
-    "https://*.chase.com/*",
-    "https://*.capitalone.com/*",
-    "https://*.discover.com/*",
-    "https://*.wellsfargo.com/*",
-    "https://*.citibank.com/*",
-    "https://*.citi.com/*",
-    "https://*.americanexpress.com/*",
-    "https://*.usbank.com/*",
-    "https://*.tdbank.com/*",
-    "https://finance-demo-486722019708.us-central1.run.app/*",
-    "http://localhost:8000/*",
-    "http://127.0.0.1:8000/*"
+    "*://*.capitalone.com/*",
+    "*://*.icicibank.com/*",
+    "*://retailnetbanking.icici.bank.in/*",
+    "*://*.bankofamerica.com/*",
+    "https://*/*",
+    "http://localhost:*/*",
+    "http://127.0.0.1:*/*"
   ],
 
   "background": {
@@ -34,19 +29,18 @@
   "content_scripts": [
     {
       "matches": [
-        "https://*.pages.dev/*",
-        "http://localhost:8000/*",
-        "http://127.0.0.1:8000/*",
+        "http://localhost:*/*",
+        "http://127.0.0.1:*/*",
         "https://finance-demo-486722019708.us-central1.run.app/*"
       ],
-      "js": ["content_scripts/fifo_bridge.js"],
-      "run_at": "document_idle"
+      "js": ["bridge.js"],
+      "run_at": "document_idle",
+      "all_frames": false
     }
   ],
 
   "action": {
-    "default_popup": "popup/popup.html",
-    "default_title": "FIFO Bank Connector",
+    "default_popup": "popup.html",
     "default_icon": {
       "16":  "icons/icon16.png",
       "48":  "icons/icon48.png",

@@ -13,3 +13,6 @@ categorizer/models/
 my_finance/shreya_mishra/raw/
 my_finance/shreya_mishra/processed/*.csv
 .env
+
+# Claude Code session artifacts (worktrees, scratch state)
+.claude/

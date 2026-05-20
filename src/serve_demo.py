@@ -20,14 +20,15 @@ from urllib.parse import urlparse, parse_qs
 
 from dotenv import load_dotenv
 
-from categorize import categorize_transactions
+from categorize import categorize_transactions, detect_recurrent_income
 from parse_bank import parse_pdf_to_payload, persist_uploaded_statement, merchant_clean as _merchant_clean_fn
 from new_bank_setup import bootstrap_config_if_unknown
 from db import (
     init_db, add_account, get_accounts, get_account,
     delete_account, store_transactions, get_transactions, update_last_synced,
     set_auto_sync, set_needs_login, set_last_url, set_account_balance,
-    set_plaid_item_id, get_latest_transaction_date, set_investment_balance,
+    set_has_credentials,
+    set_account_status, set_plaid_item_id, get_latest_transaction_date, set_investment_balance,
 )
 
 
@@ -44,6 +45,28 @@ _ACH_HOLD_RE  = re.compile(r'^ACH\s+HOLD\s+', re.IGNORECASE)
 _ACH_PMTS_RE  = re.compile(r'\s+(WEB\s+)?PMTS\s+ON\s+\d{1,2}/\d{1,2}\s*$', re.IGNORECASE)
 _ACH_WEB_RE   = re.compile(r'\s+WEB\s*$', re.IGNORECASE)
 _VIEW_EDIT_RE = re.compile(r'\s*View/Edit\s*$', re.IGNORECASE)
+
+
+def _parse_amount(raw) -> float | None:
+    """Parse a transaction amount string from any bank into a float.
+
+    Handles all currency symbols ($, ₹, €, £, ¥), Indian lakh-format commas,
+    leading +/- signs, and plain decimals.  Returns None if unparseable so
+    callers can skip the row cleanly — never silently returns 0.
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    # Strip all known currency symbols and whitespace
+    s = s.replace("$", "").replace("₹", "").replace("€", "").replace("£", "").replace("¥", "")
+    # Remove thousands/lakh separators (commas)
+    s = s.replace(",", "").strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
 
 
 def _normalize_merchant_name(raw: str) -> str:
@@ -71,11 +94,85 @@ def _normalize_merchant_name(raw: str) -> str:
     return s or raw
 
 
-def _categorize_scraped(transactions: list[dict]) -> list[dict]:
+# Description patterns that strongly indicate money coming IN. We err on the
+# side of caution — only flip a row to "credit" when one of these clearly
+# matches, otherwise leave it as "debit". Better to under-count income than to
+# misclassify a spend as income.
+_CREDIT_DESCRIPTION_PATTERNS = (
+    "DIRECT DEP", "DIRECT DEPOSIT", "DES:DIRECT DEP",
+    "PAYROLL", "SALARY", "WAGES", "BIWEEKLY",
+    "ACH CREDIT", "CREDIT FROM",
+    "INTEREST PAID", "INTEREST EARNED", "INTEREST INCOME", "DIVIDEND",
+    "REFUND", "REIMBURSEMENT", "REBATE", "CASH BACK", "CASHBACK",
+    "MOBILE DEPOSIT", "CHECK DEPOSIT", "ATM DEPOSIT",
+    "ZELLE FROM", "ZELLE PAYMENT FROM",
+    "TRANSFER FROM", "FROM CHK", "FROM SAV", "ONLINE BANKING TRANSFER FROM",
+    "VENMO CASHOUT", "PAYPAL TRANSFER",
+    "TAX REFUND", "IRS TREAS", "STATE TAX",
+    "QUALCOMM",  # known payer for this user
+    "BONUS", "COMMISSION", "STIPEND", "FREELANCE",
+)
+
+
+def _infer_amount_type(
+    description: str,
+    merchant_clean: str,
+    category: str,
+    account_type: str,
+) -> str:
+    """Best-effort inference of credit vs debit when the stored row doesn't
+    carry a signed amount. Used by the recategorize endpoint to repair
+    incorrectly-tagged historical data without re-scraping the bank."""
+    haystack = f"{(description or '').upper()} {(merchant_clean or '').upper()}"
+    cat = (category or "").strip().lower()
+    if cat in {"income", "refund"}:
+        return "credit"
+    if any(p in haystack for p in _CREDIT_DESCRIPTION_PATTERNS):
+        return "credit"
+    return "charge" if account_type == "credit_card" else "debit"
+
+
+def _account_has_credentials(bank_key: Optional[str]) -> bool:
+    """True if the user has saved a username/password for this bank, in either
+    the OS keychain (local dev) or Firestore (Cloud Run). Used by the web UI
+    to pick which sync path to call.
+    """
+    if not bank_key:
+        return False
+    try:
+        import sys as _sys
+        if str(ROOT) not in _sys.path:
+            _sys.path.insert(0, str(ROOT))
+        from bank_fetcher import _load_fetcher_config  # noqa: PLC0415
+        from bank_fetcher.credential_manager import (  # noqa: PLC0415
+            get_credentials_cloud,
+            CredentialNotFoundError,
+        )
+        import keyring  # noqa: PLC0415
+
+        cfg = _load_fetcher_config(bank_key)
+        svc = cfg.get("keyring_service")
+        u_key = cfg.get("keyring_username_key")
+        p_key = cfg.get("keyring_password_key")
+        if svc and u_key and p_key:
+            try:
+                if keyring.get_password(svc, u_key) and keyring.get_password(svc, p_key):
+                    return True
+            except Exception:
+                pass
+        return get_credentials_cloud(bank_key) is not None
+    except Exception:
+        return False
+
+
+def _categorize_scraped(transactions: list[dict], account_type: Optional[str] = None) -> list[dict]:
     """
     Run the full parse_bank merchant-cleaning pipeline on each scraped transaction,
     then categorize using the ML model.
     Mutates each dict in-place, adding 'merchant_clean' and 'category'.
+
+    `account_type` lets the recurrence post-pass skip credit-card accounts
+    (where every "credit" is a refund, not income).
     """
     if not transactions:
         return transactions
@@ -110,6 +207,14 @@ def _categorize_scraped(transactions: list[dict]) -> list[dict]:
             orig["category"] = cat.get("category", "Uncategorized")
     except Exception as exc:
         print(f"WARNING: categorization failed: {exc}")
+
+    # Step 4: recurrence post-pass — promotes merchants like "QUALCOMM TECHNOL"
+    # whose deposits arrive on a regular cadence to "Income", even when no
+    # keyword rule matched. Skipped for credit-card accounts.
+    try:
+        detect_recurrent_income(transactions, account_type=account_type)
+    except Exception as exc:
+        print(f"WARNING: recurrence detection failed: {exc}")
 
     return transactions
 
@@ -197,7 +302,7 @@ def _smart_connect_worker(
         )
 
         session["status"] = "categorizing"
-        _categorize_scraped(transactions)
+        _categorize_scraped(transactions, account_type=acct_type)
         store_transactions(account_id, transactions)
         update_last_synced(account_id, datetime.now())
         if last_url:
@@ -246,6 +351,9 @@ class DemoHandler(SimpleHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/version":
             self._send_json(HTTPStatus.OK, {"version": "v3", "smart_connect": True})
+            return
+        if path == "/api/extension/scrape-config":
+            self._handle_extension_scrape_config()
             return
         # Debug endpoint: /api/debug/raw-transactions?bank=icici&limit=10
         if path == "/api/debug/raw-transactions":
@@ -402,6 +510,17 @@ class DemoHandler(SimpleHTTPRequestHandler):
                     return
                 self._handle_recategorize_account(acct_id)
                 return
+        # POST /api/accounts/<id>/save-credentials
+        if path.startswith("/api/accounts/") and path.endswith("/save-credentials"):
+            parts = path.strip("/").split("/")
+            if len(parts) == 4 and parts[3] == "save-credentials":
+                try:
+                    acct_id = int(parts[2])
+                except ValueError:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid account id"})
+                    return
+                self._handle_save_credentials(acct_id)
+                return
         # Parse a PDF statement and return structured JSON.
         if path != "/api/parse":
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found", "v": "v4", "got": path})
@@ -488,6 +607,210 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 pass
 
         self._send_json(HTTPStatus.OK, payload)
+
+    # ------------------------------------------------------------------ #
+    # Extension scrape-config endpoint
+    # ------------------------------------------------------------------ #
+
+    def _handle_extension_scrape_config(self) -> None:
+        """GET /api/extension/scrape-config?domain=<hostname>
+        Returns scraping instructions for a given bank domain so the
+        universal Chrome extension content script knows what to do.
+        Add new banks here — no extension update needed.
+        """
+        from urllib.parse import parse_qs, urlparse as _up
+        qs = parse_qs(_up(self.path).query)
+        domain = qs.get("domain", [""])[0].lower().strip()
+
+        # ── Domain → bank config map ──────────────────────────────────
+        CONFIGS = {
+            # Capital One
+            "myaccounts.capitalone.com": {
+                "bank_key": "capital_one",
+                "login_check": ["signin", "sign-in", "login"],
+                "start_url": "https://myaccounts.capitalone.com/accountSummary",
+                # Navigate from account summary → click View More → land on /Card/ page
+                "navigate": [
+                    {
+                        "action": "wait_and_click_text",
+                        "texts": ["View More", "View All Transactions", "View Account"],
+                        "timeout": 30000,
+                        "on_url": "*accountSummary*",
+                    }
+                ],
+                "ready_selector": "c1-ease-row.c1-ease-table__row",
+                "ready_url_pattern": "/Card/",
+                "ready_timeout": 60000,
+                "rows": {
+                    "selector": "c1-ease-row.c1-ease-table__row",
+                    "date":        ".cdk-column-date",
+                    "description": ".cdk-column-description",
+                    "amount":      ".cdk-column-amount",
+                    "amount_sign": "positive_is_debit",
+                },
+                "balance_selectors": [
+                    ".balance-amount", ".current-balance",
+                    "[data-testid*='balance']", ".c1-ease-account-summary__balance",
+                ],
+                "pagination": None,
+            },
+
+            # ICICI Bank
+            "retailnetbanking.icici.bank.in": {
+                "bank_key": "icici",
+                "login_check": ["login-page", "/login", "logout"],
+                "start_url": None,   # uses last_url from account record
+                "navigate": [],      # rely on last_url pointing directly to statement page
+                "ready_selector": "tr.transfer:not(.trans_space)",
+                "ready_url_pattern": None,
+                "ready_timeout": 45000,
+                "rows": {
+                    "selector":    "tr.transfer:not(.trans_space)",
+                    "description": "td.remarks-details p.name, td.remarks-details p.remark-pos",
+                    "credit":      "td.credit p, td.cr-mob p",
+                    "debit":       "td.debit p",
+                    "balance":     "td.balance p",
+                    "date_mode":   "parent_walk",   # date lives in ancestor element
+                    "amount_sign": "credit_debit_cols",
+                },
+                "balance_selectors": [
+                    "td.balance p",   # first row's balance = current balance
+                ],
+                "pagination": {
+                    "type": "next_button",
+                    "button_texts": [">", "›", "❯"],
+                    "page_info_pattern": r"page\s+\d+\s+of\s+\d+",
+                },
+            },
+
+            # Bank of America
+            "www.bankofamerica.com": {
+                "bank_key": "boa",
+                "login_check": ["sign-in", "signin", "signon", "login"],
+                # BOA serves the accounts overview at signIn.go?torLsLogin=true — the URL
+                # contains "signin" but the user IS logged in. Presence of the username nav
+                # element overrides the login_check so content.js doesn't bail early.
+                "logged_in_selector": ".fsdnav-username, tr.activity-row",
+                "start_url": None,   # uses last_url from account record
+                # Auto-click the first account link from the accounts overview.
+                # - on_url: "myaccounts" — only run on overview URLs (signIn.go,
+                #   /myaccounts/overview, etc.). This prevents the step from
+                #   firing on the activity page itself, where the page footer
+                #   has a language-switcher link that ALSO points to
+                #   /deposit-details/activity/... and would cause an
+                #   English↔Spanish redirect loop.
+                # - The "/?" suffix in the selector matches the bare activity
+                #   URL only; locale variants like /activity/es/? are excluded.
+                # Skip ALL automation when BoA returns an error page (e.g.
+                # accounts-overview.go?msgId=MSGOBOError). Otherwise we'd loop
+                # the error page indefinitely and dig the lockout hole deeper.
+                "skip_on_url_contains": ["MSGOBOError", "msgId=MSGOBO"],
+                "navigate": [
+                    {
+                        "action": "wait_and_click_selector",
+                        "on_url": "myaccounts",
+                        # MUST require redirect.go in the href — anything
+                        # broader (tr.single-account a, a.AccountItem) ends up
+                        # matching BoA's "Continue online banking session"
+                        # button on the session-error page, which redirects
+                        # back to the error page and creates a refresh loop.
+                        "selector": (
+                            ".AccountItemDeposit a[href*='redirect.go'],"
+                            ".AccountItem a[href*='redirect.go?source=overview'],"
+                            "a[href*='/myaccounts/brain/redirect.go?source=overview']"
+                        ),
+                        "skip_if_selector_present": (
+                            "tr.activity-row,"
+                            "[data-testid='transaction-row'],"
+                            "bofa-trans-row,"
+                            "tr[data-row-key]"
+                        ),
+                        "timeout": 30000,
+                    }
+                ],
+                "first_connect_hint": "You're in! FIFO will open your account in a moment — please don't navigate away.",
+                # Stop paginating once the oldest visible row is older than this
+                # many days. Keeps first-connect scrapes scoped to ~1 year and
+                # prevents the loop from grinding through 5+ years of history.
+                "stop_after_days": 365,
+                # Several selectors — BoA renames classes over time. querySelector
+                # picks the first that matches. content.js also logs per-candidate
+                # counts so we can see what the page actually uses.
+                "ready_selector": (
+                    "tr.activity-row,"
+                    "[data-testid='transaction-row'],"
+                    "bofa-trans-row,"
+                    "tr[data-row-key],"
+                    ".trans-row,"
+                    "tr[id^='trans-']"
+                ),
+                "ready_url_pattern": None,
+                "ready_timeout": 300000,
+                "rows": {
+                    "selector":    (
+                        "tr.activity-row,"
+                        "[data-testid='transaction-row'],"
+                        "bofa-trans-row,"
+                        "tr[data-row-key],"
+                        ".trans-row,"
+                        "tr[id^='trans-']"
+                    ),
+                    "date":        "td:nth-child(1)",
+                    "description": "td:nth-child(2)",
+                    "amount_type": "td:nth-child(3)",
+                    "amount":      "td:nth-child(4)",
+                    "balance":     "td:nth-child(5)",
+                    "amount_sign": "type_column",
+                },
+                "balance_selectors": [
+                    ".available-balance-amount", ".current-balance-amount",
+                    "[data-testid*='balance']", ".balance-amount",
+                ],
+                "pagination": {
+                    "type": "view_more_button",
+                    "button_texts": [
+                        "view more transactions", "view more", "show more", "load more"
+                    ],
+                },
+            },
+
+            # Discover (future — add content when ready)
+            "card.discover.com": {
+                "bank_key": "discover",
+                "login_check": ["signin", "login"],
+                "start_url": None,
+                "navigate": [],
+                "ready_selector": ".transaction-item, tr.trans-row",
+                "ready_timeout": 45000,
+                "rows": {
+                    "selector":    ".transaction-item, tr.trans-row",
+                    "date":        ".trans-date, td:nth-child(1)",
+                    "description": ".trans-merchant, td:nth-child(2)",
+                    "amount":      ".trans-amount, td:nth-child(3)",
+                    "amount_sign": "positive_is_debit",
+                },
+                "balance_selectors": [".account-balance", ".current-balance"],
+                "pagination": None,
+            },
+        }
+
+        # Direct lookup first, then try suffix matching for subdomains
+        # e.g. secure.bankofamerica.com → matches www.bankofamerica.com config
+        cfg = CONFIGS.get(domain)
+        if not cfg:
+            for key, val in CONFIGS.items():
+                base = key.lstrip("www.")
+                if domain.endswith(base):
+                    cfg = val
+                    break
+        if not cfg:
+            self._send_json(HTTPStatus.NOT_FOUND, {
+                "error": f"No scrape config for domain: {domain}",
+                "supported": list(CONFIGS.keys()),
+            })
+            return
+
+        self._send_json(HTTPStatus.OK, cfg)
 
     # ------------------------------------------------------------------ #
     # Smart Connect endpoints
@@ -580,6 +903,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
         bank_key = body.get("bank_key", "").strip()
         transactions = body.get("transactions", [])
         ending_balance = body.get("ending_balance")
+        last_url = body.get("last_url", "").strip() or None
 
         if not bank_key:
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "bank_key is required"})
@@ -599,12 +923,15 @@ class DemoHandler(SimpleHTTPRequestHandler):
             acct_type = cfg.get("account_type", "checking")
 
             account_id = add_account(bank_key, display_name, sync_period="1y", account_type=acct_type)
-            _categorize_scraped(transactions)
+            _categorize_scraped(transactions, account_type=acct_type)
             store_transactions(account_id, transactions)
             update_last_synced(account_id, datetime.now())
             if ending_balance:
                 set_account_balance(account_id, ending_balance)
+            if last_url:
+                set_last_url(account_id, last_url)
             set_needs_login(account_id, False)
+            set_account_status(account_id, "connected")
 
             print(
                 f"[extension-ingest] {bank_key}: stored {len(transactions)} txns "
@@ -652,8 +979,17 @@ class DemoHandler(SimpleHTTPRequestHandler):
     # ------------------------------------------------------------------ #
 
     def _handle_get_accounts(self) -> None:
-        """GET /api/accounts — list all connected accounts."""
-        self._send_json(HTTPStatus.OK, get_accounts())
+        """GET /api/accounts — list all connected accounts.
+
+        The `has_credentials` flag is read from the account doc itself (set
+        when the user saves a password). We deliberately do NOT probe the OS
+        keychain here, because each keychain access triggers a macOS auth
+        prompt — spamming the user.
+        """
+        accounts = get_accounts()
+        for acct in accounts:
+            acct.setdefault("has_credentials", False)
+        self._send_json(HTTPStatus.OK, accounts)
 
     def _handle_debug_raw_transactions(self) -> None:
         """GET /api/debug/raw-transactions?bank=<key>&limit=<n>
@@ -723,10 +1059,8 @@ class DemoHandler(SimpleHTTPRequestHandler):
 
         _TRANSFER_CATS = {"Transfer", "Debt Payments"}
         for t in txns:
-            raw_amt = (t.get("amount") or "").replace("$", "").replace(",", "").strip()
-            try:
-                amt = float(raw_amt)
-            except ValueError:
+            amt = _parse_amount(t.get("amount"))
+            if amt is None:
                 continue
             cat = t.get("category") or "Uncategorized"
             # Exclude internal transfers from income/expense totals to avoid double-counting
@@ -745,10 +1079,8 @@ class DemoHandler(SimpleHTTPRequestHandler):
         # Top merchants by expense amount (exclude transfers)
         merchant_totals: dict[str, float] = {}
         for t in txns:
-            raw_amt = (t.get("amount") or "").replace("$", "").replace(",", "").strip()
-            try:
-                amt = float(raw_amt)
-            except ValueError:
+            amt = _parse_amount(t.get("amount"))
+            if amt is None:
                 continue
             cat = t.get("category") or "Uncategorized"
             if cat in _TRANSFER_CATS:
@@ -834,10 +1166,8 @@ class DemoHandler(SimpleHTTPRequestHandler):
             key = dt.strftime("%Y-%m")
             if key not in by_month:
                 by_month[key] = {"month": key, "expenses": 0.0, "income": 0.0}
-            raw_amt = (t.get("amount") or "").replace("$", "").replace(",", "").strip()
-            try:
-                amt = float(raw_amt)
-            except ValueError:
+            amt = _parse_amount(t.get("amount"))
+            if amt is None:
                 continue
             # Skip transfers to avoid double-counting in monthly chart
             cat = t.get("category") or "Uncategorized"
@@ -949,28 +1279,63 @@ class DemoHandler(SimpleHTTPRequestHandler):
             self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
 
     def _handle_add_account(self) -> None:
-        """POST /api/accounts — connect a new bank account, scrape, store."""
+        """POST /api/accounts — connect a new bank account, scrape, store.
+
+        If username + password are provided in the request body, saves them to the
+        OS keychain / Firestore and uses fully headless automated login (no browser
+        window). Otherwise falls back to the interactive browser login flow.
+        """
         import sys as _sys
         _proj_root = str(ROOT)
         if _proj_root not in _sys.path:
             _sys.path.insert(0, _proj_root)
         from bank_fetcher import scrape_recent_transactions, _load_fetcher_config
+        from bank_fetcher.credential_manager import store_credentials_cloud
 
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length)) if length else {}
-        bank_key = body.get("bank", "boa")
-        period = body.get("period", "1y")
+        bank_key  = body.get("bank", "boa")
+        period    = body.get("period", "1y")
+        username  = (body.get("username") or "").strip()
+        password  = body.get("password") or ""
         since_date = _period_to_since_date(period)
 
         try:
-            cfg = _load_fetcher_config(bank_key)
+            cfg          = _load_fetcher_config(bank_key)
             display_name = cfg.get("bank_display_name", bank_key)
-            acct_type = cfg.get("account_type", "checking")
-            account_id = add_account(bank_key, display_name, sync_period=period, account_type=acct_type)
+            acct_type    = cfg.get("account_type", "checking")
+            account_id   = add_account(bank_key, display_name, sync_period=period, account_type=acct_type)
             session_path = ROOT / "data" / "sessions" / f"{account_id}.json"
-            transactions, last_url, ending_balance, starting_balance, extra_vals = scrape_recent_transactions(
-                bank_key=bank_key, since_date=since_date, session_save_path=session_path
-            )
+
+            if username and password and cfg.get("login_steps"):
+                # ── Credential-based headless connect ────────────────────────
+                # Save credentials to keychain so every future sync is automatic.
+                store_credentials_cloud(bank_key, username, password)
+                print(f"[connect] Credentials saved for {display_name}", flush=True)
+
+                from bank_fetcher.base_crawler import BankCrawler
+                from bank_fetcher import DEFAULT_RAW_DIR
+                crawler = BankCrawler(fetcher_cfg=cfg, raw_dir=DEFAULT_RAW_DIR)
+                records, last_url = crawler.run_scrape_automated(
+                    username=username,
+                    password=password,
+                    since_date=since_date,
+                    session_save_path=session_path,
+                )
+                transactions = [
+                    {"date": r.date, "description": r.description,
+                     "amount": r.amount, "type": r.amount_type}
+                    for r in records
+                ]
+                ending_balance   = crawler._ending_balance
+                starting_balance = crawler._starting_balance
+                extra_vals       = crawler._extra_values
+            else:
+                # ── Interactive browser login (fallback) ─────────────────────
+                transactions, last_url, ending_balance, starting_balance, extra_vals = scrape_recent_transactions(
+                    bank_key=bank_key, since_date=since_date, session_save_path=session_path
+                )
+
             _categorize_scraped(transactions)
             store_transactions(account_id, transactions)
             update_last_synced(account_id, datetime.now())
@@ -978,17 +1343,16 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 set_last_url(account_id, last_url)
             if ending_balance:
                 set_account_balance(account_id, ending_balance)
-            inv_bal = extra_vals.get("investment_balance", "")
-            if inv_bal:
+            if inv_bal := (extra_vals or {}).get("investment_balance", ""):
                 set_investment_balance(account_id, inv_bal)
             set_needs_login(account_id, False)
             account = get_account(account_id)
             self._send_json(HTTPStatus.OK, {
-                "account": account,
-                "period": period,
-                "count": len(transactions),
-                "transactions": transactions,
-                "ending_balance": ending_balance,
+                "account":          account,
+                "period":           period,
+                "count":            len(transactions),
+                "transactions":     transactions,
+                "ending_balance":   ending_balance,
                 "starting_balance": starting_balance,
             })
         except Exception as exc:
@@ -996,17 +1360,22 @@ class DemoHandler(SimpleHTTPRequestHandler):
 
     def _handle_sync_account(self, account_id: int) -> None:
         """
-        POST /api/accounts/<id>/sync — silent background sync using saved session.
+        POST /api/accounts/<id>/sync — fully headless background sync. No window opens.
 
-        Never opens a browser. If the session is missing or expired, returns a 422
-        so the frontend can prompt the user to click Re-login instead.
+        Priority:
+          1. Saved credentials in keychain → fresh headless login every time (most reliable,
+             never expires, works as long as password hasn't changed).
+          2. Saved session cookies → fast replay (fallback if no credentials stored yet).
+          3. Neither available → return 422 so frontend prompts Re-login.
         """
         import sys as _sys
         _proj_root = str(ROOT)
         if _proj_root not in _sys.path:
             _sys.path.insert(0, _proj_root)
-        from bank_fetcher import scrape_recent_transactions_headless
-        from bank_fetcher.base_crawler import SessionExpiredError
+        from bank_fetcher import scrape_recent_transactions_headless, _load_fetcher_config
+        from bank_fetcher.base_crawler import BankCrawler, SessionExpiredError
+        from bank_fetcher import DEFAULT_RAW_DIR
+        from bank_fetcher.credential_manager import get_credentials_cloud, CredentialNotFoundError
 
         account = get_account(account_id)
         if account is None:
@@ -1014,43 +1383,79 @@ class DemoHandler(SimpleHTTPRequestHandler):
             return
 
         length = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(length)) if length else {}
-        period = body.get("period", account["sync_period"] or "1m")
-
+        body   = json.loads(self.rfile.read(length)) if length else {}
+        period       = account.get("sync_period") or "1y"
         since_date   = _smart_since_date(account_id)
         bank_key     = account["bank_key"]
         session_path = ROOT / "data" / "sessions" / f"{account_id}.json"
-        last_url     = account.get("last_url")
+        last_url      = account.get("last_url")
+        txns          = None
+        ending_balance = ""
 
-        # No saved session → user must log in first
-        if not session_path.exists() or not last_url:
-            set_needs_login(account_id, True)
-            self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {
-                "error": "No saved session — please click ↩ Re-login to authenticate."
-            })
-            return
-
+        # ── Path 1: credentials in keychain → fresh headless login ───────────
         try:
-            txns = scrape_recent_transactions_headless(
-                bank_key=bank_key,
-                since_date=since_date,
-                session_path=session_path,
-                account_url=last_url,
+            cfg   = _load_fetcher_config(bank_key)
+            # get_credentials() tries OS keychain first, then Firestore.
+            # Previously this was get_credentials_cloud() which only checked
+            # Firestore — so credentials saved via the UI (which writes to
+            # Keychain locally) were invisible to the sync.
+            from bank_fetcher.credential_manager import (  # noqa: PLC0415
+                get_credentials,
+                CredentialNotFoundError,
             )
-            print(f"SYNC: {account['display_name']} — {len(txns)} transactions", flush=True)
-        except SessionExpiredError:
-            set_needs_login(account_id, True)
-            self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {
-                "error": "Session expired — please click ↩ Re-login to authenticate again."
-            })
-            return
-        except Exception as exc:
-            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
-            return
+            try:
+                creds = get_credentials(cfg)
+            except CredentialNotFoundError:
+                creds = None
+            if creds and cfg.get("login_steps"):
+                crawler = BankCrawler(fetcher_cfg=cfg, raw_dir=DEFAULT_RAW_DIR)
+                records, new_last_url = crawler.run_scrape_automated(
+                    username=creds.username,
+                    password=creds.password,
+                    since_date=since_date,
+                    session_save_path=session_path,
+                )
+                txns = [{"date": r.date, "description": r.description,
+                         "amount": r.amount, "type": r.amount_type} for r in records]
+                ending_balance = crawler._ending_balance or ""
+                if new_last_url:
+                    set_last_url(account_id, new_last_url)
+                print(f"SYNC (credentials): {account['display_name']} — {len(txns)} transactions", flush=True)
+        except Exception as cred_err:
+            print(f"SYNC credential path failed ({cred_err}), trying session cookies…", flush=True)
+
+        # ── Path 2: session cookies fallback ─────────────────────────────────
+        if txns is None:
+            if not session_path.exists() or not last_url:
+                set_needs_login(account_id, True)
+                self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {
+                    "error": "No credentials or session found — please click ↩ Re-login."
+                })
+                return
+            try:
+                txns = scrape_recent_transactions_headless(
+                    bank_key=bank_key,
+                    since_date=since_date,
+                    session_path=session_path,
+                    account_url=last_url,
+                )
+                print(f"SYNC (session): {account['display_name']} — {len(txns)} transactions", flush=True)
+            except SessionExpiredError as err:
+                print(f"SYNC session expired for {account['display_name']}: {err}", flush=True)
+                set_needs_login(account_id, True)
+                self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {
+                    "error": "Session expired — please click ↩ Re-login to authenticate again."
+                })
+                return
+            except Exception as exc:
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+                return
 
         _categorize_scraped(txns)
         store_transactions(account_id, txns)
         update_last_synced(account_id, datetime.now())
+        if ending_balance:
+            set_account_balance(account_id, ending_balance)
         set_needs_login(account_id, False)
         self._send_json(HTTPStatus.OK, {
             "account":      get_account(account_id),
@@ -1062,23 +1467,42 @@ class DemoHandler(SimpleHTTPRequestHandler):
     def _handle_relogin_account(self, account_id: int) -> None:
         """
         POST /api/accounts/<id>/relogin — interactive re-login for a specific account.
-        Opens a browser window for the user to log in + complete OTP, then fetches only
-        transactions newer than last_synced_at. Never creates a duplicate account row.
+        Opens a browser window for the user to log in + complete OTP, then fetches the
+        full history based on the account's sync_period (not delta). Saves the new session
+        so future Sync Now (headless) can use it. Never creates a duplicate account row.
         """
         import sys as _sys
         _proj_root = str(ROOT)
         if _proj_root not in _sys.path:
             _sys.path.insert(0, _proj_root)
         from bank_fetcher import scrape_recent_transactions
+        from db import set_account_type as _set_account_type
 
         account = get_account(account_id)
         if account is None:
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Account not found"})
             return
 
-        # Only fetch since the latest transaction we already have — never re-scrape
-        # the full history just because last_synced_at is stale (e.g. after session expiry).
-        since_date = _smart_since_date(account_id)
+        # Re-login = session cookie refresh + delta sync (same as Sync Now).
+        # Full history was already fetched on first connect; no need to re-scrape it.
+        # _smart_since_date returns latest stored transaction − 1 day, or a full
+        # sync_period fallback only when there are zero stored transactions yet.
+        _period_map = {"1m": 30, "3m": 90, "6m": 180, "1y": 365, "ytd": 365, "all": 730}
+        sync_period = account.get("sync_period") or "1y"
+        fallback_days = _period_map.get(sync_period, 365)
+        since_date = _smart_since_date(account_id, fallback_days=fallback_days)
+
+        # Auto-heal: ensure DB account_type matches the fetcher config (e.g. "credit" for Capital One).
+        # Fixes accounts created before account_type support was added.
+        try:
+            _cfg = _load_fetcher_config(account["bank_key"])
+            _cfg_type = _cfg.get("account_type", "")
+            if _cfg_type and account.get("account_type") != _cfg_type:
+                _set_account_type(account_id, _cfg_type)
+                print(f"[relogin] Fixed account_type for {account['display_name']}: "
+                      f"{account.get('account_type')!r} → {_cfg_type!r}", flush=True)
+        except Exception:
+            pass  # Non-fatal — don't block the relogin if config read fails
 
         try:
             session_path = ROOT / "data" / "sessions" / f"{account_id}.json"
@@ -1094,8 +1518,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 set_last_url(account_id, last_url)
             if ending_balance:
                 set_account_balance(account_id, ending_balance)
-            inv_bal = extra_vals.get("investment_balance", "")
-            if inv_bal:
+            if inv_bal := extra_vals.get("investment_balance", ""):
                 set_investment_balance(account_id, inv_bal)
             set_needs_login(account_id, False)
             self._send_json(HTTPStatus.OK, {
@@ -1104,6 +1527,63 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 "transactions": transactions,
             })
         except Exception as exc:
+            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+
+    def _handle_save_credentials(self, account_id: int) -> None:
+        """POST /api/accounts/<id>/save-credentials — store bank credentials.
+
+        Body: { "username": "...", "password": "..." }
+
+        Credentials go to the OS keychain (local) — they never leave the user's
+        machine in a developer-readable form (Keychain is owned by the OS).
+        Cloud Run deployments fall back to Firestore with Fernet encryption.
+        """
+        account = get_account(account_id)
+        if account is None:
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Account not found"})
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length)) if length else {}
+        username = (body.get("username") or "").strip()
+        password = body.get("password") or ""
+        if not username or not password:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "username and password are required"})
+            return
+
+        bank_key = account.get("bank_key")
+        try:
+            import sys as _sys
+            if str(ROOT) not in _sys.path:
+                _sys.path.insert(0, str(ROOT))
+            from bank_fetcher import _load_fetcher_config  # noqa: PLC0415
+            from bank_fetcher.credential_manager import store_credentials_cloud  # noqa: PLC0415
+            import keyring  # noqa: PLC0415
+
+            cfg = _load_fetcher_config(bank_key)
+            saved_to = None
+            # Prefer the OS keychain — it's tied to the user's logged-in macOS
+            # session and isn't accessible to other apps without the user's
+            # consent. The backend code can READ it (via the keyring library)
+            # but only while running under the same user account.
+            svc = cfg.get("keyring_service")
+            u_key = cfg.get("keyring_username_key")
+            p_key = cfg.get("keyring_password_key")
+            if svc and u_key and p_key:
+                try:
+                    keyring.set_password(svc, u_key, username)
+                    keyring.set_password(svc, p_key, password)
+                    saved_to = "keychain"
+                except Exception as kc_err:
+                    print(f"keychain save failed ({kc_err}); falling back to encrypted Firestore", flush=True)
+            if saved_to is None:
+                store_credentials_cloud(bank_key, username, password)
+                saved_to = "firestore"
+
+            set_needs_login(account_id, False)
+            set_has_credentials(account_id, True)
+            self._send_json(HTTPStatus.OK, {"saved_to": saved_to})
+        except Exception as exc:
+            print(f"[save-credentials] error: {exc}", flush=True)
             self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
 
     def _handle_recategorize_account(self, account_id: int) -> None:
@@ -1122,16 +1602,30 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, {"updated": 0})
                 return
 
+            # Repair amount_type when the extension stored everything as the
+            # same type. The stored `amount` field has the sign stripped, so
+            # we use a description-based heuristic instead: most rows are
+            # expenses; only flip to credit when the description contains a
+            # strong "money in" signal (payroll, deposit, refund, etc.) or
+            # the category is Income/Refund.
+            acct_type = (account.get("account_type") or "").lower()
             for t in txns:
-                t["type"] = t.get("amount_type", "debit")
+                t["amount_type"] = _infer_amount_type(
+                    description=str(t.get("description") or ""),
+                    merchant_clean=str(t.get("merchant_clean") or ""),
+                    category=str(t.get("category") or ""),
+                    account_type=acct_type,
+                )
+                t["type"] = t["amount_type"]
 
-            _categorize_scraped(txns)
+            _categorize_scraped(txns, account_type=acct_type or None)
 
             for t in txns:
                 update_transaction_by_id(
                     t["id"],
                     t.get("category"),
                     t.get("merchant_clean") or t.get("description"),
+                    amount_type=t.get("amount_type"),
                 )
 
             self._send_json(HTTPStatus.OK, {"updated": len(txns)})
@@ -1203,8 +1697,14 @@ class DemoHandler(SimpleHTTPRequestHandler):
             interval_hours=body.get("sync_interval_hours"),
         )
         if "account_balance" in body:
-            balance_str = str(body["account_balance"]).strip()
-            set_account_balance(account_id, balance_str)
+            set_account_balance(account_id, str(body["account_balance"]).strip())
+        if "needs_login" in body:
+            set_needs_login(account_id, bool(body["needs_login"]))
+        if "status" in body:
+            error_msg = body.get("last_error") or (
+                "Session expired — please re-login." if body["status"] == "needs_relogin" else None
+            )
+            set_account_status(account_id, body["status"], error_msg)
         self._send_json(HTTPStatus.OK, get_account(account_id))
 
     def _resolve_persist_mode(self) -> str:

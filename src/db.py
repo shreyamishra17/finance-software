@@ -138,6 +138,11 @@ def get_account(account_id: int) -> dict | None:
     return doc.to_dict() if doc.exists else None
 
 
+def set_account_type(account_id: int, account_type: str) -> None:
+    """Set / correct the account_type field (e.g. 'credit', 'checking')."""
+    _get_db().collection("accounts").document(str(account_id)).update({"account_type": account_type})
+
+
 def update_last_synced(account_id: int, dt: datetime, account_hint: str | None = None) -> None:
     updates: dict = {"last_synced_at": dt.isoformat()}
     if account_hint:
@@ -176,8 +181,21 @@ def set_needs_login(account_id: int, flag: bool) -> None:
     _get_db().collection("accounts").document(str(account_id)).update({"needs_login": bool(flag)})
 
 
+def set_account_status(account_id: int, status: str, error: str | None = None) -> None:
+    _get_db().collection("accounts").document(str(account_id)).update(
+        {"status": status, "last_error": error}
+    )
+
+
 def set_last_url(account_id: int, url: str) -> None:
     _get_db().collection("accounts").document(str(account_id)).update({"last_url": url})
+
+
+def set_has_credentials(account_id: int, flag: bool) -> None:
+    """Persist whether the user has saved bank credentials for this account.
+    Stored on the account doc so the GET /api/accounts handler doesn't have
+    to probe the OS keychain on every request (which spams macOS prompts)."""
+    _get_db().collection("accounts").document(str(account_id)).update({"has_credentials": bool(flag)})
 
 
 def set_account_balance(account_id: int, balance: str) -> None:
@@ -230,6 +248,15 @@ def _txn_doc_id(account_id: int, date: str, description: str, amount: str, balan
     return hashlib.sha1(key.encode("utf-8")).hexdigest()
 
 
+def _parse_amount_float(amt_str: str) -> float | None:
+    """Parse a raw amount string like '$159.47' or '-$94.40' into a float."""
+    s = re.sub(r"[^\d.\-]", "", (amt_str or "").strip())
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
 def store_transactions(account_id: int, transactions: list[dict]) -> int:
     db = _get_db()
     now = datetime.now().isoformat()
@@ -272,6 +299,7 @@ def store_transactions(account_id: int, transactions: list[dict]) -> int:
 
     if batch_count > 0:
         batch.commit()
+
     return inserted
 
 
@@ -408,8 +436,16 @@ def get_uncategorized_transactions(limit: int = 5000) -> list[dict]:
     return result
 
 
-def update_transaction_by_id(txn_id: str, category: str | None, merchant_clean: str | None) -> None:
-    _get_db().collection("transactions").document(txn_id).update({
+def update_transaction_by_id(
+    txn_id: str,
+    category: str | None,
+    merchant_clean: str | None,
+    amount_type: str | None = None,
+) -> None:
+    updates: dict = {
         "category":       category,
         "merchant_clean": merchant_clean,
-    })
+    }
+    if amount_type is not None:
+        updates["amount_type"] = amount_type
+    _get_db().collection("transactions").document(txn_id).update(updates)

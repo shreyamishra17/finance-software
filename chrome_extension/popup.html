@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      width: 280px;
+      background: #fff;
+      color: #111;
+    }
+    .header {
+      background: #1f5f55;
+      color: #fff;
+      padding: 14px 16px 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .header-logo { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; }
+    .header-sub  { font-size: 11px; opacity: 0.75; margin-top: 1px; }
+    .body { padding: 14px 16px; }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    }
+    .dot-green  { background: #22c55e; }
+    .dot-red    { background: #ef4444; }
+    .dot-yellow { background: #f59e0b; animation: pulse 1.2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+    .status-text { font-size: 13px; color: #374151; }
+    .error-box {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 12px;
+      color: #b91c1c;
+      margin-bottom: 12px;
+      line-height: 1.4;
+    }
+    .last-sync {
+      font-size: 11px;
+      color: #9ca3af;
+      margin-bottom: 14px;
+    }
+
+    .section-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: #9ca3af;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    .input-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 14px;
+    }
+    input {
+      flex: 1;
+      border: 1.5px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 7px 10px;
+      font-size: 12px;
+      color: #111;
+      outline: none;
+    }
+    input:focus { border-color: #1f5f55; }
+
+    .btn {
+      border: none;
+      border-radius: 7px;
+      padding: 9px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+      transition: background 0.15s, opacity 0.15s;
+    }
+    .btn-primary { background: #1f5f55; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #174e45; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-save {
+      background: #f3f4f6; color: #374151;
+      padding: 7px 12px;
+      font-size: 12px;
+      border-radius: 6px;
+      border: 1.5px solid #e5e7eb;
+      flex-shrink: 0;
+    }
+    .btn-save:hover { background: #e5e7eb; }
+
+    .divider { border: none; border-top: 1px solid #f3f4f6; margin: 12px 0; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div class="header-logo">FIFO</div>
+      <div class="header-sub">Bank Sync</div>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="status-row">
+      <div class="dot" id="statusDot"></div>
+      <div class="status-text" id="statusText">Checking…</div>
+    </div>
+
+    <div id="errorBox" class="error-box" style="display:none"></div>
+    <div id="lastSync" class="last-sync"></div>
+
+    <button class="btn btn-primary" id="syncBtn">↻ Sync Now</button>
+
+    <hr class="divider" />
+
+    <div class="section-label">FIFO Backend URL</div>
+    <div class="input-row">
+      <input id="fifoUrl" type="text" placeholder="http://localhost:8000" />
+      <button class="btn btn-save" id="saveBtn">Save</button>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

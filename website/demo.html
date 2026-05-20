@@ -116,6 +116,13 @@
                   </div>
                 </div>
                 <div id="txnSearchNoResults" class="txn-search-no-results" style="display:none">No transactions match "<span id="txnSearchTerm"></span>"</div>
+                <div id="searchTotalBanner" style="display:none;margin-bottom:12px;padding:14px 18px;background:#fff8f0;border:1.5px solid #fddcb5;border-radius:10px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                  <div>
+                    <div id="searchBannerAmt" style="font-size:22px;font-weight:700;color:#c2410c;line-height:1.1;"></div>
+                    <div id="searchBannerLabel" style="font-size:12.5px;color:#92400e;margin-top:3px;"></div>
+                  </div>
+                  <div id="searchBannerCount" style="font-size:12px;color:#b45309;background:#fef3c7;border-radius:20px;padding:4px 12px;font-weight:500;white-space:nowrap;"></div>
+                </div>
                 <div class="results-table-wrap results-fade">
                   <table class="results-table">
                     <thead>
@@ -507,23 +514,21 @@
         if (n === null) return rawAmount;
         const numLocale = currSym === "₹" ? "en-IN" : "en-US";
         const abs = Math.abs(n).toLocaleString(numLocale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        if (isCreditAcct) {
-          if (n > 0) return `-${currSym}${abs}`;   // charge → negative (money out)
-          if (n < 0) return `+${currSym}${abs}`;   // payment/refund → positive (money in)
-          return `${currSym}0.00`;
-        } else {
-          const type = (txnType || "").toLowerCase();
-          // Debit/expense: "debit" (Indian banks) or "withdrawals"/"fee" (US banks)
-          if ((type === "debit" || type === "withdrawals" || type === "fee") &&
-              !String(rawAmount).startsWith("-") && !String(rawAmount).startsWith("(")) {
-            return `-${currSym}${abs}`;
-          }
-          // Credit/income → show as positive with + prefix
-          if (type === "credit" && !String(rawAmount).startsWith("+")) {
-            return `+${currSym}${abs}`;
-          }
-          return rawAmount;
-        }
+        const raw = String(rawAmount || "").replace(/\s/g, "");
+
+        // Rule 1: trust amount_type when it's explicitly set by the scraper.
+        // This handles credit cards (Capital One: posted positive=charge→debit, negative=refund→credit)
+        // and ICICI-style debit/credit columns. See BANK_CONVENTIONS.md.
+        const type = (txnType || "").toLowerCase();
+        if (type === "credit") return `+${currSym}${abs}`;
+        if (type === "debit" || type === "withdrawals" || type === "fee") return `-${currSym}${abs}`;
+
+        // Rule 2: no explicit type — use raw sign from the bank.
+        if (n < 0) return `-${currSym}${abs}`;
+        if (raw.startsWith("+")) return `+${currSym}${abs}`;
+
+        // Rule 3: unsigned, no type — show as positive.
+        return `+${currSym}${abs}`;
       }
 
       function easeOutCubic(t) {
@@ -640,6 +645,29 @@
           if (termEl) termEl.textContent = _txnSearchQuery;
         }
 
+        // Search total banner — show at top when a search query is active
+        const searchBanner     = document.getElementById("searchTotalBanner");
+        const searchBannerAmt  = document.getElementById("searchBannerAmt");
+        const searchBannerLbl  = document.getElementById("searchBannerLabel");
+        const searchBannerCnt  = document.getElementById("searchBannerCount");
+        if (searchBanner) {
+          if (_txnSearchQuery && filteredTxns.length > 0) {
+            const _sym2 = payload._currSym || "$";
+            let searchTotal = 0;
+            filteredTxns.forEach((t) => {
+              const n = parseAmount(_displayAmt(t.amount || "", t.txn_type, isCreditAcct, _sym2));
+              if (n !== null) searchTotal += n;
+            });
+            const absFormatted = `${_sym2}${Math.abs(searchTotal).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            searchBannerAmt.textContent = absFormatted;
+            searchBannerLbl.textContent = `spent on "${_txnSearchQuery}"`;
+            searchBannerCnt.textContent = `${filteredTxns.length} transaction${filteredTxns.length !== 1 ? "s" : ""}`;
+            searchBanner.style.display  = "flex";
+          } else {
+            searchBanner.style.display = "none";
+          }
+        }
+
         // Show total spending for the selected category
         if (categoryFilter && categoryFilter !== "All") {
           let total = 0;
@@ -685,10 +713,16 @@
             }
           )
           .join("");
+        // Define sym/locale before forEach so _displayAmt can be used for proper sign normalization
+        const _sym = payload._currSym || "$";
+        const _locale = _sym === "₹" ? "en-IN" : "en-US";
         txns.forEach((t) => {
           const category = t.category || "Uncategorized";
           categoryCounts[category] = (categoryCounts[category] || 0) + 1;
-          const n = parseAmount(t.amount);
+          // Use _displayAmt (same as transaction rows + search banner) so Capital One charges
+          // (stored as positive raw amounts with amount_type="debit") are treated as negative,
+          // and refunds/payments (amount_type="credit") are treated as positive.
+          const n = parseAmount(_displayAmt(t.amount || "", t.txn_type, isCreditAcct, _sym));
           if (n !== null) categoryTotals[category] = (categoryTotals[category] || 0) + n;
         });
         const orderedCategories = Object.keys(categoryCounts).sort();
@@ -697,18 +731,17 @@
           return;
         }
         categoryBlock.hidden = false;
-        const _sym = payload._currSym || "$";
-        const _locale = _sym === "₹" ? "en-IN" : "en-US";
         function fmtCardTotal(total) {
           if (total === undefined || total === null || isNaN(total)) return "";
           const sign = total < 0 ? "-" : total > 0 ? "+" : "";
           return `${sign}${_sym}${Math.abs(total).toLocaleString(_locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
         }
         const allTotal = Object.values(categoryTotals).reduce((s, v) => s + v, 0);
-        // For credit cards show the balance due on the "All" pill; for others show net spending
+        // For credit cards show the balance due on the "All" pill; for others show net spending.
+        // allTotal is now properly signed (expenses negative, income positive), so no negation needed.
         const allDisplayVal = payload._creditBalanceNum != null
           ? `-${_sym}` + payload._creditBalanceNum.toLocaleString(_locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-          : fmtCardTotal(-allTotal);
+          : fmtCardTotal(allTotal);
         const allCard = `<div class="result-card${
           categoryFilter === "All" ? " is-active" : ""
         }" data-category="All"><div class="result-label">All</div><div class="result-value">${allDisplayVal}</div></div>`;
@@ -1226,7 +1259,7 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
         const spendMonths    = months.filter(m => m.expenses > 0);
         const avgMonthlySpend = spendMonths.length
           ? spendMonths.reduce((s, m) => s + m.expenses, 0) / spendMonths.length : 0;
-        const balRaw   = (ins.current_balance || "").replace(/[$,]/g, "").trim();
+        const balRaw   = (ins.current_balance || "").replace(/[$₹€£¥,]/g, "").trim();
         const balNum   = balRaw ? parseFloat(balRaw) : null;
         const avgMonthlyIncome = months.filter(m => m.income > 0).length
           ? months.filter(m => m.income > 0).reduce((s, m) => s + m.income, 0) / months.filter(m => m.income > 0).length : 0;
@@ -1309,8 +1342,8 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
         if (isCreditCard) {
           if (noteEl) noteEl.style.display = "none";
           datasets = [
-            { label: "Charges",  data: months.map(m => m.charges  || 0), backgroundColor: "#f87171", borderRadius: 5, barPercentage: 0.55 },
-            { label: "Payments", data: months.map(m => m.payments || 0), backgroundColor: "#1f5f55", borderRadius: 5, barPercentage: 0.55 },
+            { label: "Charges",  data: months.map(m => m.charges  ?? m.expenses  ?? 0), backgroundColor: "#f87171", borderRadius: 5, barPercentage: 0.55 },
+            { label: "Payments", data: months.map(m => m.payments ?? m.income    ?? 0), backgroundColor: "#1f5f55", borderRadius: 5, barPercentage: 0.55 },
           ];
         } else {
           const incomeVals = months.map(m => m.income).filter(v => v > 0);
@@ -1732,6 +1765,13 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
               <div class="acct-overflow-menu">
                 <button onclick="syncAccount(event,${acct.id})">↻ Sync now</button>
                 <button onclick="reloginAccount(event,${acct.id})">↩ Re-login</button>
+                <button onclick="openSaveCredentials(event,${acct.id})"${
+                  acct.has_credentials && acct.needs_login ? ' style="background:#fff4e6;color:#9a3412;font-weight:600"' : ""
+                }>${
+                  !acct.has_credentials
+                    ? "🔑 Save password"
+                    : (acct.needs_login ? "🔑 Re-update password" : "🔑 Update password")
+                }</button>
                 <button onclick="recategorizeAccount(event,${acct.id})">⟳ Fix Categories</button>
                 <button class="acct-overflow-del" onclick="deleteAccount(event,${acct.id})">✕ Remove</button>
                 <div class="acct-overflow-autosync" onclick="event.stopPropagation()">
@@ -1764,6 +1804,8 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
           _offlineAccounts.forEach(a => {
             if (!accounts.find(x => x.id === a.id)) accounts.unshift(a);
           });
+          // Cache so syncAccount() can look up bank_key / has_credentials without refetching
+          _lastAccountsCache = accounts;
 
           const sidebarList = document.getElementById("sidebarAccountsList");
           const noAccts = document.getElementById("sidebarNoAccounts");
@@ -1901,7 +1943,13 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
         const fmt = v => currSym + Math.abs(v).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         const acctBalance = acctMeta ? (acctMeta.account_balance || "") : "";
         const currentBalNum = acctBalance ? parseAmount(acctBalance) : null;
-        const isCreditCard = acctMeta && (acctMeta.account_type === "credit");
+        // Detect credit cards: explicit account_type field OR known credit card bank keys.
+        // The bank_key fallback self-heals if an account was stored before account_type support.
+        const _CREDIT_BANK_KEYS = new Set(["capital_one", "chase_credit", "amex", "discover", "citi", "barclays"]);
+        const isCreditCard = acctMeta && (
+          acctMeta.account_type === "credit" ||
+          _CREDIT_BANK_KEYS.has(acctMeta.bank_key || "")
+        );
 
         // Compute income / expenses for the summary cards.
         // Credit cards: use amount sign (positive = charge, negative = payment/refund)
@@ -2024,7 +2072,28 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
         const status = document.getElementById("connectBankStatus");
         status.style.display = "block";
         status.textContent = "Syncing in background…";
+
+        // Resolve the account to decide which sync path to use. Order matters:
+        //   1. Prefer extension when installed — uses your live Chrome session
+        //      cookies, which banks accept without bot-detection friction.
+        //   2. Fall back to server-side Playwright when no extension is
+        //      installed AND credentials are saved (silent headless re-login).
+        //   3. Otherwise tell the user to either install the extension or save
+        //      credentials.
+        const acct = (_lastAccountsCache || []).find(a => a.id === accountId);
+        const extensionInstalled = typeof window.__FIFO_EXTENSION !== "undefined";
+        const useExtension = extensionInstalled && acct && acct.last_url;
+
         try {
+          if (useExtension) {
+            const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+            const apiBase = isLocal ? location.origin : (typeof CLOUD_API_BASE !== "undefined" ? CLOUD_API_BASE : location.origin);
+            await _syncViaExtension(acct.bank_key, apiBase, status);
+            await loadAccounts();
+            await loadAccountTransactions(accountId);
+            return;
+          }
+
           const resp = await _apiFetch(`/api/accounts/${accountId}/sync`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -2032,9 +2101,7 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
           });
           const data = await resp.json();
           if (resp.status === 422) {
-            // Session missing or expired — show message, highlight Re-login button
-            status.textContent = data.error || "Session expired — please click ↩ Re-login.";
-            // Visually pulse the Re-login button so the user knows what to do
+            status.textContent = data.error || "Session expired — please click ↩ Re-login or save your password.";
             const reloginBtn = btn.parentElement?.querySelector("button:last-child");
             if (reloginBtn) {
               reloginBtn.style.outline = "2px solid #f97316";
@@ -2052,6 +2119,91 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
           btn.disabled = false;
           btn.textContent = "↻";
         }
+      }
+
+      // Cache of latest accounts list so syncAccount can resolve bank_key/has_credentials
+      // without re-fetching every click.
+      let _lastAccountsCache = null;
+
+      // ── Save credentials modal ────────────────────────────────────────
+      function openSaveCredentials(event, accountId) {
+        event.stopPropagation();
+        const acct = (_lastAccountsCache || []).find(a => a.id === accountId);
+        if (!acct) return;
+        document.getElementById("saveCredsAccountId").value = accountId;
+        document.getElementById("saveCredsBankLabel").textContent = acct.display_name || acct.bank_key;
+        document.getElementById("saveCredsUsername").value = "";
+        document.getElementById("saveCredsPassword").value = "";
+        const statusEl = document.getElementById("saveCredsStatus");
+        statusEl.style.display = "none";
+        statusEl.textContent = "";
+        document.getElementById("saveCredsOverlay").style.display = "flex";
+        setTimeout(() => document.getElementById("saveCredsUsername").focus(), 50);
+      }
+      function closeSaveCredentials(event) {
+        if (event && event.target !== document.getElementById("saveCredsOverlay")) return;
+        document.getElementById("saveCredsOverlay").style.display = "none";
+      }
+      async function submitSaveCredentials(event) {
+        event.preventDefault();
+        const accountId = document.getElementById("saveCredsAccountId").value;
+        const username  = document.getElementById("saveCredsUsername").value.trim();
+        const password  = document.getElementById("saveCredsPassword").value;
+        const statusEl  = document.getElementById("saveCredsStatus");
+        statusEl.style.display = "block";
+        statusEl.style.color = "#555";
+        statusEl.textContent = "Saving…";
+        try {
+          const resp = await _apiFetch(`/api/accounts/${accountId}/save-credentials`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || "Save failed");
+          statusEl.style.color = "#166534";
+          statusEl.textContent = data.saved_to === "keychain"
+            ? "✓ Saved to your macOS Keychain."
+            : "✓ Saved (encrypted).";
+          await loadAccounts();
+          setTimeout(closeSaveCredentials, 1200);
+        } catch (err) {
+          statusEl.style.color = "#991b1b";
+          statusEl.textContent = "Error: " + err.message;
+        }
+      }
+
+      // Trigger the extension's per-bank sync via postMessage. Waits for the
+      // FIFO_SYNC_STATUS "done"/"error" reply from the extension bridge.
+      function _syncViaExtension(bankKey, apiBase, statusEl) {
+        return new Promise((resolve, reject) => {
+          const handler = (event) => {
+            if (event.source !== window) return;
+            const msg = event.data;
+            if (!msg || msg.type !== "FIFO_SYNC_STATUS") return;
+            const labels = {
+              logging_in: "🔐 Authenticating in a hidden window…",
+              scraping:   "📋 Reading your transactions…",
+              saving:     "💾 Saving to your account…",
+            };
+            if (labels[msg.status]) { statusEl.textContent = labels[msg.status]; return; }
+            if (msg.status === "done") {
+              window.removeEventListener("message", handler);
+              statusEl.textContent = `Synced — ${msg.data?.count ?? 0} transactions imported.`;
+              resolve();
+            } else if (msg.status === "error") {
+              window.removeEventListener("message", handler);
+              reject(new Error(msg.message || "Sync failed"));
+            }
+          };
+          window.addEventListener("message", handler);
+          window.postMessage({ type: "FIFO_SMART_CONNECT", bank: bankKey, apiBase }, "*");
+          // Safety timeout: if no response in 5 min, give up
+          setTimeout(() => {
+            window.removeEventListener("message", handler);
+            reject(new Error("Sync timed out"));
+          }, 5 * 60 * 1000);
+        });
       }
 
       async function reloginAccount(event, accountId) {
@@ -2214,8 +2366,63 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
         }
       }
 
+      // ── Credential modal ──────────────────────────────────────────────
+      const BANK_META = {
+        capital_one: { name: "Capital One", icon: "💳" },
+        boa:         { name: "Bank of America", icon: "🏦" },
+        icici:       { name: "ICICI Bank", icon: "🏦" },
+        discover:    { name: "Discover", icon: "💳" },
+      };
+
+      let _credentialModalBank = null;
+
+      function openCredentialModal(bankKey) {
+        _credentialModalBank = bankKey;
+        const meta = BANK_META[bankKey] || { name: bankKey, icon: "🏦" };
+        document.getElementById("credentialModalTitle").textContent = `Connect ${meta.name}`;
+        document.getElementById("credentialBankIcon").textContent = meta.icon;
+        document.getElementById("credentialUsername").value = "";
+        document.getElementById("credentialPassword").value = "";
+        document.getElementById("credentialSubmitBtn").disabled = false;
+        document.getElementById("credentialSubmitLabel").textContent = "Connect & Sync";
+        // Hide bank picker, show credential modal
+        document.getElementById("bankPickerOverlay").style.display = "none";
+        document.getElementById("credentialModalOverlay").style.display = "flex";
+        setTimeout(() => document.getElementById("credentialUsername").focus(), 80);
+      }
+
+      function closeCredentialModal(event) {
+        if (event && event.target !== document.getElementById("credentialModalOverlay")) return;
+        document.getElementById("credentialModalOverlay").style.display = "none";
+        _credentialModalBank = null;
+      }
+
+      function toggleCredentialPasswordVis() {
+        const inp = document.getElementById("credentialPassword");
+        const icon = document.getElementById("credentialEyeIcon");
+        if (inp.type === "password") {
+          inp.type = "text";
+          icon.innerHTML = `<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>`;
+        } else {
+          inp.type = "password";
+          icon.innerHTML = `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>`;
+        }
+      }
+
+      async function submitCredentialForm(event) {
+        event.preventDefault();
+        const bankKey  = _credentialModalBank;
+        const username = document.getElementById("credentialUsername").value.trim();
+        const password = document.getElementById("credentialPassword").value;
+        if (!bankKey || !username || !password) return;
+
+        // Close modal, hand off to connectBank with credentials
+        document.getElementById("credentialModalOverlay").style.display = "none";
+        await connectBank(bankKey, username, password);
+      }
+
       // ── Connect bank (add new account, store in DB) ───────────────────
-      async function connectBank(bankKey) {
+      async function connectBank(bankKey, username, password) {
         // On production (Cloudflare Pages / Cloud Run) the Playwright browser
         // scraper is unavailable — route to the bookmarklet flow instead.
         if (!_isLocalhost()) {
@@ -2227,13 +2434,20 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
 
         const status = document.getElementById("connectBankStatus");
         status.style.display = "block";
-        status.textContent = "Opening browser — log in and complete MFA, then navigate to your Transactions page. Transactions will appear as soon as the browser closes.";
+        if (username && password) {
+          status.textContent = "Connecting — FIFO is logging in headlessly and fetching your transactions…";
+        } else {
+          status.textContent = "Opening browser — log in and complete MFA, then navigate to your Transactions page. Transactions will appear as soon as the browser closes.";
+        }
 
         try {
+          const payload = { bank: bankKey, period: "1y" };
+          if (username) payload.username = username;
+          if (password) payload.password = password;
           const resp = await _apiFetch("/api/accounts", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ bank: bankKey, period: "1y" }),
+            body: JSON.stringify(payload),
           });
           const data = await resp.json();
           if (!resp.ok) throw new Error(data.detail || data.error || "Connection failed");
@@ -2276,11 +2490,11 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
         const isSandboxAcct = isSandbox;
         return `
           <div class="sidebar-account-item${isActive ? " is-active" : ""}${needsAuth ? " needs-reauth" : ""}" data-id="${acct.id}"
-               onclick="${needsAuth ? `reloginAccount(event,${acct.id})` : `loadAccountTransactions(${acct.id})`}">
+               onclick="loadAccountTransactions(${acct.id})">
             <span class="sidebar-acct-dot${needsAuth ? " dot-pulse" : ""}" style="background:${dotColor}"></span>
             <div class="sidebar-acct-info">
               <span class="sidebar-acct-name">${cleanName}</span>
-              <span class="sidebar-acct-meta">${needsAuth ? "Tap to re-connect →" : typeStr + hint}</span>
+              <span class="sidebar-acct-meta">${needsAuth ? "Re-login needed — old data still visible" : typeStr + hint}</span>
             </div>
             ${statusBadge}
             <div class="sidebar-acct-overflow" onclick="event.stopPropagation()">
@@ -2290,6 +2504,13 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
               <div class="acct-overflow-menu sidebar-overflow-menu">
                 ${!isSandboxAcct ? `<button onclick="syncAccount(event,${acct.id})">↻ Sync now</button>` : ""}
                 ${!isSandboxAcct ? `<button onclick="reloginAccount(event,${acct.id})">↩ Re-login</button>` : ""}
+                ${!isSandboxAcct ? `<button onclick="openSaveCredentials(event,${acct.id})"${
+                  acct.has_credentials && acct.needs_login ? ' style="background:#fff4e6;color:#9a3412;font-weight:600"' : ""
+                }>${
+                  !acct.has_credentials
+                    ? "🔑 Save password"
+                    : (acct.needs_login ? "🔑 Re-update password" : "🔑 Update password")
+                }</button>` : ""}
                 <button class="acct-overflow-del" onclick="deleteAccount(event,${acct.id})">✕ Remove</button>
               </div>
             </div>
@@ -2367,86 +2588,15 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
         // ── Update panel labels ─────────────────────────────────────────
         const chartLabelEl  = document.getElementById("overviewChartLabel");
         const recentLabelEl = document.getElementById("overviewRecentLabel");
-        if (chartLabelEl)  chartLabelEl.textContent  = isCreditCard ? "SPENDING BY CATEGORY" : "MONTHLY CASH FLOW";
-        if (recentLabelEl) recentLabelEl.textContent = isCreditCard ? "RECENT CHARGES"         : "RECENT TRANSACTIONS";
+        if (chartLabelEl)  chartLabelEl.textContent  = isCreditCard ? "MONTHLY ACTIVITY" : "MONTHLY CASH FLOW";
+        if (recentLabelEl) recentLabelEl.textContent = isCreditCard ? "RECENT CHARGES"    : "RECENT TRANSACTIONS";
 
         // ── LEFT PANEL ──────────────────────────────────────────────────
         if (_overviewChartInstance) { _overviewChartInstance.destroy(); _overviewChartInstance = null; }
         const wrapEl = document.getElementById("overviewChartWrap");
 
-        if (isCreditCard) {
-          // Donut: spending by category (charges only)
-          const charges = txns.filter(t => {
-            const n = parseAmount(t.amount) || 0;
-            return n > 0; // positive = charge on credit card
-          });
-          const catTotals = {};
-          for (const t of charges) {
-            const cat = t.category || "Uncategorized";
-            catTotals[cat] = (catTotals[cat] || 0) + (parseAmount(t.amount) || 0);
-          }
-          const sorted = Object.entries(catTotals).sort((a, b) => b[1] - a[1]);
-          const TOP_N = 6;
-          const top = sorted.slice(0, TOP_N);
-          const otherTotal = sorted.slice(TOP_N).reduce((s, [, v]) => s + v, 0);
-          if (otherTotal > 0) top.push(["Other", otherTotal]);
-          const totalSpend = top.reduce((s, [, v]) => s + v, 0);
-
-          if (wrapEl && top.length > 0) {
-            wrapEl.innerHTML = '<div class="overview-donut-wrap"><canvas id="overviewDonutChart"></canvas></div>' +
-              '<div class="overview-donut-legend" id="overviewDonutLegend"></div>';
-            const canvas = document.getElementById("overviewDonutChart");
-            _overviewChartInstance = new Chart(canvas, {
-              type: "doughnut",
-              data: {
-                labels: top.map(([k]) => k),
-                datasets: [{
-                  data: top.map(([, v]) => +v.toFixed(2)),
-                  backgroundColor: top.map((_, i) => CAT_COLORS[i % CAT_COLORS.length]),
-                  borderWidth: 2,
-                  borderColor: "#faf9f7",
-                  hoverBorderWidth: 0,
-                }],
-              },
-              options: {
-                responsive: true, maintainAspectRatio: false,
-                cutout: "68%",
-                plugins: {
-                  legend: { display: false },
-                  tooltip: {
-                    backgroundColor: "#fff", titleColor: "#111", bodyColor: "#444",
-                    borderColor: "#e5e7eb", borderWidth: 1, padding: 10,
-                    callbacks: {
-                      label: ctx => {
-                        const v = ctx.parsed;
-                        const pct = totalSpend > 0 ? ((v / totalSpend) * 100).toFixed(0) : 0;
-                        return ` $${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${pct}%)`;
-                      },
-                    },
-                  },
-                },
-              },
-            });
-            // Custom legend
-            const legendEl = document.getElementById("overviewDonutLegend");
-            if (legendEl) {
-              legendEl.innerHTML = top.map(([cat, amt], i) => {
-                const pct = totalSpend > 0 ? ((amt / totalSpend) * 100).toFixed(0) : 0;
-                const color = CAT_COLORS[i % CAT_COLORS.length];
-                return `<div class="donut-legend-row">
-                  <span class="donut-legend-dot" style="background:${color}"></span>
-                  <span class="donut-legend-cat">${cat}</span>
-                  <span class="donut-legend-pct">${pct}%</span>
-                  <span class="donut-legend-amt">$${amt.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
-                </div>`;
-              }).join("");
-            }
-          } else if (wrapEl) {
-            wrapEl.innerHTML = '<p style="font-size:13px;color:#9ca3af;padding:24px 0 0">No spending data yet.</p>';
-          }
-
-        } else {
-          // Bar chart: monthly cash flow (checking/savings)
+        {
+          // Bar chart: Charges vs Payments (credit card) or Income vs Expenses (checking)
           const months = _computeMonthlyFromPayload(payload).slice(-6);
           if (wrapEl && months.length > 0) {
             wrapEl.innerHTML = '<canvas id="overviewMonthlyChart"></canvas>';
@@ -2455,12 +2605,18 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
               const [y, mo] = m.month.split("-");
               return new Date(+y, +mo - 1, 1).toLocaleString("default", { month: "short", year: "2-digit" });
             });
+            const datasets = isCreditCard
+              ? [
+                  { label: "Charges",  data: months.map(m => m.charges),  backgroundColor: "#f87171", borderRadius: 4, barPercentage: 0.6 },
+                  { label: "Payments", data: months.map(m => m.payments), backgroundColor: "#1f5f55", borderRadius: 4, barPercentage: 0.6 },
+                ]
+              : [
+                  { label: "Income",   data: months.map(m => m.income),   backgroundColor: "#1f5f55", borderRadius: 4, barPercentage: 0.6 },
+                  { label: "Expenses", data: months.map(m => m.expenses), backgroundColor: "#f87171", borderRadius: 4, barPercentage: 0.6 },
+                ];
             _overviewChartInstance = new Chart(canvas, {
               type: "bar",
-              data: { labels, datasets: [
-                { label: "Income",   data: months.map(m => m.income),   backgroundColor: "#1f5f55", borderRadius: 4, barPercentage: 0.6 },
-                { label: "Expenses", data: months.map(m => m.expenses), backgroundColor: "#f87171", borderRadius: 4, barPercentage: 0.6 },
-              ]},
+              data: { labels, datasets },
               options: {
                 responsive: true, maintainAspectRatio: false,
                 plugins: {
@@ -2578,7 +2734,6 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
         }
       });
 
-      // ── Smart Connect ─────────────────────────────────────────────
       // ── Smart Connect ─────────────────────────────────────────────────────── //
       // Uses the FIFO Chrome Extension — users install it once, then bank
       // connections are fully automatic. No credentials ever leave their device.
@@ -2586,8 +2741,19 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
       let _scBank = null;
       const _scBankNames = { boa: "Bank of America", capital_one: "Capital One", discover: "Discover" };
 
+      // Tracks whether bridge.js has confirmed the extension is present.
+      // Set by the custom DOM event (method 2) before any user interaction.
+      let _fifoExtReady = false;
+      document.addEventListener("fifo-extension-ready", () => { _fifoExtReady = true; });
+
       function _scExtensionInstalled() {
-        return typeof window.__FIFO_EXTENSION !== "undefined";
+        // Accept any of the three signals bridge.js emits:
+        //   1. Custom event already fired (most reliable for in-page UI)
+        //   2. DOM attribute set by bridge.js in its isolated world
+        //   3. window property injected via script tag (original method)
+        return _fifoExtReady
+          || document.documentElement.getAttribute("data-fifo-ext") === "1"
+          || typeof window.__FIFO_EXTENSION !== "undefined";
       }
 
       function openSmartConnect(bankKey) {
@@ -2672,7 +2838,7 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
             <span class="bank-name">Capital One</span>
             <span class="bank-option-method">Open in browser</span>
           </button>
-          <button class="bank-option-auto bank-option-auto-soon" disabled>⚡ Coming soon</button>
+          <button class="bank-option-auto" onclick="openCredentialModal('capital_one')">⚡ Let FIFO handle it</button>
         </div>
         <div class="bank-option-row">
           <button class="bank-option bank-option-manual" onclick="connectBank('discover')">
@@ -2690,6 +2856,67 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
         </div>
       </div>
       <button class="bank-picker-cancel" onclick="closeBankPicker()">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Credential modal — enter username + password for headless auto-sync -->
+  <div id="credentialModalOverlay" class="bank-picker-overlay" style="display:none" onclick="closeCredentialModal(event)">
+    <div class="bank-picker-modal credential-modal">
+      <div class="credential-modal-header">
+        <div class="credential-bank-icon" id="credentialBankIcon">🏦</div>
+        <div class="credential-modal-titles">
+          <div class="bank-picker-title" id="credentialModalTitle">Connect Bank</div>
+          <div class="credential-modal-subtitle">Credentials are encrypted and stored securely. FIFO uses them only for automatic background syncing — never shared.</div>
+        </div>
+      </div>
+
+      <div class="credential-pills">
+        <span class="credential-pill">🔒 End-to-end encrypted</span>
+        <span class="credential-pill">⚡ Auto-syncs every 6 hrs</span>
+        <span class="credential-pill">🙈 Never shared</span>
+      </div>
+
+      <form id="credentialForm" onsubmit="submitCredentialForm(event)" autocomplete="on">
+        <div class="credential-field-group">
+          <label class="credential-label" for="credentialUsername">Username or Email</label>
+          <input
+            id="credentialUsername"
+            class="credential-input"
+            type="text"
+            placeholder="Enter your bank username"
+            autocomplete="username"
+            required
+          />
+        </div>
+        <div class="credential-field-group">
+          <label class="credential-label" for="credentialPassword">Password</label>
+          <div class="credential-password-wrap">
+            <input
+              id="credentialPassword"
+              class="credential-input"
+              type="password"
+              placeholder="Enter your bank password"
+              autocomplete="current-password"
+              required
+            />
+            <button type="button" class="credential-eye-btn" id="credentialEyeBtn" onclick="toggleCredentialPasswordVis()" title="Show/hide password">
+              <svg id="credentialEyeIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="credential-mfa-note">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1f5f55" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          If your bank uses two-factor authentication, FIFO will prompt you to enter a one-time code the first time.
+        </div>
+
+        <div class="credential-actions">
+          <button type="button" class="bank-picker-cancel credential-cancel-btn" onclick="closeCredentialModal()">Cancel</button>
+          <button type="submit" class="credential-submit-btn" id="credentialSubmitBtn">
+            <span id="credentialSubmitLabel">Connect &amp; Sync</span>
+          </button>
+        </div>
+      </form>
     </div>
   </div>
 
@@ -2727,6 +2954,32 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
     </div>
   </div>
   <!-- Smart Connect modal -->
+  <!-- Save credentials modal -->
+  <div id="saveCredsOverlay" class="bank-picker-overlay" style="display:none" onclick="closeSaveCredentials(event)">
+    <div class="bank-picker-modal smart-connect-modal">
+      <div class="bank-picker-title">🔑 Save your bank password</div>
+      <div id="saveCredsBankLabel" class="smart-connect-subtitle"></div>
+      <p class="smart-connect-note" style="margin-bottom:14px;line-height:1.6;font-size:13px;color:#555">
+        Stored only in your computer's macOS Keychain (or encrypted in Firestore on Cloud Run).
+        FIFO can read it to silently re-authenticate when your bank cookies expire — no one else can.
+      </p>
+      <!-- Deliberately NOT a <form> with type="password". Chrome's password
+           manager triggers on that combo regardless of autocomplete hints.
+           We mask the password input via -webkit-text-security so it looks
+           like dots but isn't tagged as a credential field. -->
+      <div id="saveCredsForm">
+        <input type="hidden" id="saveCredsAccountId" value="">
+        <input class="smart-connect-input" id="saveCredsUsername" type="text" placeholder="Username" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
+        <input class="smart-connect-input" id="saveCredsPassword" type="text" placeholder="Password" autocomplete="off" data-lpignore="true" data-1p-ignore="true" style="margin-top:8px;-webkit-text-security:disc;text-security:disc">
+        <div id="saveCredsStatus" style="margin-top:10px;font-size:13px;color:#555;display:none"></div>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button type="button" class="demo-sandbox-btn" style="flex:1" onclick="submitSaveCredentials(event)">Save</button>
+          <button type="button" class="bank-picker-cancel" onclick="closeSaveCredentials()" style="flex:0 0 auto">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="smartConnectOverlay" class="bank-picker-overlay" style="display:none" onclick="closeSmartConnect(event)">
     <div class="bank-picker-modal smart-connect-modal">
       <div class="bank-picker-title">⚡ Let FIFO handle it</div>

@@ -1,286 +1,314 @@
-/**
- * FIFO Bank Connector — Background Service Worker
- *
- * Flow:
- *  1. FIFO web app fires window.postMessage({type:'FIFO_SMART_CONNECT', bank:'boa'})
- *  2. fifo_bridge.js (content script on FIFO page) relays to chrome.runtime.sendMessage
- *  3. This service worker opens the bank's login page in a new tab
- *  4. User logs in normally — no bot detection because it's their real browser
- *  5. chrome.tabs.onUpdated detects when the user reaches the accounts/transactions page
- *  6. Service worker injects the scraper function into the BofA tab
- *  7. Scraper reads the DOM, returns transactions array
- *  8. Service worker POSTs to /api/smart-connect/extension-ingest on the FIFO backend
- *  9. Success/error is forwarded back to the FIFO tab content script → FIFO web app
- */
+// FIFO Sync — Background Service Worker
+// Runs every 6 hours, opens hidden tabs for each connected bank,
+// scrapes transactions via content scripts, sends to FIFO backend.
 
-// Map of bank_key → login URL
-const BANK_LOGIN_URLS = {
-  boa: "https://www.bankofamerica.com/",
-};
+const SYNC_ALARM   = "fifo-sync";
+const SYNC_MINUTES = 360; // 6 hours
+const DEFAULT_FIFO = "http://localhost:8000";
 
-// Map of bank_key → URL pattern that indicates the user has logged in
-const BANK_LOGGED_IN_PATTERNS = {
-  boa: /bankofamerica\.com\/myaccounts/i,
-};
+// ── Startup ───────────────────────────────────────────────────────────────
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.alarms.create(SYNC_ALARM, { periodInMinutes: SYNC_MINUTES });
+  log("FIFO Sync installed. Alarm set for every 6 hours.");
+});
 
-// Map of bank_key → URL pattern for the transactions/activity page
-const BANK_TRANSACTIONS_PATTERNS = {
-  boa: /bankofamerica\.com\/(online-banking|accounts)\/(overview|details|activity)/i,
-};
-
-// In-memory store: boaTabId → { bank, apiBase, fifoTabId, status }
-const activeSyncs = {};
-
-// ── Message handler ──────────────────────────────────────────────────────────
-
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.type === "FIFO_PING") {
-    // Used by FIFO page to detect if extension is installed
-    sendResponse({ installed: true, version: chrome.runtime.getManifest().version });
-    return true;
-  }
-
-  if (msg.type === "START_BANK_SYNC") {
-    const { bank, apiBase } = msg;
-    const fifoTabId = sender.tab?.id;
-    console.log(`[FIFO] Starting sync for bank=${bank} fifoTab=${fifoTabId}`);
-    startBankSync(bank, apiBase, fifoTabId);
-    sendResponse({ ok: true });
-    return true;
+// Re-register alarm on service worker restart (MV3 workers can be killed)
+chrome.alarms.get(SYNC_ALARM, (alarm) => {
+  if (!alarm) {
+    chrome.alarms.create(SYNC_ALARM, { periodInMinutes: SYNC_MINUTES });
   }
 });
 
-// ── Start sync ───────────────────────────────────────────────────────────────
-
-async function startBankSync(bank, apiBase, fifoTabId) {
-  const loginUrl = BANK_LOGIN_URLS[bank];
-  if (!loginUrl) {
-    notifyFifoTab(fifoTabId, "error", `Unsupported bank: ${bank}`);
-    return;
-  }
-
-  try {
-    const tab = await chrome.tabs.create({ url: loginUrl, active: true });
-    activeSyncs[tab.id] = { bank, apiBase, fifoTabId, status: "waiting_login" };
-    notifyFifoTab(fifoTabId, "logging_in", "Opening your bank in a new tab — please log in.");
-  } catch (err) {
-    notifyFifoTab(fifoTabId, "error", `Could not open bank tab: ${err.message}`);
-  }
-}
-
-// ── Tab update listener ──────────────────────────────────────────────────────
-
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  const ctx = activeSyncs[tabId];
-  if (!ctx || changeInfo.status !== "complete" || !tab.url) return;
-
-  const { bank, apiBase, fifoTabId } = ctx;
-
-  // Step A: user just landed on the accounts overview after login
-  if (BANK_LOGGED_IN_PATTERNS[bank]?.test(tab.url) && ctx.status === "waiting_login") {
-    ctx.status = "navigating";
-    notifyFifoTab(fifoTabId, "scraping", "Logged in! Reading your transactions…");
-
-    try {
-      // Inject the banner so user knows what's happening
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        func: injectFifoBanner,
-        args: ["FIFO is reading your transactions — please don't close this tab."],
-      });
-
-      // Navigate to the transactions page for BofA
-      if (bank === "boa") {
-        await navigateToBoaTransactions(tabId, tab.url);
-      }
-    } catch (err) {
-      console.error("[FIFO] Navigation error:", err);
-      handleScrapeResult(tabId, null, err.message);
-    }
-    return;
-  }
-
-  // Step B: we've navigated to the activity/transactions page
-  if (BANK_TRANSACTIONS_PATTERNS[bank]?.test(tab.url) && ctx.status === "navigating") {
-    ctx.status = "scraping";
-    // Small delay so the page fully renders
-    await sleep(2500);
-    try {
-      const results = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: scrapeBoaTransactions,
-      });
-      const transactions = results?.[0]?.result ?? [];
-      handleScrapeResult(tabId, transactions, null);
-    } catch (err) {
-      console.error("[FIFO] Scrape error:", err);
-      handleScrapeResult(tabId, null, err.message);
-    }
+// ── Alarm handler ─────────────────────────────────────────────────────────
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === SYNC_ALARM) {
+    log("Alarm fired — starting sync…");
+    syncAllAccounts();
   }
 });
 
-// ── Navigate to BofA transactions page ──────────────────────────────────────
-
-async function navigateToBoaTransactions(tabId, currentUrl) {
-  // Try to click the first checking/savings account link, then navigate
-  // to the activity page.  We do this via scripting.executeScript so we
-  // stay in the same tab and preserve the session.
-  const results = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: clickFirstBoaAccount,
-  });
-
-  const accountUrl = results?.[0]?.result;
-  if (accountUrl) {
-    await chrome.tabs.update(tabId, { url: accountUrl });
+// ── Message from popup (manual sync trigger) ──────────────────────────────
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.type === "SYNC_NOW") {
+    log("Manual sync triggered from popup");
+    syncAllAccounts().then(() => sendResponse({ ok: true })).catch(e => sendResponse({ ok: false, error: e.message }));
+    return true;
   }
-  // If we couldn't find a link the tab.onUpdated listener for the
-  // transactions pattern will still fire once the user clicks manually.
-}
-
-// ── Injected functions (run inside the bank tab) ─────────────────────────────
-
-/** Injected into BofA accounts overview — returns the href of the first account link. */
-function clickFirstBoaAccount() {
-  // BofA account links on myaccounts page
-  const selectors = [
-    "a.AccountItem",
-    "a[href*='/online-banking/accounts/']",
-    "a[href*='/accounts/overview']",
-    "a.account-name",
-    ".AccountListItem a",
-    "a[href*='account-summary']",
-  ];
-  for (const sel of selectors) {
-    const el = document.querySelector(sel);
-    if (el?.href) return el.href;
-  }
-  // Last resort: any link that mentions 'account' in its href
-  const fallback = [...document.querySelectorAll("a[href]")].find(
-    (a) => /account/i.test(a.href) && !/sign-out|logout/i.test(a.href)
-  );
-  return fallback?.href ?? null;
-}
-
-/** Injected into BofA transactions page — reads rows and returns transaction array. */
-function scrapeBoaTransactions() {
-  const rows = document.querySelectorAll("tr.activity-row, tr[data-transaction-id], .transaction-row");
-  if (!rows.length) {
-    // Try the newer BofA layout
-    const items = document.querySelectorAll("[class*='transaction-item'], [class*='activityRow']");
-    if (!items.length) return [];
-
-    return [...items].map((item) => {
-      const text = (sel) => item.querySelector(sel)?.textContent?.trim() ?? "";
-      return {
-        date:        text("[class*='date'], [class*='Date']"),
-        description: text("[class*='description'], [class*='Description'], [class*='merchant']"),
-        amount:      text("[class*='amount'], [class*='Amount']"),
-        balance:     text("[class*='balance'], [class*='Balance']"),
-        type:        text("[class*='type'], [class*='Type']"),
-      };
-    }).filter((t) => t.date || t.description);
-  }
-
-  return [...rows].map((row) => {
-    const cell = (n) => row.querySelector(`td:nth-child(${n})`)?.textContent?.trim() ?? "";
-    // BofA classic layout: date | description | type (debit/credit) | amount | balance
-    return {
-      date:        cell(1),
-      description: cell(2),
-      type:        cell(3),
-      amount:      cell(4),
-      balance:     cell(5),
-    };
-  }).filter((t) => t.date || t.description);
-}
-
-/** Injected to show the user a non-intrusive status banner inside the bank tab. */
-function injectFifoBanner(message) {
-  const existing = document.getElementById("__fifo_banner__");
-  if (existing) { existing.textContent = message; return; }
-  const banner = document.createElement("div");
-  banner.id = "__fifo_banner__";
-  banner.style.cssText = [
-    "position:fixed", "top:0", "left:0", "right:0", "z-index:2147483647",
-    "background:linear-gradient(90deg,#d4f0e8 0%,#fce4f0 100%)",
-    "color:#1f5f55", "font:600 13px/38px sans-serif",
-    "text-align:center", "padding:0 16px", "pointer-events:none",
-    "border-bottom:1.5px solid rgba(31,95,85,.15)",
-    "box-shadow:0 2px 12px rgba(31,95,85,.08)",
-    "letter-spacing:.01em",
-  ].join(";");
-  banner.textContent = message;
-  document.body.prepend(banner);
-}
-
-// ── Handle scrape result ─────────────────────────────────────────────────────
-
-async function handleScrapeResult(tabId, transactions, errorMsg) {
-  const ctx = activeSyncs[tabId];
-  if (!ctx) return;
-
-  const { bank, apiBase, fifoTabId } = ctx;
-  delete activeSyncs[tabId];
-
-  if (errorMsg || !transactions?.length) {
-    notifyFifoTab(fifoTabId, "error", errorMsg || "No transactions found on the page.");
-    // Close the bank tab after a short delay so user can see what happened
-    setTimeout(() => chrome.tabs.remove(tabId).catch(() => {}), 3000);
-    return;
-  }
-
-  // Update banner in bank tab
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      func: injectFifoBanner,
-      args: [`FIFO found ${transactions.length} transactions — saving to your account…`],
+  if (msg.type === "GET_STATUS") {
+    chrome.storage.local.get(["lastSync", "lastError", "syncing"], (data) => {
+      sendResponse(data);
     });
-  } catch (_) {}
+    return true;
+  }
+  // Content script asks background to fetch scrape config (avoids localhost permission issue)
+  if (msg.type === "GET_SCRAPE_CONFIG") {
+    chrome.storage.local.get(["fifoUrl"], async ({ fifoUrl = DEFAULT_FIFO }) => {
+      try {
+        const r = await fetch(`${fifoUrl}/api/extension/scrape-config?domain=${encodeURIComponent(msg.domain)}`);
+        if (!r.ok) { sendResponse({ error: "not_supported" }); return; }
+        const config = await r.json();
+        sendResponse({ config });
+      } catch (e) {
+        sendResponse({ error: e.message });
+      }
+    });
+    return true;
+  }
 
-  notifyFifoTab(fifoTabId, "saving", `Found ${transactions.length} transactions — saving…`);
+  // Bridge script requests a sync for a specific bank (triggered from FIFO demo page)
+  if (msg.type === "SMART_CONNECT_SYNC") {
+    const { bank_key, apiBase } = msg;
+    const fifoUrl = apiBase || DEFAULT_FIFO;
+    const fifoTabId = _sender?.tab?.id ?? null;
+    smartConnectSync(bank_key, fifoUrl, fifoTabId, sendResponse);
+    return true;
+  }
+});
 
+// ── Smart Connect sync (triggered from FIFO demo page) ────────────────────
+async function smartConnectSync(bank_key, fifoUrl, fifoTabId, sendResponse) {
   try {
-    const resp = await fetch(`${apiBase}/api/smart-connect/extension-ingest`, {
+    const r = await fetch(`${fifoUrl}/api/accounts`);
+    const accounts = await r.json();
+    const account = accounts.find(a => a.bank_key === bank_key);
+
+    // Determine start URL — prefer last_url (exact transactions page from prior login)
+    const startUrl = account?.last_url || _bankKeyToStartUrl(bank_key);
+    if (!startUrl) {
+      sendResponse({ ok: false, error: `No start URL for ${bank_key}. Please do a manual login first.` });
+      return;
+    }
+
+    // First connect (no account yet) or no last_url → open tab visibly so the user
+    // can log in. The tab stays open until content.js finds transactions (up to 10 min).
+    const isFirstConnect = !account || !account.last_url;
+    const acct = account || { id: null, bank_key, display_name: bank_key };
+    await syncBank(acct, fifoUrl, startUrl, isFirstConnect ? 600_000 : 180_000, isFirstConnect, fifoTabId);
+
+    sendResponse({ ok: true, count: account?.tx_count || 0 });
+  } catch (e) {
+    sendResponse({ ok: false, error: e.message });
+  }
+}
+
+function _bankKeyToDomain(bank_key) {
+  const map = {
+    capital_one: "myaccounts.capitalone.com",
+    boa:         "www.bankofamerica.com",
+    icici:       "retailnetbanking.icici.bank.in",
+    discover:    "card.discover.com",
+  };
+  return map[bank_key] || "";
+}
+
+function _bankKeyToStartUrl(bank_key) {
+  const map = {
+    capital_one: "https://myaccounts.capitalone.com/accountSummary",
+    boa:         "https://secure.bankofamerica.com/auth/signon/",
+    icici:       "https://retailnetbanking.icici.bank.in/",
+  };
+  return map[bank_key] || null;
+}
+
+// ── Main sync orchestrator ────────────────────────────────────────────────
+async function syncAllAccounts() {
+  const { fifoUrl = DEFAULT_FIFO } = await chrome.storage.local.get("fifoUrl");
+
+  // Fetch accounts from FIFO backend
+  let accounts;
+  try {
+    const r = await fetch(`${fifoUrl}/api/accounts`);
+    accounts = await r.json();
+  } catch (e) {
+    await setError(`Cannot reach FIFO backend at ${fifoUrl}: ${e.message}`);
+    return;
+  }
+
+  // Sync each bank we know how to handle
+  for (const acct of accounts) {
+    try {
+      if (acct.bank_key === "capital_one") {
+        await syncBank(acct, fifoUrl, "https://myaccounts.capitalone.com/accountSummary", 120_000);
+      } else if (acct.bank_key === "icici") {
+        if (!acct.last_url) {
+          log(`ICICI (account #${acct.id}): no last_url — please do a manual login first.`);
+          continue;
+        }
+        await syncBank(acct, fifoUrl, acct.last_url, 180_000);
+      } else if (acct.bank_key === "boa") {
+        const boaUrl = acct.last_url || _bankKeyToStartUrl("boa");
+        if (!boaUrl) {
+          log(`BOA (account #${acct.id}): no last_url — skipping background sync.`);
+          continue;
+        }
+        await syncBank(acct, fifoUrl, boaUrl, 120_000);
+      } else {
+        log(`Skipping unsupported bank: ${acct.bank_key}`);
+      }
+    } catch (e) {
+      log(`Error syncing ${acct.bank_key} (account #${acct.id}): ${e.message}`);
+    }
+  }
+}
+
+// ── Generic bank sync (opens a tab, waits for SCRAPE_RESULT) ─────────────
+// firstConnect=true → tab is visible so the user can log in manually;
+//                     we ignore "not logged in" signals and keep waiting.
+// firstConnect=false → tab is hidden (background sync); fail fast on expiry.
+async function syncBank(account, fifoUrl, startUrl, timeoutMs, firstConnect = false, fifoTabId = null) {
+  log(`Syncing ${account.bank_key} (account #${account.id}) — opening ${startUrl} [firstConnect=${firstConnect}]`);
+  await chrome.storage.local.set({ syncing: true });
+
+  let tab;
+  let backgroundWindow = null; // only set for hidden background syncs
+  let navListener;
+  let keepAlive;
+  try {
+    if (firstConnect) {
+      // First connect = user must log in. Tab needs to be visible & focused.
+      tab = await chrome.tabs.create({ url: startUrl, active: true });
+    } else {
+      // Background sync = silent. Open in a separate minimized window so it
+      // never appears in the user's tab strip or steals focus. The window is
+      // removed entirely in the finally block.
+      backgroundWindow = await chrome.windows.create({
+        url:     startUrl,
+        focused: false,
+        state:   "minimized",
+        type:    "normal",
+      });
+      tab = backgroundWindow.tabs?.[0];
+      if (!tab) throw new Error("Failed to create background sync window");
+    }
+
+    // MV3 service workers are killed after ~30s of inactivity.
+    // Poll storage every 20s so the worker stays alive for the full sync window.
+    keepAlive = setInterval(() => chrome.storage.local.get("syncing"), 20000);
+
+    // Safety-net: re-inject content.js on every navigation, including SPA pushState.
+    // - Full page load: changeInfo.status === "complete"
+    // - SPA pushState: changeInfo.url set but no status change
+    // content.js has a per-URL guard to prevent double-execution on the same page.
+    navListener = (tabId, changeInfo) => {
+      if (tabId !== tab.id) return;
+      if (changeInfo.status === "complete") {
+        chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] })
+          .catch(() => {});
+      } else if (changeInfo.url) {
+        // SPA navigation: URL changed without a full page load — wait for DOM to settle
+        setTimeout(() => {
+          chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] })
+            .catch(() => {});
+        }, 600);
+      }
+    };
+    chrome.tabs.onUpdated.addListener(navListener);
+
+    const result = await waitForScrapeResult(tab.id, timeoutMs, { ignoreLoginErrors: firstConnect });
+
+    if (result.error === "NOT_LOGGED_IN") {
+      // Session expired — tell the backend so the UI shows the re-login badge
+      if (account.id) {
+        try {
+          await fetch(`${fifoUrl}/api/accounts/${account.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ needs_login: true, status: "needs_relogin" }),
+          });
+        } catch (_) {}
+      }
+      await setError(`${account.display_name || account.bank_key} session expired — please re-login.`);
+      return;
+    }
+    if (result.error) {
+      await setError(`${account.display_name || account.bank_key} sync failed: ${result.error}`);
+      return;
+    }
+
+    log(`Scraped ${result.transactions.length} transactions from ${account.bank_key}, sending to FIFO…`);
+
+    const resp = await fetch(`${fifoUrl}/api/smart-connect/extension-ingest`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bank_key: bank, transactions }),
+      body: JSON.stringify({
+        bank_key:       account.bank_key,
+        transactions:   result.transactions,
+        ending_balance: result.endingBalance || "",
+        last_url:       result.currentUrl || "",
+      }),
     });
 
-    if (!resp.ok) {
-      const err = await resp.text();
-      throw new Error(`Server error ${resp.status}: ${err}`);
-    }
-
     const data = await resp.json();
-    notifyFifoTab(fifoTabId, "done", null, data);
+    if (!resp.ok) throw new Error(data.error || "FIFO returned an error");
 
-    // Close the bank tab
-    setTimeout(() => chrome.tabs.remove(tabId).catch(() => {}), 1500);
-  } catch (err) {
-    console.error("[FIFO] Ingest error:", err);
-    notifyFifoTab(fifoTabId, "error", `Could not save transactions: ${err.message}`);
-    setTimeout(() => chrome.tabs.remove(tabId).catch(() => {}), 3000);
+    log(`${account.bank_key} sync complete — ${data.count} transactions stored.`);
+    await chrome.storage.local.set({
+      lastSync:  new Date().toISOString(),
+      lastError: null,
+      syncing:   false,
+    });
+
+  } catch (e) {
+    await setError(e.message);
+  } finally {
+    clearInterval(keepAlive);
+    if (navListener) chrome.tabs.onUpdated.removeListener(navListener);
+    if (backgroundWindow) {
+      // Hidden background sync: tear down the whole minimized window.
+      try { await chrome.windows.remove(backgroundWindow.id); } catch (_) {}
+    } else if (tab) {
+      // First-connect: just close the bank tab and refocus the FIFO tab.
+      try { await chrome.tabs.remove(tab.id); } catch (_) {}
+      if (fifoTabId != null) {
+        try {
+          await chrome.tabs.update(fifoTabId, { active: true });
+          const fifoTab = await chrome.tabs.get(fifoTabId);
+          if (fifoTab?.windowId != null) {
+            await chrome.windows.update(fifoTab.windowId, { focused: true });
+          }
+        } catch (_) { /* tab may have been closed by the user */ }
+      }
+    }
+    await chrome.storage.local.set({ syncing: false });
   }
 }
 
-// ── Notify FIFO tab ───────────────────────────────────────────────────────────
+// ── Wait for content script to scrape and message back ───────────────────
+// ignoreLoginErrors=true: skip NOT_LOGGED_IN and "no rows" results — used
+// during first-connect when the user is still navigating to transactions.
+function waitForScrapeResult(tabId, timeoutMs, { ignoreLoginErrors = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      chrome.runtime.onMessage.removeListener(handler);
+      reject(new Error(`Timed out waiting for scrape result after ${timeoutMs / 1000}s`));
+    }, timeoutMs);
 
-function notifyFifoTab(fifoTabId, status, message, data = null) {
-  if (!fifoTabId) return;
-  chrome.tabs.sendMessage(fifoTabId, {
-    type:    "FIFO_SYNC_STATUS",
-    status,
-    message,
-    data,
-  }).catch(() => {
-    // Tab may have been closed; ignore
+    function handler(msg, sender) {
+      if (msg.type !== "SCRAPE_RESULT" || sender.tab?.id !== tabId) return;
+      const p = msg.payload;
+      // During first connect the user is still logging in / navigating — skip
+      // transient failures and keep waiting until transactions are actually found.
+      if (ignoreLoginErrors && (
+        p.error === "NOT_LOGGED_IN" ||
+        (p.error && p.error.includes("No transaction rows"))
+      )) {
+        log("Ignoring transient error during first connect:", p.error);
+        return;
+      }
+      clearTimeout(timer);
+      chrome.runtime.onMessage.removeListener(handler);
+      resolve(p);
+    }
+    chrome.runtime.onMessage.addListener(handler);
   });
 }
 
-// ── Utility ───────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────
+async function setError(msg) {
+  log("ERROR:", msg);
+  await chrome.storage.local.set({ lastError: msg, syncing: false });
+}
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function log(...args) {
+  console.log("[FIFO]", ...args);
 }
