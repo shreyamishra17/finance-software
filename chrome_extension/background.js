@@ -83,9 +83,21 @@ async function smartConnectSync(bank_key, fifoUrl, fifoTabId, sendResponse) {
     // can log in. The tab stays open until content.js finds transactions (up to 10 min).
     const isFirstConnect = !account || !account.last_url;
     const acct = account || { id: null, bank_key, display_name: bank_key };
-    await syncBank(acct, fifoUrl, startUrl, isFirstConnect ? 600_000 : 180_000, isFirstConnect, fifoTabId);
+    const syncResult = await syncBank(acct, fifoUrl, startUrl, isFirstConnect ? 600_000 : 180_000, isFirstConnect, fifoTabId);
 
-    sendResponse({ ok: true, count: account?.tx_count || 0 });
+    // syncResult is null when syncBank's outer try/catch swallowed an error
+    // (e.g. window creation failed). Surface that as a real error to the UI
+    // instead of falsely reporting "Synced — N transactions" with a stale count.
+    if (!syncResult) {
+      const { lastError } = await chrome.storage.local.get("lastError");
+      sendResponse({ ok: false, error: lastError || "Sync did not complete — see service worker console for details." });
+      return;
+    }
+    sendResponse({
+      ok:        true,
+      count:     syncResult.newCount ?? 0,
+      received:  syncResult.scrapedCount ?? 0,
+    });
   } catch (e) {
     sendResponse({ ok: false, error: e.message });
   }
@@ -163,6 +175,7 @@ async function syncBank(account, fifoUrl, startUrl, timeoutMs, firstConnect = fa
   let backgroundWindow = null; // only set for hidden background syncs
   let navListener;
   let keepAlive;
+  let _syncResult = null;      // populated on successful ingest, returned to caller
   try {
     if (firstConnect) {
       // First connect = user must log in. Tab needs to be visible & focused.
@@ -171,12 +184,20 @@ async function syncBank(account, fifoUrl, startUrl, timeoutMs, firstConnect = fa
       // Background sync = silent. Open in a separate minimized window so it
       // never appears in the user's tab strip or steals focus. The window is
       // removed entirely in the finally block.
+      // Chrome rejects `state` combined with `left`/`top`/`width`/`height` in
+      // windows.create — they're mutually exclusive. So we create at a tiny
+      // off-screen size first, then update to minimized in a second call.
       backgroundWindow = await chrome.windows.create({
         url:     startUrl,
         focused: false,
-        state:   "minimized",
         type:    "normal",
+        left:    -10000,   // off-screen so any brief flash is invisible
+        top:     -10000,
+        width:   400,
+        height:  300,
       });
+      // Minimize immediately on a separate call (this DOES accept state).
+      try { await chrome.windows.update(backgroundWindow.id, { state: "minimized", focused: false }); } catch (_) {}
       tab = backgroundWindow.tabs?.[0];
       if (!tab) throw new Error("Failed to create background sync window");
     }
@@ -204,10 +225,37 @@ async function syncBank(account, fifoUrl, startUrl, timeoutMs, firstConnect = fa
     };
     chrome.tabs.onUpdated.addListener(navListener);
 
-    const result = await waitForScrapeResult(tab.id, timeoutMs, { ignoreLoginErrors: firstConnect });
+    let result = await waitForScrapeResult(tab.id, timeoutMs, { ignoreLoginErrors: firstConnect });
+
+    // ── Auto-promote on session expired ─────────────────────────────────
+    // We started this sync in a minimized hidden window expecting valid
+    // cookies. If content.js reports NOT_LOGGED_IN, instead of giving up,
+    // promote the window: un-minimize, focus, resize so the user can finish
+    // the login. The navListener stays attached, so once the user logs in
+    // and the bank navigates back to a page with transaction rows, a fresh
+    // content.js instance fires and the scrape continues silently.
+    if (result.error === "NOT_LOGGED_IN" && backgroundWindow && !firstConnect) {
+      log(`${account.bank_key}: session expired in hidden window — promoting to visible for re-login`);
+      try {
+        await chrome.windows.update(backgroundWindow.id, {
+          state:   "normal",
+          focused: true,
+          width:   1100,
+          height:  800,
+        });
+      } catch (e) {
+        log("Promote window failed:", e.message);
+      }
+      // Give the user up to 10 minutes to complete login. waitForScrapeResult
+      // will resolve when content.js (re-injected by navListener after the
+      // bank navigates) successfully scrapes rows.
+      result = await waitForScrapeResult(tab.id, 600_000, { ignoreLoginErrors: true });
+    }
 
     if (result.error === "NOT_LOGGED_IN") {
-      // Session expired — tell the backend so the UI shows the re-login badge
+      // User didn't log in within the window, OR this was a first-connect
+      // already (no further promotion possible). Mark the account so the
+      // sidebar shows a re-login badge.
       if (account.id) {
         try {
           await fetch(`${fifoUrl}/api/accounts/${account.id}`, {
@@ -241,7 +289,15 @@ async function syncBank(account, fifoUrl, startUrl, timeoutMs, firstConnect = fa
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || "FIFO returned an error");
 
-    log(`${account.bank_key} sync complete — ${data.count} transactions stored.`);
+    // Stash the result on the outer try-scoped variable so the finally block
+    // can return it to the caller (smartConnectSync uses it to report the
+    // accurate count to the UI).
+    _syncResult = {
+      newCount:     data.count ?? 0,           // newly-inserted rows
+      scrapedCount: result.transactions.length, // total rows scraped
+    };
+
+    log(`${account.bank_key} sync complete — ${_syncResult.newCount} new / ${_syncResult.scrapedCount} scraped.`);
     await chrome.storage.local.set({
       lastSync:  new Date().toISOString(),
       lastError: null,
@@ -271,6 +327,7 @@ async function syncBank(account, fifoUrl, startUrl, timeoutMs, firstConnect = fa
     }
     await chrome.storage.local.set({ syncing: false });
   }
+  return _syncResult;  // { newCount, scrapedCount } on success, null on failure
 }
 
 // ── Wait for content script to scrape and message back ───────────────────

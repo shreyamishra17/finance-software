@@ -658,7 +658,14 @@ class DemoHandler(SimpleHTTPRequestHandler):
             # ICICI Bank
             "retailnetbanking.icici.bank.in": {
                 "bank_key": "icici",
-                "login_check": ["login-page", "/login", "logout"],
+                # ICICI redirects to several different URLs on session expiry.
+                # content.js also runs DOM-based heuristics (password input,
+                # "session expired" text) when none of these match.
+                "login_check": [
+                    "login-page", "/login", "logout",
+                    "session", "logon", "signin", "sign-in",
+                    "AuthenticationController", "authForm",
+                ],
                 "start_url": None,   # uses last_url from account record
                 "navigate": [],      # rely on last_url pointing directly to statement page
                 "ready_selector": "tr.transfer:not(.trans_space)",
@@ -924,7 +931,11 @@ class DemoHandler(SimpleHTTPRequestHandler):
 
             account_id = add_account(bank_key, display_name, sync_period="1y", account_type=acct_type)
             _categorize_scraped(transactions, account_type=acct_type)
-            store_transactions(account_id, transactions)
+            # store_transactions returns the count of *newly inserted* rows
+            # (existing rows are dedup'd). Report THAT, not len(transactions),
+            # so the UI says "5 new" after a delta sync instead of "1180 imported"
+            # when 1175 were duplicates.
+            new_count = store_transactions(account_id, transactions)
             update_last_synced(account_id, datetime.now())
             if ending_balance:
                 set_account_balance(account_id, ending_balance)
@@ -934,14 +945,15 @@ class DemoHandler(SimpleHTTPRequestHandler):
             set_account_status(account_id, "connected")
 
             print(
-                f"[extension-ingest] {bank_key}: stored {len(transactions)} txns "
+                f"[extension-ingest] {bank_key}: stored {new_count} new / {len(transactions)} sent "
                 f"for account_id={account_id}",
                 flush=True,
             )
 
             self._send_json(HTTPStatus.OK, {
                 "account":      get_account(account_id),
-                "count":        len(transactions),
+                "count":        new_count,
+                "received":     len(transactions),
                 "transactions": transactions,
             })
         except Exception as exc:
@@ -1809,17 +1821,54 @@ def _run_due_syncs() -> None:
             print(f"AUTO-SYNC: {acct['display_name']} — error: {exc}")
 
 
+# Circuit breaker state for the auto-sync scheduler. When Firestore returns
+# 429 (quota exceeded), we pause for FIFO_QUOTA_PAUSE_SEC instead of letting
+# firebase-admin's internal retry logic burn through more of the recovering
+# quota. Module-level vars so the breaker survives across loop iterations.
+_FIFO_QUOTA_TRIPPED_UNTIL = 0.0
+FIFO_QUOTA_PAUSE_SEC = 3600   # 1 hour after a 429
+FIFO_SCHEDULER_INTERVAL_SEC = 300  # 5 minutes (was 60s; reduces idle reads 5x)
+
+
+def _is_quota_error(exc: BaseException) -> bool:
+    """Detect Firestore 429 / quota-exceeded errors, including the ones
+    firebase-admin wraps as DeadlineExceeded after internal retries.
+    """
+    msg = str(exc).lower()
+    return ("429" in msg) or ("quota exceeded" in msg) or ("resource exhausted" in msg)
+
+
 def _start_auto_sync_scheduler() -> None:
-    """Start a daemon thread that checks for overdue auto-syncs every minute."""
+    """Daemon thread that checks for overdue auto-syncs every 5 minutes.
+
+    Includes a circuit breaker: if Firestore reports quota-exceeded, the
+    scheduler pauses for 1 hour instead of retrying every cycle. That stops
+    the retry storm from burning even more of the recovering daily quota.
+    """
+    global _FIFO_QUOTA_TRIPPED_UNTIL
+
     def loop() -> None:
+        global _FIFO_QUOTA_TRIPPED_UNTIL
         while True:
-            time.sleep(60)
+            time.sleep(FIFO_SCHEDULER_INTERVAL_SEC)
+            now = time.time()
+            if now < _FIFO_QUOTA_TRIPPED_UNTIL:
+                remaining = int(_FIFO_QUOTA_TRIPPED_UNTIL - now)
+                print(f"AUTO-SYNC paused: quota cooldown ({remaining}s remaining)")
+                continue
             try:
                 _run_due_syncs()
             except Exception as exc:
-                print(f"AUTO-SYNC scheduler error: {exc}")
+                if _is_quota_error(exc):
+                    _FIFO_QUOTA_TRIPPED_UNTIL = time.time() + FIFO_QUOTA_PAUSE_SEC
+                    print(
+                        f"AUTO-SYNC quota-exceeded — pausing scheduler for "
+                        f"{FIFO_QUOTA_PAUSE_SEC // 60} minutes to let quota recover"
+                    )
+                else:
+                    print(f"AUTO-SYNC scheduler error: {exc}")
     threading.Thread(target=loop, daemon=True, name="auto-sync-scheduler").start()
-    print("AUTO-SYNC scheduler started (checks every 60s)")
+    print(f"AUTO-SYNC scheduler started (every {FIFO_SCHEDULER_INTERVAL_SEC}s, quota-aware)")
 
 
 def _backfill_missing_categories() -> None:
@@ -1827,7 +1876,13 @@ def _backfill_missing_categories() -> None:
     On startup, find any stored transactions with NULL category or merchant_clean
     and run them through the parser + categorizer.  Runs in a background thread
     so it doesn't delay server startup.
+
+    GATED: scans up to 5000 transactions × Firestore reads per startup. Set
+    FIFO_BACKFILL=1 to enable. Defaults off to protect the daily quota.
     """
+    if os.environ.get("FIFO_BACKFILL", "").strip() != "1":
+        print("BACKFILL: skipped on startup (set FIFO_BACKFILL=1 to enable)", flush=True)
+        return
     from db import get_uncategorized_transactions, update_transaction_by_id
 
     def _run() -> None:

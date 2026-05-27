@@ -112,6 +112,13 @@ def add_account(bank_key: str, display_name: str, sync_period: str = "1m", accou
 
 
 def get_accounts() -> list[dict]:
+    """Return all accounts with their cached tx_count.
+
+    We rely on a `tx_count` field stored on each account doc — updated
+    incrementally by store_transactions(). Scanning the whole transactions
+    collection on every /api/accounts call was burning ~1500 reads per call
+    and hit Firestore's free-tier daily quota in ~30 calls.
+    """
     db = _get_db()
     account_docs = (
         db.collection("accounts")
@@ -120,17 +127,12 @@ def get_accounts() -> list[dict]:
     )
     if not account_docs:
         return []
-    tx_counts: dict[int, int] = {}
-    for txn_doc in db.collection("transactions").get():
-        aid = txn_doc.to_dict().get("account_id")
-        if aid is not None:
-            tx_counts[aid] = tx_counts.get(aid, 0) + 1
-    result = []
-    for doc in account_docs:
-        data = doc.to_dict()
-        data["tx_count"] = tx_counts.get(data.get("id"), 0)
-        result.append(data)
-    return result
+    return [_account_with_count(doc.to_dict()) for doc in account_docs]
+
+
+def _account_with_count(data: dict) -> dict:
+    data.setdefault("tx_count", 0)
+    return data
 
 
 def get_account(account_id: int) -> dict | None:
@@ -299,6 +301,17 @@ def store_transactions(account_id: int, transactions: list[dict]) -> int:
 
     if batch_count > 0:
         batch.commit()
+
+    # Keep the cached tx_count on the account doc in sync. Cheap (single
+    # write) and avoids scanning the transactions collection on every
+    # /api/accounts read.
+    if inserted > 0:
+        try:
+            db.collection("accounts").document(str(account_id)).update({
+                "tx_count": fb_firestore.Increment(inserted),
+            })
+        except Exception as exc:
+            print(f"WARNING: failed to update tx_count for account {account_id}: {exc}")
 
     return inserted
 

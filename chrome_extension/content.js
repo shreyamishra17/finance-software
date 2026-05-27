@@ -55,19 +55,22 @@ async function runScrape(config, currentUrl) {
   showBanner("Logged in — looking for your transactions…");
 
   // ── 1. Check if not logged in ─────────────────────────────────────────
-  if (config.login_check && config.login_check.some(p => currentUrl.includes(p))) {
-    // Some banks serve the accounts overview at a URL that contains a login keyword
-    // (e.g. BOA's signIn.go?torLsLogin=true). If a known authenticated element is
-    // present, skip the login check and proceed to scrape.
+  // Two-pass detection. URL pattern is the strong signal; if it doesn't match,
+  // we fall back to DOM heuristics: presence of password inputs or known
+  // session-expired text. This catches cases like ICICI where the bank
+  // silently redirects to a login page that isn't in our URL pattern list.
+  const urlSaysLogin = config.login_check && config.login_check.some(p => currentUrl.includes(p));
+  const domSaysLogin = _domSuggestsLoginPage();
+  if (urlSaysLogin || domSaysLogin) {
     const actuallyLoggedIn = config.logged_in_selector &&
       document.querySelector(config.logged_in_selector);
     if (!actuallyLoggedIn) {
-      log("Not logged in — reporting back.");
+      log(`Not logged in — reporting back. (urlMatch=${urlSaysLogin}, domMatch=${domSaysLogin})`);
       removeBanner();
       chrome.runtime.sendMessage({ type: "SCRAPE_RESULT", payload: { error: "NOT_LOGGED_IN" } });
       return;
     }
-    log("Login URL pattern matched but logged_in_selector found — proceeding.");
+    log("Login signal detected but logged_in_selector found — proceeding.");
   }
 
   // ── 2. Run navigation steps ───────────────────────────────────────────
@@ -494,6 +497,35 @@ function waitForRowCountChange(selector, oldCount, timeoutMs) {
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Returns true when the current page looks like a bank login / session-expired
+// page based on DOM/text heuristics — independent of URL patterns. Catches
+// cases where the bank redirects silently to a login page without changing
+// the URL into something matching `login_check` (ICICI is notorious for this).
+function _domSuggestsLoginPage() {
+  try {
+    if (document.querySelector("input[type='password']")) return true;
+    const text = (document.body?.innerText || "").slice(0, 8000).toLowerCase();
+    const phrases = [
+      "session expired",
+      "session has expired",
+      "session timed out",
+      "your session has timed out",
+      "please login again",
+      "please log in again",
+      "logged out due to inactivity",
+      "session timeout",
+      "user id",       // ICICI's login form
+      "customer id",   // common Indian-bank login form
+    ];
+    // Require at least one phrase hit; "user id"/"customer id" alone is too
+    // weak, so we also require a password-y input or login button presence.
+    if (phrases.some((p) => text.includes(p))) {
+      if (document.querySelector("input[type='password'], button, input[type='submit']")) return true;
+    }
+  } catch (_) { /* noop */ }
+  return false;
+}
 
 // Log per-selector hit counts plus a sample of any tr-like rows on the page,
 // so we can tell from the console what classes/attrs to add to the config

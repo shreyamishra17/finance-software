@@ -33,13 +33,7 @@
               <button class="sidebar-connect-btn" onclick="openBankPicker()">
                 <span class="sidebar-connect-plus">+</span><span class="sidebar-connect-label"> Connect account</span>
               </button>
-              <label class="sidebar-upload-link upload-cta">
-                <input id="pdfInput" type="file" accept="application/pdf" />
-                <span id="uploadLabel">Upload PDF statement</span>
-              </label>
               <p id="connectBankStatus" class="connect-status sidebar-status-msg" style="display:none"></p>
-              <div class="demo-meta sidebar-meta" id="pdfMeta"></div>
-              <div class="demo-meta sidebar-meta" id="parseMeta"></div>
             </div>
           </aside>
 
@@ -755,7 +749,9 @@
             .join("");
       }
 
-      input.addEventListener("change", (event) => {
+      // PDF upload was removed from the sidebar UI; guard the handler so the
+       // page doesn't crash when the input element no longer exists.
+       if (input) input.addEventListener("change", (event) => {
         const file = event.target.files && event.target.files[0];
         if (!file) {
           meta.textContent = "No file selected.";
@@ -2081,7 +2077,10 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
         //   3. Otherwise tell the user to either install the extension or save
         //      credentials.
         const acct = (_lastAccountsCache || []).find(a => a.id === accountId);
-        const extensionInstalled = typeof window.__FIFO_EXTENSION !== "undefined";
+        // Use the multi-signal detector (DOM attribute + custom event + window prop).
+        // The window.__FIFO_EXTENSION check alone was always false because
+        // bridge.js runs in an isolated world and can't set page-side window props.
+        const extensionInstalled = typeof _scExtensionInstalled === "function" && _scExtensionInstalled();
         const useExtension = extensionInstalled && acct && acct.last_url;
 
         try {
