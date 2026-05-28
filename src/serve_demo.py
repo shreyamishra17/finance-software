@@ -20,7 +20,7 @@ from urllib.parse import urlparse, parse_qs
 
 from dotenv import load_dotenv
 
-from auth import create_user, authenticate_user, issue_token, verify_token, delete_user, update_password
+from auth import create_user, authenticate_user, issue_token, verify_token, delete_user, update_password, update_profile
 from categorize import categorize_transactions, detect_recurrent_income
 from parse_bank import parse_pdf_to_payload, persist_uploaded_statement, merchant_clean as _merchant_clean_fn
 from new_bank_setup import bootstrap_config_if_unknown
@@ -374,7 +374,17 @@ class DemoHandler(SimpleHTTPRequestHandler):
     def _handle_auth_signup(self) -> None:
         try:
             body = self._read_json_body()
-            user = create_user(body.get("email", ""), body.get("password", ""))
+            password = body.get("password", "")
+            confirm_password = body.get("confirm_password", "")
+            if password != confirm_password:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Passwords do not match"})
+                return
+            user = create_user(
+                body.get("first_name", ""),
+                body.get("last_name", ""),
+                body.get("email", ""),
+                password,
+            )
             token = issue_token(user["uid"], user["email"])
             self._send_json(HTTPStatus.OK, {"token": token, "user": user})
         except ValueError as exc:
@@ -455,7 +465,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 except Exception:
                     pass
 
-                deleted = delete_user(user["uid"])
+                deleted = delete_user(user["uid"], user.get("email"))
             finally:
                 reset_current_uid(uid_token)
 
@@ -483,6 +493,25 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 return
             update_password(user["uid"], current_password, new_password)
             self._send_json(HTTPStatus.OK, {"updated": True})
+        except ValueError as exc:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        except Exception as exc:
+            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+
+    def _handle_auth_profile(self) -> None:
+        token = self._read_bearer_token()
+        if not token:
+            self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "Authentication required"})
+            return
+        try:
+            user = verify_token(token)
+            body = self._read_json_body()
+            updated = update_profile(
+                user["uid"],
+                body.get("first_name", ""),
+                body.get("last_name", ""),
+            )
+            self._send_json(HTTPStatus.OK, {"updated": True, "user": {**user, **updated}})
         except ValueError as exc:
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
         except Exception as exc:
@@ -668,6 +697,9 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 return
             if path == "/api/plaid/sandbox-connect":
                 self._handle_plaid_sandbox_connect()
+                return
+            if path == "/api/auth/profile":
+                self._handle_auth_profile()
                 return
             if path.startswith("/api/plaid/sync/"):
                 try:

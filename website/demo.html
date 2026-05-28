@@ -14,25 +14,31 @@
       <header class="nav demo-topbar">
         <a href="about.html" class="logo">FIFO</a>
         <div class="demo-auth-bar">
-          <a id="authAccountLink" class="demo-auth-account" href="myaccounts.html" aria-label="Go to account settings" style="display:none">
-            <svg viewBox="0 0 24 24" role="presentation">
-              <path d="M12 12c2.76 0 5-2.46 5-5.5S14.76 1 12 1 7 3.46 7 6.5 9.24 12 12 12Zm0 2c-4.42 0-8 2.91-8 6.5 0 .83.67 1.5 1.5 1.5h13c.83 0 1.5-.67 1.5-1.5 0-3.59-3.58-6.5-8-6.5Z"/>
-            </svg>
-          </a>
-          <button id="authLogoutBtn" class="demo-auth-logout" style="display:none" onclick="logoutUser()">Log out</button>
+          <span id="authGreeting" class="demo-auth-greeting" style="display:none"></span>
+          <div id="authAccountMenu" class="account-menu-wrap" style="display:none">
+            <button id="authAccountButton" class="demo-auth-account" type="button" aria-label="Open account menu" onclick="toggleDemoAccountMenu(event)">
+              <svg viewBox="0 0 24 24" role="presentation">
+                <path d="M12 12c2.76 0 5-2.46 5-5.5S14.76 1 12 1 7 3.46 7 6.5 9.24 12 12 12Zm0 2c-4.42 0-8 2.91-8 6.5 0 .83.67 1.5 1.5 1.5h13c.83 0 1.5-.67 1.5-1.5 0-3.59-3.58-6.5-8-6.5Z"/>
+              </svg>
+            </button>
+            <div id="authAccountDropdown" class="account-menu-dropdown" hidden>
+              <a href="myaccounts.html">Account settings</a>
+              <button type="button" onclick="logoutUser()">Log out</button>
+            </div>
+          </div>
         </div>
       </header>
 
       <main class="demo-app-main">
         <section id="authGate" class="auth-gate" hidden>
           <div class="auth-gate-card">
+            <button class="auth-gate-close" type="button" aria-label="Close sign in" onclick="_hideAuthGate()">✕</button>
             <h2>Sign in to FIFO</h2>
-            <p class="auth-gate-copy">Your accounts, credentials, and files are now isolated per FIFO user.</p>
             <input id="authEmail" class="auth-input" type="email" placeholder="Email" />
             <input id="authPassword" class="auth-input" type="password" placeholder="Password" />
             <div class="auth-gate-actions">
               <button class="demo-sandbox-btn" onclick="submitAuth('login')">Log in</button>
-              <button class="demo-connect-ghost-btn" onclick="submitAuth('signup')">Create account</button>
+              <a class="demo-connect-ghost-btn auth-link-btn" href="signup.html">Create account</a>
             </div>
             <p id="authStatus" class="auth-status"></p>
           </div>
@@ -429,7 +435,7 @@
         return !!localStorage.getItem(AUTH_TOKEN_KEY);
       }
 
-      function requireAuthOrPrompt(message = "Create an account or log in to connect a real bank account and keep your data separate.") {
+      function requireAuthOrPrompt(message = "") {
         if (_hasAuth()) return true;
         _showAuthGate(message);
         return false;
@@ -439,6 +445,7 @@
         const email = document.getElementById("authEmail").value.trim();
         const password = document.getElementById("authPassword").value;
         const status = document.getElementById("authStatus");
+        status.style.color = "#5f6f69";
         status.textContent = mode === "signup" ? "Creating account..." : "Logging in...";
         try {
           const resp = await fetch(`${window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "" : CLOUD_API_BASE}/api/auth/${mode}`, {
@@ -450,10 +457,9 @@
           if (!resp.ok) throw new Error(data.error || `${mode} failed`);
           localStorage.setItem(AUTH_TOKEN_KEY, data.token);
           currentUser = data.user;
-          _refreshAuthChrome();
-          _hideAuthGate();
-          await loadAccounts();
+          window.location.href = "about.html";
         } catch (err) {
+          status.style.color = "#8a2f2f";
           status.textContent = err.message || String(err);
         }
       }
@@ -461,22 +467,55 @@
       function logoutUser() {
         localStorage.removeItem(AUTH_TOKEN_KEY);
         currentUser = null;
-        _refreshAuthChrome();
-        _hideAuthGate();
-        loadAccounts();
+        const menu = document.getElementById("authAccountDropdown");
+        if (menu) menu.hidden = true;
+        window.location.href = "about.html";
       }
 
       function _refreshAuthChrome() {
-        const accountLink = document.getElementById("authAccountLink");
-        const logoutBtn = document.getElementById("authLogoutBtn");
+        const accountMenu = document.getElementById("authAccountMenu");
+        const greeting = document.getElementById("authGreeting");
         if (currentUser && currentUser.email) {
-          accountLink.style.display = "";
-          logoutBtn.style.display = "";
+          accountMenu.style.display = "";
+          const first = (currentUser.first_name || "").trim();
+          if (first) {
+            greeting.textContent = `Hi ${first}`;
+            greeting.style.display = "";
+          } else {
+            greeting.textContent = "";
+            greeting.style.display = "none";
+          }
         } else {
-          accountLink.style.display = "none";
-          logoutBtn.style.display = "none";
+          accountMenu.style.display = "none";
+          greeting.style.display = "none";
         }
       }
+
+      function toggleDemoAccountMenu(event) {
+        if (event) event.stopPropagation();
+        const menu = document.getElementById("authAccountDropdown");
+        if (!menu) return;
+        menu.hidden = !menu.hidden;
+      }
+
+      document.addEventListener("click", (event) => {
+        const wrap = document.getElementById("authAccountMenu");
+        const menu = document.getElementById("authAccountDropdown");
+        if (!wrap || !menu || wrap.style.display === "none") return;
+        if (!wrap.contains(event.target)) menu.hidden = true;
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          const menu = document.getElementById("authAccountDropdown");
+          if (menu && !menu.hidden) menu.hidden = true;
+          return;
+        }
+        if (event.key === "Enter") {
+          const gate = document.getElementById("authGate");
+          if (gate && !gate.hidden) submitAuth("login");
+        }
+      });
 
       async function initAuth() {
         const token = localStorage.getItem(AUTH_TOKEN_KEY);

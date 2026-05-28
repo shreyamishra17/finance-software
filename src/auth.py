@@ -56,8 +56,14 @@ def _users_collection():
     return _get_db().collection("users")
 
 
-def create_user(email: str, password: str) -> dict:
+def create_user(first_name: str, last_name: str, email: str, password: str) -> dict:
+    first_name = first_name.strip()
+    last_name = last_name.strip()
     email_norm = email.strip().lower()
+    if not first_name:
+        raise ValueError("Please enter your first name")
+    if not last_name:
+        raise ValueError("Please enter your last name")
     if not email_norm or "@" not in email_norm:
         raise ValueError("Please enter a valid email address")
     if len(password) < 8:
@@ -72,25 +78,32 @@ def create_user(email: str, password: str) -> dict:
     now = _utcnow().isoformat()
     _users_collection().document(uid).set({
         "uid": uid,
+        "first_name": first_name,
+        "last_name": last_name,
         "email": email_norm,
         "password_salt": salt,
         "password_hash": _hash_password(password, salt),
         "created_at": now,
         "updated_at": now,
     })
-    return {"uid": uid, "email": email_norm}
+    return {"uid": uid, "first_name": first_name, "last_name": last_name, "email": email_norm}
 
 
 def authenticate_user(email: str, password: str) -> dict:
     email_norm = email.strip().lower()
     docs = _users_collection().where("email", "==", email_norm).limit(1).get()
     if not docs:
-        raise ValueError("Invalid email or password")
+        raise ValueError("This email does not exist. Please create an account.")
     user = docs[0].to_dict()
     expected = _hash_password(password, user["password_salt"])
     if not hmac.compare_digest(expected, user["password_hash"]):
-        raise ValueError("Invalid email or password")
-    return {"uid": user["uid"], "email": user["email"]}
+        raise ValueError("Incorrect password")
+    return {
+        "uid": user["uid"],
+        "first_name": user.get("first_name", ""),
+        "last_name": user.get("last_name", ""),
+        "email": user["email"],
+    }
 
 
 def update_password(uid: str, current_password: str, new_password: str) -> None:
@@ -109,6 +122,19 @@ def update_password(uid: str, current_password: str, new_password: str) -> None:
         "password_hash": _hash_password(new_password, new_salt),
         "updated_at": _utcnow().isoformat(),
     })
+
+
+def update_profile(uid: str, first_name: str, last_name: str) -> dict:
+    first_name = first_name.strip()
+    last_name = last_name.strip()
+    if len(first_name) > 120 or len(last_name) > 120:
+        raise ValueError("Name is too long")
+    _users_collection().document(uid).update({
+        "first_name": first_name,
+        "last_name": last_name,
+        "updated_at": _utcnow().isoformat(),
+    })
+    return {"first_name": first_name, "last_name": last_name}
 
 
 def issue_token(uid: str, email: str, days_valid: int = 30) -> str:
@@ -138,10 +164,19 @@ def verify_token(token: str) -> dict:
     email = str(payload.get("email") or "").strip().lower()
     if not uid or not email:
         raise ValueError("Invalid token payload")
-    return {"uid": uid, "email": email}
+    doc = _users_collection().document(uid).get()
+    if doc.exists:
+        user = doc.to_dict()
+        return {
+            "uid": uid,
+            "first_name": user.get("first_name", ""),
+            "last_name": user.get("last_name", ""),
+            "email": email,
+        }
+    return {"uid": uid, "first_name": "", "last_name": "", "email": email}
 
 
-def delete_user(uid: str) -> dict:
+def _delete_user_doc(uid: str) -> dict[str, int]:
     db = _get_db()
     user_ref = _users_collection().document(uid)
     subcollections = [
@@ -171,4 +206,25 @@ def delete_user(uid: str) -> dict:
 
     user_ref.delete()
     deleted["user"] = 1
+    return deleted
+
+
+def delete_user(uid: str, email: str | None = None) -> dict:
+    deleted = _delete_user_doc(uid)
+
+    # Safety cleanup for legacy/duplicate rows with same email.
+    # This handles cases where UI says delete succeeded but signup still
+    # fails because an old duplicate user row remains.
+    email_norm = (email or "").strip().lower()
+    if email_norm:
+        extra_docs = _users_collection().where("email", "==", email_norm).get()
+        extras_deleted = 0
+        for doc in extra_docs:
+            if doc.id == uid:
+                continue
+            _delete_user_doc(doc.id)
+            extras_deleted += 1
+        if extras_deleted:
+            deleted["extra_users_with_same_email"] = extras_deleted
+
     return deleted

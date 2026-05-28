@@ -18,8 +18,19 @@
           <a href="#who">Who we are</a>
         </nav>
         <div class="nav-cta">
-          <a class="ghost" id="signInLink" href="demo.html">Sign in</a>
-          <a class="primary" href="demo.html">Try our demo</a>
+          <a class="ghost" id="signInLink" href="#" onclick="openAboutSignIn(event)">Sign in</a>
+          <a id="primaryNavCta" class="primary" href="demo.html">Try our demo</a>
+          <div id="navAccountMenu" class="account-menu-wrap" hidden>
+            <button id="navAccountButton" class="nav-account-link" type="button" aria-label="Open account menu" onclick="toggleAboutAccountMenu(event)">
+              <svg viewBox="0 0 24 24" role="presentation">
+                <path d="M12 12c2.76 0 5-2.46 5-5.5S14.76 1 12 1 7 3.46 7 6.5 9.24 12 12 12Zm0 2c-4.42 0-8 2.91-8 6.5 0 .83.67 1.5 1.5 1.5h13c.83 0 1.5-.67 1.5-1.5 0-3.59-3.58-6.5-8-6.5Z"/>
+              </svg>
+            </button>
+            <div id="navAccountDropdown" class="account-menu-dropdown" hidden>
+              <a href="myaccounts.html">Account settings</a>
+              <button type="button" onclick="aboutLogout()">Log out</button>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -171,7 +182,7 @@
             <p class="subhead">Upload a PDF statement. We will connect this to our parser to extract and summarize data.</p>
           </div>
           <div class="demo reveal-item reveal-delay-1">
-            <a class="primary" href="demo.html">Go to demo page</a>
+            <a id="sectionDemoCta" class="primary" href="demo.html">Go to demo page</a>
           </div>
         </section>
       </main>
@@ -186,27 +197,84 @@
         <div class="footer-note">© 2026 FIFO. All rights reserved.</div>
       </footer>
     </div>
-    <a id="profileDock" class="profile-dock" href="myaccounts.html" aria-label="Go to your account" hidden>
-      <span class="profile-dock-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" role="presentation">
-          <path d="M12 12c2.76 0 5-2.46 5-5.5S14.76 1 12 1 7 3.46 7 6.5 9.24 12 12 12Zm0 2c-4.42 0-8 2.91-8 6.5 0 .83.67 1.5 1.5 1.5h13c.83 0 1.5-.67 1.5-1.5 0-3.59-3.58-6.5-8-6.5Z"/>
-        </svg>
-      </span>
-      <span class="profile-dock-label">My account</span>
-    </a>
+    <section id="aboutAuthGate" class="auth-gate" hidden>
+      <div class="auth-gate-card">
+        <button class="auth-gate-close" type="button" aria-label="Close sign in" onclick="closeAboutSignIn()">✕</button>
+        <h2>Sign in to FIFO</h2>
+        <input id="aboutAuthEmail" class="auth-input" type="email" placeholder="Email" />
+        <input id="aboutAuthPassword" class="auth-input" type="password" placeholder="Password" />
+        <div class="auth-gate-actions">
+          <button class="demo-sandbox-btn" onclick="aboutSignIn()">Log in</button>
+          <a class="demo-connect-ghost-btn auth-link-btn" href="signup.html">Create account</a>
+        </div>
+        <p id="aboutAuthStatus" class="auth-status"></p>
+      </div>
+    </section>
     <script>
       (() => {
+        const CLOUD_API_BASE = "https://finance-demo-486722019708.us-central1.run.app";
         const AUTH_TOKEN_KEY = "fifoAuthToken";
-        const hasAuth = !!localStorage.getItem(AUTH_TOKEN_KEY);
+        const authToken = localStorage.getItem(AUTH_TOKEN_KEY) || "";
+        const hasAuth = !!authToken;
         const signInLink = document.getElementById("signInLink");
-        const profileDock = document.getElementById("profileDock");
+        const navAccountMenu = document.getElementById("navAccountMenu");
+        const primaryNavCta = document.getElementById("primaryNavCta");
+        const sectionDemoCta = document.getElementById("sectionDemoCta");
+        function apiBase() {
+          return window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "" : CLOUD_API_BASE;
+        }
+
+        async function setAuthedCtaState() {
+          try {
+            const resp = await fetch(`${apiBase()}/api/accounts`, {
+              headers: { Authorization: `Bearer ${authToken}` },
+            });
+            const accounts = resp.ok ? await resp.json() : [];
+            const hasAccounts = Array.isArray(accounts) && accounts.length > 0;
+            primaryNavCta.textContent = hasAccounts ? "My Finance" : "Get Started";
+            sectionDemoCta.textContent = hasAccounts ? "My Finance" : "Get Started";
+            primaryNavCta.style.visibility = "";
+            sectionDemoCta.style.visibility = "";
+          } catch (_) {
+            primaryNavCta.textContent = "Get Started";
+            sectionDemoCta.textContent = "Get Started";
+            primaryNavCta.style.visibility = "";
+            sectionDemoCta.style.visibility = "";
+          }
+        }
+
         if (hasAuth) {
           signInLink.hidden = true;
-          profileDock.hidden = false;
+          navAccountMenu.hidden = false;
+          primaryNavCta.style.visibility = "hidden";
+          sectionDemoCta.style.visibility = "hidden";
+          setAuthedCtaState();
         } else {
           signInLink.hidden = false;
-          profileDock.hidden = true;
+          navAccountMenu.hidden = true;
+          primaryNavCta.style.visibility = "";
+          sectionDemoCta.style.visibility = "";
+          primaryNavCta.textContent = "Try our demo";
+          sectionDemoCta.textContent = "Go to demo page";
         }
+
+        window.toggleAboutAccountMenu = (event) => {
+          if (event) event.stopPropagation();
+          const menu = document.getElementById("navAccountDropdown");
+          menu.hidden = !menu.hidden;
+        };
+
+        window.aboutLogout = () => {
+          localStorage.removeItem(AUTH_TOKEN_KEY);
+          window.location.reload();
+        };
+
+        document.addEventListener("click", (event) => {
+          const wrap = document.getElementById("navAccountMenu");
+          const menu = document.getElementById("navAccountDropdown");
+          if (!wrap || !menu || wrap.hidden) return;
+          if (!wrap.contains(event.target)) menu.hidden = true;
+        });
 
         const revealNodes = document.querySelectorAll(".reveal-item, .reveal-section");
         const io = new IntersectionObserver((entries) => {
@@ -244,6 +312,53 @@
           });
         }, { threshold: 0.4 });
         counters.forEach((counter) => counterObserver.observe(counter));
+
+        window.openAboutSignIn = (event) => {
+          if (event) event.preventDefault();
+          document.getElementById("aboutAuthGate").hidden = false;
+          document.getElementById("aboutAuthStatus").textContent = "";
+        };
+
+        window.closeAboutSignIn = () => {
+          document.getElementById("aboutAuthGate").hidden = true;
+          document.getElementById("aboutAuthStatus").textContent = "";
+        };
+
+        window.aboutSignIn = async () => {
+          const email = document.getElementById("aboutAuthEmail").value.trim();
+          const password = document.getElementById("aboutAuthPassword").value;
+          const status = document.getElementById("aboutAuthStatus");
+          status.style.color = "#5f6f69";
+          status.textContent = "Logging in...";
+          try {
+            const resp = await fetch(`${apiBase()}/api/auth/login`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ email, password }),
+            });
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || "Login failed");
+            localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+            window.location.reload();
+          } catch (err) {
+            status.style.color = "#8a2f2f";
+            status.textContent = err.message || String(err);
+          }
+        };
+
+        const aboutAuthEmail = document.getElementById("aboutAuthEmail");
+        const aboutAuthPassword = document.getElementById("aboutAuthPassword");
+        const aboutEnterHandler = (event) => {
+          if (event.key === "Enter") window.aboutSignIn();
+        };
+        aboutAuthEmail.addEventListener("keydown", aboutEnterHandler);
+        aboutAuthPassword.addEventListener("keydown", aboutEnterHandler);
+
+        document.addEventListener("keydown", (event) => {
+          if (event.key !== "Escape") return;
+          const menu = document.getElementById("navAccountDropdown");
+          if (menu && !menu.hidden) menu.hidden = true;
+        });
       })();
     </script>
   </body>

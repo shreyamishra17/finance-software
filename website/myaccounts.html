@@ -17,7 +17,18 @@
           <a href="demo.html">Demo</a>
         </nav>
         <div class="nav-cta">
-          <a class="ghost" href="demo.html">Open dashboard</a>
+          <a class="primary" href="demo.html">My Finance</a>
+          <div id="accountNavMenu" class="account-menu-wrap" hidden>
+            <button id="accountNavButton" class="nav-account-link" type="button" aria-label="Open account menu" onclick="toggleAccountNavMenu(event)">
+              <svg viewBox="0 0 24 24" role="presentation">
+                <path d="M12 12c2.76 0 5-2.46 5-5.5S14.76 1 12 1 7 3.46 7 6.5 9.24 12 12 12Zm0 2c-4.42 0-8 2.91-8 6.5 0 .83.67 1.5 1.5 1.5h13c.83 0 1.5-.67 1.5-1.5 0-3.59-3.58-6.5-8-6.5Z"/>
+              </svg>
+            </button>
+            <div id="accountNavDropdown" class="account-menu-dropdown" hidden>
+              <a href="myaccounts.html">Account settings</a>
+              <button type="button" onclick="logoutUser()">Log out</button>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -30,7 +41,7 @@
             <input id="authPassword" class="auth-input" type="password" placeholder="Password" />
             <div class="auth-gate-actions">
               <button class="demo-sandbox-btn" onclick="submitAuth('login')">Log in</button>
-              <button class="demo-connect-ghost-btn" onclick="submitAuth('signup')">Create account</button>
+              <a class="demo-connect-ghost-btn auth-link-btn" href="signup.html">Create account</a>
             </div>
             <p id="authStatus" class="auth-status"></p>
           </div>
@@ -43,7 +54,6 @@
               <h1>Account settings</h1>
               <p class="subhead">Your FIFO identity, connected-bank summary, and destructive actions.</p>
             </div>
-            <button class="ghost" onclick="logoutUser()">Log out</button>
           </div>
 
           <div class="account-stack">
@@ -53,12 +63,28 @@
                 <span class="account-panel-note">Stored securely</span>
               </div>
               <div class="account-info-row">
+                <span class="account-label">Name</span>
+                <button id="accountNameDisplay" class="account-name-trigger" type="button" onclick="openNameEditor()">
+                  <span id="accountNameText"></span>
+                  <span class="account-name-edit-hint">Edit</span>
+                </button>
+              </div>
+              <div id="nameEditor" class="account-form-grid account-name-editor" hidden>
+                <button class="account-name-editor-close" type="button" aria-label="Close name editor" onclick="closeNameEditor()">✕</button>
+                <input id="profileFirstName" class="auth-input account-input" type="text" placeholder="First name" />
+                <input id="profileLastName" class="auth-input account-input" type="text" placeholder="Last name" />
+                <div class="account-inline-actions">
+                  <button class="ghost account-save-btn" onclick="saveProfile()">Save name</button>
+                </div>
+              </div>
+              <p id="profileStatus" class="auth-status"></p>
+              <div class="account-info-row">
                 <span class="account-label">Email</span>
                 <span id="accountEmail" class="account-value"></span>
               </div>
-              <div class="account-info-row">
+              <div class="account-info-row" style="margin-top: 6px;">
                 <span class="account-label">Password</span>
-                <span class="account-value" title="Passwords are stored as one-way hashes and cannot be shown back.">Stored securely — not retrievable</span>
+                <span class="account-value" title="Passwords are stored as one-way hashes and cannot be shown back.">Stored securely</span>
               </div>
             </section>
 
@@ -79,7 +105,7 @@
             <section class="account-panel">
               <div class="account-panel-head">
                 <h2>Connected banks</h2>
-                <a class="account-inline-link" href="demo.html">Open dashboard</a>
+                <a class="account-inline-link" href="demo.html">My Finance</a>
               </div>
               <div class="account-info-row">
                 <span class="account-label">Number of bank accounts</span>
@@ -138,6 +164,7 @@
         const email = document.getElementById("authEmail").value.trim();
         const password = document.getElementById("authPassword").value;
         const status = document.getElementById("authStatus");
+        status.style.color = "#5f6f69";
         status.textContent = mode === "signup" ? "Creating account..." : "Logging in...";
         try {
           const resp = await fetch(`${apiBase()}/api/auth/${mode}`, {
@@ -149,8 +176,9 @@
           if (!resp.ok) throw new Error(data.error || `${mode} failed`);
           localStorage.setItem(AUTH_TOKEN_KEY, data.token);
           currentUser = data.user;
-          window.location.href = "demo.html";
+          window.location.href = "about.html";
         } catch (err) {
+          status.style.color = "#8a2f2f";
           status.textContent = err.message || String(err);
         }
       }
@@ -158,7 +186,22 @@
       function logoutUser() {
         localStorage.removeItem(AUTH_TOKEN_KEY);
         currentUser = null;
-        showAuthGate("Logged out.");
+        const menu = document.getElementById("accountNavDropdown");
+        if (menu) menu.hidden = true;
+        window.location.href = "about.html";
+      }
+
+      function _refreshNavAuth() {
+        const wrap = document.getElementById("accountNavMenu");
+        if (!wrap) return;
+        wrap.hidden = !currentUser;
+      }
+
+      function toggleAccountNavMenu(event) {
+        if (event) event.stopPropagation();
+        const menu = document.getElementById("accountNavDropdown");
+        if (!menu) return;
+        menu.hidden = !menu.hidden;
       }
 
       async function loadAccountPage() {
@@ -166,6 +209,12 @@
         const meData = await meResp.json();
         if (!meResp.ok) throw new Error(meData.error || "Authentication required");
         currentUser = meData.user;
+        const firstName = (currentUser.first_name || "").trim();
+        const lastName = (currentUser.last_name || "").trim();
+        const fullName = `${firstName} ${lastName}`.trim();
+        document.getElementById("accountNameText").textContent = fullName || "";
+        document.getElementById("profileFirstName").value = firstName;
+        document.getElementById("profileLastName").value = lastName;
         document.getElementById("accountEmail").textContent = currentUser.email;
 
         const acctResp = await apiFetch("/api/accounts");
@@ -177,6 +226,41 @@
               `<a class="account-bank-link" href="demo.html?account=${acct.id}">${acct.display_name} → Transactions</a>`
             )).join("")
           : `<p class="account-empty">No connected bank accounts yet.</p>`;
+      }
+
+      async function saveProfile() {
+        const firstName = document.getElementById("profileFirstName").value.trim();
+        const lastName = document.getElementById("profileLastName").value.trim();
+        const status = document.getElementById("profileStatus");
+        status.style.color = "#5f6f69";
+        status.textContent = "Saving...";
+        try {
+          const resp = await apiFetch("/api/auth/profile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ first_name: firstName, last_name: lastName }),
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || "Profile update failed");
+          currentUser = data.user || currentUser;
+          const fullName = `${firstName} ${lastName}`.trim();
+          document.getElementById("accountNameText").textContent = fullName || "";
+          closeNameEditor();
+          status.style.color = "#1f5f55";
+          status.textContent = "Name updated.";
+        } catch (err) {
+          status.style.color = "#8a2f2f";
+          status.textContent = err.message || String(err);
+        }
+      }
+
+      function openNameEditor() {
+        document.getElementById("nameEditor").hidden = false;
+        document.getElementById("profileFirstName").focus();
+      }
+
+      function closeNameEditor() {
+        document.getElementById("nameEditor").hidden = true;
       }
 
       async function changePassword() {
@@ -208,6 +292,7 @@
         const typed = window.prompt("Type DELETE to confirm permanently deleting your FIFO account.");
         if (typed !== "DELETE") return;
         const status = document.getElementById("deleteStatus");
+        status.style.color = "#5f6f69";
         status.textContent = "Deleting account...";
         try {
           const resp = await apiFetch("/api/auth/me", { method: "DELETE" });
@@ -218,24 +303,48 @@
           window.alert("Your FIFO account and saved data have been deleted.");
           window.location.href = "about.html";
         } catch (err) {
+          status.style.color = "#8a2f2f";
           status.textContent = err.message || String(err);
         }
       }
 
       (async () => {
+        const authEmail = document.getElementById("authEmail");
+        const authPassword = document.getElementById("authPassword");
+        const authEnterHandler = (event) => {
+          if (event.key === "Enter") submitAuth("login");
+        };
+        if (authEmail) authEmail.addEventListener("keydown", authEnterHandler);
+        if (authPassword) authPassword.addEventListener("keydown", authEnterHandler);
+
         const token = localStorage.getItem(AUTH_TOKEN_KEY);
         if (!token) {
+          _refreshNavAuth();
           showAuthGate();
           return;
         }
         try {
           await loadAccountPage();
+          _refreshNavAuth();
           hideAuthGate();
         } catch (err) {
           localStorage.removeItem(AUTH_TOKEN_KEY);
           currentUser = null;
+          _refreshNavAuth();
           showAuthGate("Please log in.");
         }
+
+        document.addEventListener("click", (event) => {
+          const wrap = document.getElementById("accountNavMenu");
+          const menu = document.getElementById("accountNavDropdown");
+          if (!wrap || !menu || wrap.hidden) return;
+          if (!wrap.contains(event.target)) menu.hidden = true;
+        });
+        document.addEventListener("keydown", (event) => {
+          if (event.key !== "Escape") return;
+          const menu = document.getElementById("accountNavDropdown");
+          if (menu && !menu.hidden) menu.hidden = true;
+        });
       })();
     </script>
   </body>
