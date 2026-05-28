@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>My Account — FIFO</title>
+    <meta name="description" content="Manage your FIFO account and connected bank accounts." />
+    <link rel="stylesheet" href="styles.css?v=8" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="nav">
+        <a href="about.html" class="logo">FIFO</a>
+        <nav class="nav-links">
+          <a href="about.html#about">About</a>
+          <a href="about.html#product">Product</a>
+          <a href="demo.html">Demo</a>
+        </nav>
+        <div class="nav-cta">
+          <a class="ghost" href="demo.html">Open dashboard</a>
+        </div>
+      </header>
+
+      <main class="account-page">
+        <section id="accountAuthGate" class="auth-gate" hidden>
+          <div class="auth-gate-card">
+            <h2>Sign in to FIFO</h2>
+            <p class="auth-gate-copy">Manage your account, connected banks, and deletion settings.</p>
+            <input id="authEmail" class="auth-input" type="email" placeholder="Email" />
+            <input id="authPassword" class="auth-input" type="password" placeholder="Password" />
+            <div class="auth-gate-actions">
+              <button class="demo-sandbox-btn" onclick="submitAuth('login')">Log in</button>
+              <button class="demo-connect-ghost-btn" onclick="submitAuth('signup')">Create account</button>
+            </div>
+            <p id="authStatus" class="auth-status"></p>
+          </div>
+        </section>
+
+        <section id="accountMain" class="account-main" hidden>
+          <div class="account-hero">
+            <div>
+              <p class="eyebrow">My account</p>
+              <h1>Account settings</h1>
+              <p class="subhead">Your FIFO identity, connected-bank summary, and destructive actions.</p>
+            </div>
+            <button class="ghost" onclick="logoutUser()">Log out</button>
+          </div>
+
+          <div class="account-stack">
+            <section class="account-panel">
+              <div class="account-panel-head">
+                <h2>Profile</h2>
+                <span class="account-panel-note">Stored securely</span>
+              </div>
+              <div class="account-info-row">
+                <span class="account-label">Email</span>
+                <span id="accountEmail" class="account-value"></span>
+              </div>
+              <div class="account-info-row">
+                <span class="account-label">Password</span>
+                <span class="account-value" title="Passwords are stored as one-way hashes and cannot be shown back.">Stored securely — not retrievable</span>
+              </div>
+            </section>
+
+            <section class="account-panel">
+              <div class="account-panel-head">
+                <h2>Change password</h2>
+                <span class="account-panel-note">Authenticated update</span>
+              </div>
+              <div class="account-form-grid">
+                <input id="currentPassword" class="auth-input account-input" type="password" placeholder="Current password" />
+                <input id="newPassword" class="auth-input account-input" type="password" placeholder="New password" />
+                <button class="ghost account-save-btn" onclick="changePassword()">Update password</button>
+              </div>
+              <p class="account-helper-copy">If you forgot your password entirely, we need a dedicated email reset flow. That is not implemented yet.</p>
+              <p id="passwordStatus" class="auth-status"></p>
+            </section>
+
+            <section class="account-panel">
+              <div class="account-panel-head">
+                <h2>Connected banks</h2>
+                <a class="account-inline-link" href="demo.html">Open dashboard</a>
+              </div>
+              <div class="account-info-row">
+                <span class="account-label">Number of bank accounts</span>
+                <span id="accountCount" class="account-value">0</span>
+              </div>
+              <div id="bankLinks" class="account-link-list"></div>
+            </section>
+
+            <section class="account-panel account-panel-danger">
+              <div class="account-panel-head">
+                <h2>Delete account</h2>
+              </div>
+              <div class="account-danger-row">
+                <p class="account-danger-copy">
+                  Permanently remove your FIFO account, connected-bank metadata, stored transactions, credentials, and saved sessions.
+                </p>
+                <button class="danger-btn" onclick="deleteMyAccount()">Delete my account</button>
+              </div>
+              <p id="deleteStatus" class="auth-status"></p>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const CLOUD_API_BASE = "https://finance-demo-486722019708.us-central1.run.app";
+      const AUTH_TOKEN_KEY = "fifoAuthToken";
+      let currentUser = null;
+
+      function apiBase() {
+        return window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "" : CLOUD_API_BASE;
+      }
+
+      function apiFetch(path, options) {
+        const token = localStorage.getItem(AUTH_TOKEN_KEY);
+        const next = { ...(options || {}) };
+        next.headers = { ...((options && options.headers) || {}) };
+        if (token) next.headers.Authorization = `Bearer ${token}`;
+        return fetch(apiBase() + path, next);
+      }
+
+      function showAuthGate(message = "") {
+        document.getElementById("accountAuthGate").hidden = false;
+        document.getElementById("accountMain").hidden = true;
+        document.getElementById("authStatus").textContent = message;
+      }
+
+      function hideAuthGate() {
+        document.getElementById("accountAuthGate").hidden = true;
+        document.getElementById("accountMain").hidden = false;
+        document.getElementById("authStatus").textContent = "";
+      }
+
+      async function submitAuth(mode) {
+        const email = document.getElementById("authEmail").value.trim();
+        const password = document.getElementById("authPassword").value;
+        const status = document.getElementById("authStatus");
+        status.textContent = mode === "signup" ? "Creating account..." : "Logging in...";
+        try {
+          const resp = await fetch(`${apiBase()}/api/auth/${mode}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password }),
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || `${mode} failed`);
+          localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+          currentUser = data.user;
+          window.location.href = "demo.html";
+        } catch (err) {
+          status.textContent = err.message || String(err);
+        }
+      }
+
+      function logoutUser() {
+        localStorage.removeItem(AUTH_TOKEN_KEY);
+        currentUser = null;
+        showAuthGate("Logged out.");
+      }
+
+      async function loadAccountPage() {
+        const meResp = await apiFetch("/api/auth/me");
+        const meData = await meResp.json();
+        if (!meResp.ok) throw new Error(meData.error || "Authentication required");
+        currentUser = meData.user;
+        document.getElementById("accountEmail").textContent = currentUser.email;
+
+        const acctResp = await apiFetch("/api/accounts");
+        const accounts = acctResp.ok ? await acctResp.json() : [];
+        document.getElementById("accountCount").textContent = String(accounts.length);
+        const bankLinks = document.getElementById("bankLinks");
+        bankLinks.innerHTML = accounts.length
+          ? accounts.map((acct) => (
+              `<a class="account-bank-link" href="demo.html?account=${acct.id}">${acct.display_name} → Transactions</a>`
+            )).join("")
+          : `<p class="account-empty">No connected bank accounts yet.</p>`;
+      }
+
+      async function changePassword() {
+        const currentPassword = document.getElementById("currentPassword").value;
+        const newPassword = document.getElementById("newPassword").value;
+        const status = document.getElementById("passwordStatus");
+        status.textContent = "Updating password...";
+        try {
+          const resp = await apiFetch("/api/auth/password", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || "Password update failed");
+          document.getElementById("currentPassword").value = "";
+          document.getElementById("newPassword").value = "";
+          status.style.color = "#1f5f55";
+          status.textContent = "Password updated.";
+        } catch (err) {
+          status.style.color = "#8a2f2f";
+          status.textContent = err.message || String(err);
+        }
+      }
+
+      async function deleteMyAccount() {
+        const first = window.confirm("Delete your FIFO account permanently? This will remove all saved data.");
+        if (!first) return;
+        const typed = window.prompt("Type DELETE to confirm permanently deleting your FIFO account.");
+        if (typed !== "DELETE") return;
+        const status = document.getElementById("deleteStatus");
+        status.textContent = "Deleting account...";
+        try {
+          const resp = await apiFetch("/api/auth/me", { method: "DELETE" });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || "Delete failed");
+          localStorage.removeItem(AUTH_TOKEN_KEY);
+          currentUser = null;
+          window.alert("Your FIFO account and saved data have been deleted.");
+          window.location.href = "about.html";
+        } catch (err) {
+          status.textContent = err.message || String(err);
+        }
+      }
+
+      (async () => {
+        const token = localStorage.getItem(AUTH_TOKEN_KEY);
+        if (!token) {
+          showAuthGate();
+          return;
+        }
+        try {
+          await loadAccountPage();
+          hideAuthGate();
+        } catch (err) {
+          localStorage.removeItem(AUTH_TOKEN_KEY);
+          currentUser = null;
+          showAuthGate("Please log in.");
+        }
+      })();
+    </script>
+  </body>
+</html>

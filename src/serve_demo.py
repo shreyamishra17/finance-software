@@ -20,7 +20,7 @@ from urllib.parse import urlparse, parse_qs
 
 from dotenv import load_dotenv
 
-from auth import create_user, authenticate_user, issue_token, verify_token
+from auth import create_user, authenticate_user, issue_token, verify_token, delete_user, update_password
 from categorize import categorize_transactions, detect_recurrent_income
 from parse_bank import parse_pdf_to_payload, persist_uploaded_statement, merchant_clean as _merchant_clean_fn
 from new_bank_setup import bootstrap_config_if_unknown
@@ -404,6 +404,90 @@ class DemoHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             self._send_json(HTTPStatus.UNAUTHORIZED, {"error": str(exc)})
 
+    def _handle_auth_delete(self) -> None:
+        token = self._read_bearer_token()
+        if not token:
+            self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "Authentication required"})
+            return
+        try:
+            user = verify_token(token)
+            uid_token = set_current_uid(user["uid"])
+            try:
+                accounts = get_accounts()
+                account_ids = [int(a["id"]) for a in accounts if a.get("id") is not None]
+                bank_keys = sorted({str(a.get("bank_key") or "").strip() for a in accounts if a.get("bank_key")})
+
+                # Best-effort local cleanup for keychain and saved browser sessions.
+                try:
+                    import keyring  # noqa: PLC0415
+                    import sys as _sys
+                    if str(ROOT) not in _sys.path:
+                        _sys.path.insert(0, str(ROOT))
+                    from bank_fetcher import _load_fetcher_config  # noqa: PLC0415
+
+                    uid_prefix = f"{user['uid']}:"
+                    for bank_key in bank_keys:
+                        try:
+                            cfg = _load_fetcher_config(bank_key)
+                        except Exception:
+                            continue
+                        svc = cfg.get("keyring_service")
+                        for key_field in ("keyring_username_key", "keyring_password_key", "keyring_totp_secret_key"):
+                            label = cfg.get(key_field)
+                            if svc and label:
+                                try:
+                                    keyring.delete_password(svc, f"{uid_prefix}{label}")
+                                except Exception:
+                                    pass
+                    for account_id in account_ids:
+                        try:
+                            keyring.delete_password("fifo_plaid", f"access_token_{user['uid']}:{account_id}")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+                try:
+                    sessions_dir = ROOT / "data" / "sessions"
+                    if sessions_dir.exists():
+                        for path in sessions_dir.glob(f"{user['uid']}_*.json"):
+                            path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+                deleted = delete_user(user["uid"])
+            finally:
+                reset_current_uid(uid_token)
+
+            self._send_json(HTTPStatus.OK, {
+                "deleted": True,
+                "uid": user["uid"],
+                "email": user["email"],
+                "counts": deleted,
+            })
+        except Exception as exc:
+            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+
+    def _handle_auth_password(self) -> None:
+        token = self._read_bearer_token()
+        if not token:
+            self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "Authentication required"})
+            return
+        try:
+            user = verify_token(token)
+            body = self._read_json_body()
+            current_password = body.get("current_password", "")
+            new_password = body.get("new_password", "")
+            if not current_password or not new_password:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "current_password and new_password are required"})
+                return
+            update_password(user["uid"], current_password, new_password)
+            self._send_json(HTTPStatus.OK, {"updated": True})
+        except ValueError as exc:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        except Exception as exc:
+            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+
     def _send_json(self, status: int, payload: dict) -> None:
         data = json.dumps(payload).encode("utf-8")
         self.send_response(status)
@@ -492,6 +576,12 @@ class DemoHandler(SimpleHTTPRequestHandler):
             return
         token = set_current_uid(auth_user["uid"]) if isinstance(auth_user, dict) else None
         try:
+            if path == "/api/auth/me":
+                self._handle_auth_delete()
+                return
+            if path == "/api/auth/password":
+                self._handle_auth_password()
+                return
             # DELETE /api/accounts/<id>
             if path.startswith("/api/accounts/"):
                 parts = path.strip("/").split("/")

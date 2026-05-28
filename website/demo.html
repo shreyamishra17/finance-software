@@ -14,7 +14,11 @@
       <header class="nav demo-topbar">
         <a href="about.html" class="logo">FIFO</a>
         <div class="demo-auth-bar">
-          <span id="authUserEmail" class="demo-auth-email" style="display:none"></span>
+          <a id="authAccountLink" class="demo-auth-account" href="myaccounts.html" aria-label="Go to account settings" style="display:none">
+            <svg viewBox="0 0 24 24" role="presentation">
+              <path d="M12 12c2.76 0 5-2.46 5-5.5S14.76 1 12 1 7 3.46 7 6.5 9.24 12 12 12Zm0 2c-4.42 0-8 2.91-8 6.5 0 .83.67 1.5 1.5 1.5h13c.83 0 1.5-.67 1.5-1.5 0-3.59-3.58-6.5-8-6.5Z"/>
+            </svg>
+          </a>
           <button id="authLogoutBtn" class="demo-auth-logout" style="display:none" onclick="logoutUser()">Log out</button>
         </div>
       </header>
@@ -463,14 +467,13 @@
       }
 
       function _refreshAuthChrome() {
-        const emailEl = document.getElementById("authUserEmail");
+        const accountLink = document.getElementById("authAccountLink");
         const logoutBtn = document.getElementById("authLogoutBtn");
         if (currentUser && currentUser.email) {
-          emailEl.textContent = currentUser.email;
-          emailEl.style.display = "";
+          accountLink.style.display = "";
           logoutBtn.style.display = "";
         } else {
-          emailEl.style.display = "none";
+          accountLink.style.display = "none";
           logoutBtn.style.display = "none";
         }
       }
@@ -1953,6 +1956,12 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
             const item = sidebarList.querySelector(`.sidebar-account-item[data-id="${currentAccountId}"]`);
             if (item) item.classList.add("is-active");
             // Already showing account view — no empty state needed
+          } else {
+            const requestedId = Number(new URLSearchParams(window.location.search).get("account") || "");
+            if (requestedId && accounts.find(a => a.id === requestedId)) {
+              loadAccountTransactions(requestedId);
+              return;
+            }
           }
         } catch (_) {}
       }

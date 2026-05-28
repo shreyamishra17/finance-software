@@ -93,6 +93,24 @@ def authenticate_user(email: str, password: str) -> dict:
     return {"uid": user["uid"], "email": user["email"]}
 
 
+def update_password(uid: str, current_password: str, new_password: str) -> None:
+    if len(new_password) < 8:
+        raise ValueError("New password must be at least 8 characters")
+    doc = _users_collection().document(uid).get()
+    if not doc.exists:
+        raise ValueError("User not found")
+    user = doc.to_dict()
+    expected = _hash_password(current_password, user["password_salt"])
+    if not hmac.compare_digest(expected, user["password_hash"]):
+        raise ValueError("Current password is incorrect")
+    new_salt = secrets.token_hex(16)
+    _users_collection().document(uid).update({
+        "password_salt": new_salt,
+        "password_hash": _hash_password(new_password, new_salt),
+        "updated_at": _utcnow().isoformat(),
+    })
+
+
 def issue_token(uid: str, email: str, days_valid: int = 30) -> str:
     payload = {
         "uid": uid,
@@ -121,3 +139,36 @@ def verify_token(token: str) -> dict:
     if not uid or not email:
         raise ValueError("Invalid token payload")
     return {"uid": uid, "email": email}
+
+
+def delete_user(uid: str) -> dict:
+    db = _get_db()
+    user_ref = _users_collection().document(uid)
+    subcollections = [
+        user_ref.collection("accounts"),
+        user_ref.collection("transactions"),
+        user_ref.collection("credentials"),
+        user_ref.collection("_meta"),
+    ]
+
+    deleted: dict[str, int] = {}
+    for coll in subcollections:
+        docs = coll.get()
+        deleted[coll.id] = len(docs)
+        if not docs:
+            continue
+        batch = db.batch()
+        count = 0
+        for doc in docs:
+            batch.delete(doc.reference)
+            count += 1
+            if count >= 400:
+                batch.commit()
+                batch = db.batch()
+                count = 0
+        if count:
+            batch.commit()
+
+    user_ref.delete()
+    deleted["user"] = 1
+    return deleted

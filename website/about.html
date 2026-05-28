@@ -18,6 +18,7 @@
           <a href="#who">Who we are</a>
         </nav>
         <div class="nav-cta">
+          <a class="ghost" id="signInLink" href="demo.html">Sign in</a>
           <a class="primary" href="demo.html">Try our demo</a>
         </div>
       </header>
@@ -185,8 +186,28 @@
         <div class="footer-note">© 2026 FIFO. All rights reserved.</div>
       </footer>
     </div>
+    <a id="profileDock" class="profile-dock" href="myaccounts.html" aria-label="Go to your account" hidden>
+      <span class="profile-dock-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" role="presentation">
+          <path d="M12 12c2.76 0 5-2.46 5-5.5S14.76 1 12 1 7 3.46 7 6.5 9.24 12 12 12Zm0 2c-4.42 0-8 2.91-8 6.5 0 .83.67 1.5 1.5 1.5h13c.83 0 1.5-.67 1.5-1.5 0-3.59-3.58-6.5-8-6.5Z"/>
+        </svg>
+      </span>
+      <span class="profile-dock-label">My account</span>
+    </a>
     <script>
       (() => {
+        const AUTH_TOKEN_KEY = "fifoAuthToken";
+        const hasAuth = !!localStorage.getItem(AUTH_TOKEN_KEY);
+        const signInLink = document.getElementById("signInLink");
+        const profileDock = document.getElementById("profileDock");
+        if (hasAuth) {
+          signInLink.hidden = true;
+          profileDock.hidden = false;
+        } else {
+          signInLink.hidden = false;
+          profileDock.hidden = true;
+        }
+
         const revealNodes = document.querySelectorAll(".reveal-item, .reveal-section");
         const io = new IntersectionObserver((entries) => {
           entries.forEach((entry) => {
