@@ -13,9 +13,26 @@
     <div class="demo-shell">
       <header class="nav demo-topbar">
         <a href="about.html" class="logo">FIFO</a>
+        <div class="demo-auth-bar">
+          <span id="authUserEmail" class="demo-auth-email" style="display:none"></span>
+          <button id="authLogoutBtn" class="demo-auth-logout" style="display:none" onclick="logoutUser()">Log out</button>
+        </div>
       </header>
 
       <main class="demo-app-main">
+        <section id="authGate" class="auth-gate" hidden>
+          <div class="auth-gate-card">
+            <h2>Sign in to FIFO</h2>
+            <p class="auth-gate-copy">Your accounts, credentials, and files are now isolated per FIFO user.</p>
+            <input id="authEmail" class="auth-input" type="email" placeholder="Email" />
+            <input id="authPassword" class="auth-input" type="password" placeholder="Password" />
+            <div class="auth-gate-actions">
+              <button class="demo-sandbox-btn" onclick="submitAuth('login')">Log in</button>
+              <button class="demo-connect-ghost-btn" onclick="submitAuth('signup')">Create account</button>
+            </div>
+            <p id="authStatus" class="auth-status"></p>
+          </div>
+        </section>
 
         <div class="demo-app">
           <!-- ── Left sidebar ──────────────────────────────────────── -->
@@ -380,12 +397,106 @@
 
       // Backend that parses the PDF and returns JSON.
       const CLOUD_API_BASE = "https://finance-demo-486722019708.us-central1.run.app";
+      const AUTH_TOKEN_KEY = "fifoAuthToken";
+      let currentUser = null;
 
       // Route /api/* calls to the cloud backend when running on the static Cloudflare Pages deployment.
       function _apiFetch(path, options) {
         const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
         const base = isLocal ? "" : CLOUD_API_BASE;
-        return fetch(base + path, options);
+        const token = localStorage.getItem(AUTH_TOKEN_KEY);
+        const next = { ...(options || {}) };
+        next.headers = { ...((options && options.headers) || {}) };
+        if (token) next.headers.Authorization = `Bearer ${token}`;
+        return fetch(base + path, next);
+      }
+
+      function _showAuthGate(message = "") {
+        document.getElementById("authGate").hidden = false;
+        document.getElementById("authStatus").textContent = message;
+      }
+
+      function _hideAuthGate() {
+        document.getElementById("authGate").hidden = true;
+        document.getElementById("authStatus").textContent = "";
+      }
+
+      function _hasAuth() {
+        return !!localStorage.getItem(AUTH_TOKEN_KEY);
+      }
+
+      function requireAuthOrPrompt(message = "Create an account or log in to connect a real bank account and keep your data separate.") {
+        if (_hasAuth()) return true;
+        _showAuthGate(message);
+        return false;
+      }
+
+      async function submitAuth(mode) {
+        const email = document.getElementById("authEmail").value.trim();
+        const password = document.getElementById("authPassword").value;
+        const status = document.getElementById("authStatus");
+        status.textContent = mode === "signup" ? "Creating account..." : "Logging in...";
+        try {
+          const resp = await fetch(`${window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "" : CLOUD_API_BASE}/api/auth/${mode}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password }),
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || `${mode} failed`);
+          localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+          currentUser = data.user;
+          _refreshAuthChrome();
+          _hideAuthGate();
+          await loadAccounts();
+        } catch (err) {
+          status.textContent = err.message || String(err);
+        }
+      }
+
+      function logoutUser() {
+        localStorage.removeItem(AUTH_TOKEN_KEY);
+        currentUser = null;
+        _refreshAuthChrome();
+        _hideAuthGate();
+        loadAccounts();
+      }
+
+      function _refreshAuthChrome() {
+        const emailEl = document.getElementById("authUserEmail");
+        const logoutBtn = document.getElementById("authLogoutBtn");
+        if (currentUser && currentUser.email) {
+          emailEl.textContent = currentUser.email;
+          emailEl.style.display = "";
+          logoutBtn.style.display = "";
+        } else {
+          emailEl.style.display = "none";
+          logoutBtn.style.display = "none";
+        }
+      }
+
+      async function initAuth() {
+        const token = localStorage.getItem(AUTH_TOKEN_KEY);
+        if (!token) {
+          _refreshAuthChrome();
+          _hideAuthGate();
+          return false;
+        }
+        try {
+          const resp = await _apiFetch("/api/auth/me");
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || "Authentication required");
+          currentUser = data.user;
+          _refreshAuthChrome();
+          _hideAuthGate();
+          return true;
+        } catch (err) {
+          localStorage.removeItem(AUTH_TOKEN_KEY);
+          currentUser = null;
+          _refreshAuthChrome();
+          _hideAuthGate();
+          return false;
+        }
       }
 
       async function postParse(formData, baseUrl) {
@@ -960,6 +1071,7 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
 
       // ── Bank picker modal ────────────────────────────────────────────
       function openBankPicker() {
+        if (!requireAuthOrPrompt()) return;
         document.getElementById("bankPickerOverlay").style.display = "flex";
       }
 
@@ -1793,8 +1905,16 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
           // Always fetch from API (_apiFetch routes to Cloud Run on prod, localhost on dev)
           let accounts = [];
           try {
-            const resp = await _apiFetch("/api/accounts");
-            accounts = await resp.json();
+            if (_hasAuth()) {
+              const resp = await _apiFetch("/api/accounts");
+              if (resp.ok) {
+                accounts = await resp.json();
+              } else if (resp.status === 401) {
+                localStorage.removeItem(AUTH_TOKEN_KEY);
+                currentUser = null;
+                _refreshAuthChrome();
+              }
+            }
           } catch (_) {}
           // Merge offline (static) accounts — put them first so sandbox appears at top
           _offlineAccounts.forEach(a => {
@@ -2723,12 +2843,12 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
       }
 
       // Load accounts on page start
-      loadAccounts();
+      initAuth().then(() => loadAccounts());
 
       // When the user returns to this tab (e.g. after running the bookmarklet on their
       // bank's website), silently refresh the account list so newly imported data appears.
       document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") {
+        if (document.visibilityState === "visible" && currentUser) {
           loadAccounts();
         }
       });

@@ -1574,6 +1574,81 @@ body.demo-page::after {
 }
 .connect-bank-btn:hover { opacity: 0.94; transform: translateY(-1px); }
 .connect-bank-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.demo-auth-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.demo-auth-email {
+  font-size: 14px;
+  color: #35554f;
+  font-weight: 600;
+}
+
+.demo-auth-logout {
+  border: 1px solid #c7d7d1;
+  background: #fff;
+  color: #1f5f55;
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.auth-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 24px 16px;
+  background: rgba(20, 31, 28, 0.48);
+  backdrop-filter: blur(2px);
+}
+
+.auth-gate-card {
+  width: min(460px, 100%);
+  background: #fff;
+  border: 1px solid #e7ece9;
+  border-radius: 20px;
+  padding: 28px;
+  box-shadow: 0 20px 45px rgba(24, 40, 36, 0.08);
+}
+
+.auth-gate-card h2 {
+  margin: 0 0 8px;
+  font-size: 32px;
+}
+
+.auth-gate-copy {
+  margin: 0 0 18px;
+  color: #5f6f69;
+}
+
+.auth-input {
+  width: 100%;
+  border: 1px solid #d9e5e0;
+  border-radius: 12px;
+  padding: 14px 16px;
+  font-size: 15px;
+  margin-bottom: 12px;
+}
+
+.auth-gate-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.auth-status {
+  min-height: 20px;
+  margin: 14px 0 0;
+  color: #8a2f2f;
+  font-size: 14px;
+}
 .connect-status {
   font-size: 13px;
   color: #555;

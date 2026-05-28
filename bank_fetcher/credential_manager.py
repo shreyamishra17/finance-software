@@ -7,6 +7,8 @@ from typing import Optional
 
 import keyring
 
+from db import get_current_uid, _credentials_collection
+
 KEYRING_SERVICE = "fifo_bank_fetcher"
 
 
@@ -56,10 +58,9 @@ def _fernet_key() -> bytes:
 def store_credentials_cloud(bank_key: str, username: str, password: str) -> None:
     """Encrypt credentials and persist to Firestore (used by Smart Connect)."""
     from cryptography.fernet import Fernet
-    from db import _get_db
     f = Fernet(_fernet_key())
     encrypted_pw = f.encrypt(password.encode()).decode()
-    _get_db().collection("credentials").document(bank_key).set({
+    _credentials_collection().document(bank_key).set({
         "username":           username,
         "encrypted_password": encrypted_pw,
     }, merge=True)
@@ -68,8 +69,7 @@ def store_credentials_cloud(bank_key: str, username: str, password: str) -> None
 def get_credentials_cloud(bank_key: str) -> BankCredentials | None:
     """Retrieve and decrypt credentials from Firestore. Returns None if not stored."""
     from cryptography.fernet import Fernet
-    from db import _get_db
-    doc = _get_db().collection("credentials").document(bank_key).get()
+    doc = _credentials_collection().document(bank_key).get()
     if not doc.exists:
         return None
     data = doc.to_dict()
@@ -90,14 +90,16 @@ def setup_credentials(bank_key: str, fetcher_cfg: dict) -> None:
     svc = fetcher_cfg["keyring_service"]
     username = input(f"{fetcher_cfg['bank_display_name']} username: ").strip()
     password = getpass.getpass(f"{fetcher_cfg['bank_display_name']} password: ")
-    keyring.set_password(svc, fetcher_cfg["keyring_username_key"], username)
-    keyring.set_password(svc, fetcher_cfg["keyring_password_key"], password)
+    uid = get_current_uid()
+    user_key = f"{uid}:" if uid else ""
+    keyring.set_password(svc, f"{user_key}{fetcher_cfg['keyring_username_key']}", username)
+    keyring.set_password(svc, f"{user_key}{fetcher_cfg['keyring_password_key']}", password)
     totp_key = fetcher_cfg.get("keyring_totp_secret_key")
     if totp_key:
         use_totp = input("Use a TOTP authenticator app for MFA? [y/N]: ").strip().lower()
         if use_totp == "y":
             totp_secret = getpass.getpass("TOTP base32 secret: ")
-            keyring.set_password(svc, totp_key, totp_secret)
+            keyring.set_password(svc, f"{user_key}{totp_key}", totp_secret)
     print(f"Credentials stored for '{bank_key}'.")
 
 
@@ -108,14 +110,16 @@ def get_credentials(fetcher_cfg: dict) -> BankCredentials:
     """
     svc = fetcher_cfg["keyring_service"]
     bank_key = fetcher_cfg["bank_key"]
+    uid = get_current_uid()
+    user_key = f"{uid}:" if uid else ""
 
     # Try OS keychain (works locally)
     try:
-        username = keyring.get_password(svc, fetcher_cfg["keyring_username_key"])
-        password = keyring.get_password(svc, fetcher_cfg["keyring_password_key"])
+        username = keyring.get_password(svc, f"{user_key}{fetcher_cfg['keyring_username_key']}")
+        password = keyring.get_password(svc, f"{user_key}{fetcher_cfg['keyring_password_key']}")
         if username and password:
             totp_key = fetcher_cfg.get("keyring_totp_secret_key")
-            totp_secret = keyring.get_password(svc, totp_key) if totp_key else None
+            totp_secret = keyring.get_password(svc, f"{user_key}{totp_key}") if totp_key else None
             return BankCredentials(username=username, password=password, totp_secret=totp_secret)
     except Exception:
         pass
@@ -135,11 +139,13 @@ def get_credentials(fetcher_cfg: dict) -> BankCredentials:
 def delete_credentials(bank_key: str, fetcher_cfg: dict) -> None:
     """Remove keychain entries for a bank."""
     svc = fetcher_cfg["keyring_service"]
+    uid = get_current_uid()
+    user_key = f"{uid}:" if uid else ""
     for key_field in ("keyring_username_key", "keyring_password_key", "keyring_totp_secret_key"):
         label = fetcher_cfg.get(key_field)
         if label:
             try:
-                keyring.delete_password(svc, label)
+                keyring.delete_password(svc, f"{user_key}{label}")
             except Exception:
                 pass
     print(f"Credentials deleted for '{bank_key}'.")

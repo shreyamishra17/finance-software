@@ -29,9 +29,15 @@ from plaid.model.transactions_get_request_options import TransactionsGetRequestO
 from plaid.model.sandbox_public_token_create_request import SandboxPublicTokenCreateRequest
 from plaid.model.sandbox_item_fire_webhook_request import SandboxItemFireWebhookRequest
 from plaid.model.transactions_refresh_request import TransactionsRefreshRequest
+from db import get_current_uid
 
 KEYRING_SERVICE = "fifo_plaid"
 _PAGE_SIZE = 500
+
+
+def _token_key(account_id: int) -> str:
+    uid = get_current_uid()
+    return f"{uid}:{account_id}" if uid else str(account_id)
 
 
 def _get_client() -> plaid_api.PlaidApi:
@@ -48,8 +54,9 @@ def _get_client() -> plaid_api.PlaidApi:
     return plaid_api.PlaidApi(ApiClient(cfg))
 
 
-def create_link_token(user_id: str = "fifo-user") -> str:
+def create_link_token(user_id: str | None = None) -> str:
     """Create a one-time Plaid Link token for the frontend popup."""
+    user_id = user_id or get_current_uid() or "fifo-user"
     client = _get_client()
     req = LinkTokenCreateRequest(
         user=LinkTokenCreateRequestUser(client_user_id=user_id),
@@ -73,12 +80,12 @@ def exchange_public_token(public_token: str) -> tuple[str, str]:
 
 def save_access_token(account_id: int, access_token: str) -> None:
     """Store the Plaid access token in macOS Keychain (never written to disk)."""
-    keyring.set_password(KEYRING_SERVICE, f"access_token_{account_id}", access_token)
+    keyring.set_password(KEYRING_SERVICE, f"access_token_{_token_key(account_id)}", access_token)
 
 
 def load_access_token(account_id: int) -> str | None:
     """Load the Plaid access token from macOS Keychain."""
-    return keyring.get_password(KEYRING_SERVICE, f"access_token_{account_id}")
+    return keyring.get_password(KEYRING_SERVICE, f"access_token_{_token_key(account_id)}")
 
 
 def fetch_transactions(account_id: int, since_date: datetime) -> list[dict]:

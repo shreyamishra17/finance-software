@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -23,6 +24,7 @@ from firebase_admin import credentials, firestore as fb_firestore
 # ------------------------------------------------------------------ #
 
 _db = None
+_CURRENT_UID: ContextVar[str | None] = ContextVar("fifo_current_uid", default=None)
 _SERVICE_ACCOUNT_PATH = (
     Path(__file__).resolve().parent.parent
     / "financesoftware-5c8e4-firebase-adminsdk-fbsvc-d456331984.json"
@@ -48,13 +50,56 @@ def init_db() -> None:
     _get_db()
 
 
+def set_current_uid(uid: str | None):
+    return _CURRENT_UID.set(uid)
+
+
+def reset_current_uid(token) -> None:
+    _CURRENT_UID.reset(token)
+
+
+def get_current_uid() -> str | None:
+    return _CURRENT_UID.get()
+
+
+def require_current_uid() -> str:
+    uid = _CURRENT_UID.get()
+    if not uid:
+        raise RuntimeError("No authenticated FIFO user is set for this request")
+    return uid
+
+
+def _user_doc(uid: str | None = None):
+    return _get_db().collection("users").document(uid or require_current_uid())
+
+
+def _accounts_collection(uid: str | None = None):
+    return _user_doc(uid).collection("accounts")
+
+
+def _transactions_collection(uid: str | None = None):
+    return _user_doc(uid).collection("transactions")
+
+
+def _credentials_collection(uid: str | None = None):
+    return _user_doc(uid).collection("credentials")
+
+
+def _meta_collection(uid: str | None = None):
+    return _user_doc(uid).collection("_meta")
+
+
+def list_user_ids() -> list[str]:
+    return [doc.id for doc in _get_db().collection("users").get()]
+
+
 # ------------------------------------------------------------------ #
 # ID generation — atomic counter stored in Firestore
 # ------------------------------------------------------------------ #
 
 def _next_account_id() -> int:
     db = _get_db()
-    counter_ref = db.collection("_meta").document("counters")
+    counter_ref = _meta_collection().document("counters")
 
     @fb_firestore.transactional
     def _increment(transaction, ref):
@@ -72,9 +117,8 @@ def _next_account_id() -> int:
 # ------------------------------------------------------------------ #
 
 def add_account(bank_key: str, display_name: str, sync_period: str = "1m", account_type: str = "checking") -> int:
-    db = _get_db()
     existing = (
-        db.collection("accounts")
+        _accounts_collection()
         .where("bank_key", "==", bank_key)
         .where("display_name", "==", display_name)
         .limit(1)
@@ -91,7 +135,7 @@ def add_account(bank_key: str, display_name: str, sync_period: str = "1m", accou
 
     account_id = _next_account_id()
     now = datetime.now().isoformat()
-    _get_db().collection("accounts").document(str(account_id)).set({
+    _accounts_collection().document(str(account_id)).set({
         "id":                  account_id,
         "bank_key":            bank_key,
         "display_name":        display_name,
@@ -119,9 +163,8 @@ def get_accounts() -> list[dict]:
     collection on every /api/accounts call was burning ~1500 reads per call
     and hit Firestore's free-tier daily quota in ~30 calls.
     """
-    db = _get_db()
     account_docs = (
-        db.collection("accounts")
+        _accounts_collection()
         .order_by("added_at", direction=fb_firestore.Query.DESCENDING)
         .get()
     )
@@ -136,25 +179,25 @@ def _account_with_count(data: dict) -> dict:
 
 
 def get_account(account_id: int) -> dict | None:
-    doc = _get_db().collection("accounts").document(str(account_id)).get()
+    doc = _accounts_collection().document(str(account_id)).get()
     return doc.to_dict() if doc.exists else None
 
 
 def set_account_type(account_id: int, account_type: str) -> None:
     """Set / correct the account_type field (e.g. 'credit', 'checking')."""
-    _get_db().collection("accounts").document(str(account_id)).update({"account_type": account_type})
+    _accounts_collection().document(str(account_id)).update({"account_type": account_type})
 
 
 def update_last_synced(account_id: int, dt: datetime, account_hint: str | None = None) -> None:
     updates: dict = {"last_synced_at": dt.isoformat()}
     if account_hint:
         updates["account_hint"] = account_hint
-    _get_db().collection("accounts").document(str(account_id)).update(updates)
+    _accounts_collection().document(str(account_id)).update(updates)
 
 
 def delete_account(account_id: int) -> None:
     db = _get_db()
-    txn_docs = db.collection("transactions").where("account_id", "==", account_id).get()
+    txn_docs = _transactions_collection().where("account_id", "==", account_id).get()
     batch = db.batch()
     count = 0
     for doc in txn_docs:
@@ -166,7 +209,7 @@ def delete_account(account_id: int) -> None:
             count = 0
     if count > 0:
         batch.commit()
-    db.collection("accounts").document(str(account_id)).delete()
+    _accounts_collection().document(str(account_id)).delete()
 
 
 def set_auto_sync(account_id: int, enabled: bool | None = None, interval_hours: int | None = None) -> None:
@@ -176,43 +219,43 @@ def set_auto_sync(account_id: int, enabled: bool | None = None, interval_hours: 
     if interval_hours is not None:
         updates["sync_interval_hours"] = max(1, int(interval_hours))
     if updates:
-        _get_db().collection("accounts").document(str(account_id)).update(updates)
+        _accounts_collection().document(str(account_id)).update(updates)
 
 
 def set_needs_login(account_id: int, flag: bool) -> None:
-    _get_db().collection("accounts").document(str(account_id)).update({"needs_login": bool(flag)})
+    _accounts_collection().document(str(account_id)).update({"needs_login": bool(flag)})
 
 
 def set_account_status(account_id: int, status: str, error: str | None = None) -> None:
-    _get_db().collection("accounts").document(str(account_id)).update(
+    _accounts_collection().document(str(account_id)).update(
         {"status": status, "last_error": error}
     )
 
 
 def set_last_url(account_id: int, url: str) -> None:
-    _get_db().collection("accounts").document(str(account_id)).update({"last_url": url})
+    _accounts_collection().document(str(account_id)).update({"last_url": url})
 
 
 def set_has_credentials(account_id: int, flag: bool) -> None:
     """Persist whether the user has saved bank credentials for this account.
     Stored on the account doc so the GET /api/accounts handler doesn't have
     to probe the OS keychain on every request (which spams macOS prompts)."""
-    _get_db().collection("accounts").document(str(account_id)).update({"has_credentials": bool(flag)})
+    _accounts_collection().document(str(account_id)).update({"has_credentials": bool(flag)})
 
 
 def set_account_balance(account_id: int, balance: str) -> None:
-    _get_db().collection("accounts").document(str(account_id)).update({"account_balance": balance})
+    _accounts_collection().document(str(account_id)).update({"account_balance": balance})
 
 
 def set_plaid_item_id(account_id: int, item_id: str) -> None:
-    _get_db().collection("accounts").document(str(account_id)).update(
+    _accounts_collection().document(str(account_id)).update(
         {"plaid_item_id": item_id, "source": "plaid"}
     )
 
 
 def set_investment_balance(account_id: int, balance: str) -> None:
     """Store the investment portfolio value (e.g. mutual funds) scraped from the bank overview."""
-    _get_db().collection("accounts").document(str(account_id)).update({"investment_balance": balance})
+    _accounts_collection().document(str(account_id)).update({"investment_balance": balance})
 
 
 # ------------------------------------------------------------------ #
@@ -271,7 +314,7 @@ def store_transactions(account_id: int, transactions: list[dict]) -> int:
         description = txn.get("description", "")
         amount = txn.get("amount", "")
         doc_id = _txn_doc_id(account_id, date, description, amount, txn.get("balance", ""))
-        ref = db.collection("transactions").document(doc_id)
+        ref = _transactions_collection().document(doc_id)
 
         existing = ref.get()
         if existing.exists:
@@ -307,7 +350,7 @@ def store_transactions(account_id: int, transactions: list[dict]) -> int:
     # /api/accounts read.
     if inserted > 0:
         try:
-            db.collection("accounts").document(str(account_id)).update({
+            _accounts_collection().document(str(account_id)).update({
                 "tx_count": fb_firestore.Increment(inserted),
             })
         except Exception as exc:
@@ -327,7 +370,7 @@ def update_transaction_categories(account_id: int, transactions: list[dict]) -> 
             continue
         date = _normalize_date_store(txn.get("date", "") or "")
         doc_id = _txn_doc_id(account_id, date, txn.get("description", ""), txn.get("amount", ""))
-        ref = db.collection("transactions").document(doc_id)
+        ref = _transactions_collection().document(doc_id)
         batch.update(ref, {"category": category, "merchant_clean": merchant})
         batch_count += 1
         if batch_count >= 400:
@@ -371,13 +414,12 @@ def _normalize_date(raw: str) -> str | None:
 
 
 def get_transactions(account_id: int | None = None, since_date: datetime | None = None) -> list[dict]:
-    db = _get_db()
-    query = db.collection("transactions")
+    query = _transactions_collection()
     if account_id is not None:
         query = query.where("account_id", "==", account_id)
     docs = query.get()
     account_names: dict[int, str] = {}
-    for acc_doc in db.collection("accounts").get():
+    for acc_doc in _accounts_collection().get():
         acc = acc_doc.to_dict()
         account_names[acc.get("id")] = acc.get("display_name", "")
     cutoff = since_date.strftime("%Y-%m-%d") if since_date else None
@@ -406,8 +448,7 @@ def get_transactions(account_id: int | None = None, since_date: datetime | None 
 # ------------------------------------------------------------------ #
 
 def get_transactions_for_account_raw(account_id: int) -> list[dict]:
-    db = _get_db()
-    docs = db.collection("transactions").where("account_id", "==", account_id).get()
+    docs = _transactions_collection().where("account_id", "==", account_id).get()
     return [doc.to_dict() for doc in docs]
 
 
@@ -418,8 +459,7 @@ def get_latest_transaction_date(account_id: int) -> datetime | None:
     1 day's worth of already-stored transactions, regardless of when the last
     sync actually ran.  Returns None if the account has no stored transactions.
     """
-    db = _get_db()
-    docs = db.collection("transactions").where("account_id", "==", account_id).get()
+    docs = _transactions_collection().where("account_id", "==", account_id).get()
     latest_iso: str | None = None
     for doc in docs:
         raw = (doc.to_dict().get("date") or "").strip()
@@ -435,8 +475,7 @@ def get_latest_transaction_date(account_id: int) -> datetime | None:
 
 
 def get_uncategorized_transactions(limit: int = 5000) -> list[dict]:
-    db = _get_db()
-    all_docs = db.collection("transactions").limit(limit * 3).get()
+    all_docs = _transactions_collection().limit(limit * 3).get()
     result = []
     for doc in all_docs:
         data = doc.to_dict()
@@ -461,4 +500,4 @@ def update_transaction_by_id(
     }
     if amount_type is not None:
         updates["amount_type"] = amount_type
-    _get_db().collection("transactions").document(txn_id).update(updates)
+    _transactions_collection().document(txn_id).update(updates)
