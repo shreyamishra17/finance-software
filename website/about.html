@@ -18,8 +18,8 @@
           <a href="#who">Who we are</a>
         </nav>
         <div class="nav-cta">
-          <a class="ghost" id="signInLink" href="#" onclick="openAboutSignIn(event)">Sign in</a>
           <a id="primaryNavCta" class="primary" href="demo.html">Try our demo</a>
+          <a class="ghost" id="signInLink" href="#" onclick="openAboutSignIn(event)">Sign in</a>
           <div id="navAccountMenu" class="account-menu-wrap" hidden>
             <button id="navAccountButton" class="nav-account-link" type="button" aria-label="Open account menu" onclick="toggleAboutAccountMenu(event)">
               <svg viewBox="0 0 24 24" role="presentation">
@@ -200,12 +200,17 @@
     <section id="aboutAuthGate" class="auth-gate" hidden>
       <div class="auth-gate-card">
         <button class="auth-gate-close" type="button" aria-label="Close sign in" onclick="closeAboutSignIn()">✕</button>
-        <h2>Sign in to FIFO</h2>
+        <h2 id="aboutAuthTitle">Sign in to FIFO</h2>
+        <div id="aboutSignupFields" hidden>
+          <input id="aboutFirstName" class="auth-input" type="text" placeholder="First name" />
+          <input id="aboutLastName" class="auth-input" type="text" placeholder="Last name" />
+        </div>
         <input id="aboutAuthEmail" class="auth-input" type="email" placeholder="Email" />
         <input id="aboutAuthPassword" class="auth-input" type="password" placeholder="Password" />
+        <input id="aboutConfirmPassword" class="auth-input" type="password" placeholder="Confirm password" hidden />
         <div class="auth-gate-actions">
-          <button class="demo-sandbox-btn" onclick="aboutSignIn()">Log in</button>
-          <a class="demo-connect-ghost-btn auth-link-btn" href="signup.html">Create account</a>
+          <button id="aboutAuthSecondaryBtn" class="demo-connect-ghost-btn" type="button" onclick="aboutLeftAction()">Log in</button>
+          <button id="aboutAuthPrimaryBtn" class="demo-sandbox-btn" type="button" onclick="aboutRightAction()">Create account</button>
         </div>
         <p id="aboutAuthStatus" class="auth-status"></p>
       </div>
@@ -316,6 +321,7 @@
         window.openAboutSignIn = (event) => {
           if (event) event.preventDefault();
           document.getElementById("aboutAuthGate").hidden = false;
+          setAboutAuthMode("login");
           document.getElementById("aboutAuthStatus").textContent = "";
         };
 
@@ -324,20 +330,56 @@
           document.getElementById("aboutAuthStatus").textContent = "";
         };
 
-        window.aboutSignIn = async () => {
+        let aboutAuthMode = "login";
+        function setAboutAuthMode(mode) {
+          aboutAuthMode = mode;
+          const isSignup = mode === "signup";
+          document.getElementById("aboutAuthTitle").textContent = isSignup ? "Create your FIFO account" : "Sign in to FIFO";
+          document.getElementById("aboutSignupFields").hidden = !isSignup;
+          document.getElementById("aboutConfirmPassword").hidden = !isSignup;
+          const primary = document.getElementById("aboutAuthPrimaryBtn");
+          const secondary = document.getElementById("aboutAuthSecondaryBtn");
+          primary.textContent = "Create account";
+          primary.className = isSignup ? "demo-sandbox-btn" : "demo-connect-ghost-btn";
+          secondary.textContent = "Log in";
+          secondary.className = isSignup ? "demo-connect-ghost-btn" : "demo-sandbox-btn";
+        }
+        window.aboutLeftAction = () => {
+          if (aboutAuthMode === "signup") {
+            setAboutAuthMode("login");
+            return;
+          }
+          window.aboutSubmitAuth();
+        };
+        window.aboutRightAction = () => {
+          if (aboutAuthMode === "login") {
+            setAboutAuthMode("signup");
+            return;
+          }
+          window.aboutSubmitAuth();
+        };
+
+        window.aboutSubmitAuth = async () => {
           const email = document.getElementById("aboutAuthEmail").value.trim();
           const password = document.getElementById("aboutAuthPassword").value;
+          const firstName = document.getElementById("aboutFirstName").value.trim();
+          const lastName = document.getElementById("aboutLastName").value.trim();
+          const confirmPassword = document.getElementById("aboutConfirmPassword").value;
           const status = document.getElementById("aboutAuthStatus");
           status.style.color = "#5f6f69";
-          status.textContent = "Logging in...";
+          status.textContent = aboutAuthMode === "signup" ? "Creating account..." : "Logging in...";
           try {
-            const resp = await fetch(`${apiBase()}/api/auth/login`, {
+            const endpoint = aboutAuthMode === "signup" ? "/api/auth/signup" : "/api/auth/login";
+            const payload = aboutAuthMode === "signup"
+              ? { first_name: firstName, last_name: lastName, email, password, confirm_password: confirmPassword }
+              : { email, password };
+            const resp = await fetch(`${apiBase()}${endpoint}`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ email, password }),
+              body: JSON.stringify(payload),
             });
             const data = await resp.json();
-            if (!resp.ok) throw new Error(data.error || "Login failed");
+            if (!resp.ok) throw new Error(data.error || (aboutAuthMode === "signup" ? "Create account failed" : "Login failed"));
             localStorage.setItem(AUTH_TOKEN_KEY, data.token);
             window.location.reload();
           } catch (err) {
@@ -348,11 +390,13 @@
 
         const aboutAuthEmail = document.getElementById("aboutAuthEmail");
         const aboutAuthPassword = document.getElementById("aboutAuthPassword");
+        const aboutConfirmPassword = document.getElementById("aboutConfirmPassword");
         const aboutEnterHandler = (event) => {
-          if (event.key === "Enter") window.aboutSignIn();
+          if (event.key === "Enter") window.aboutSubmitAuth();
         };
         aboutAuthEmail.addEventListener("keydown", aboutEnterHandler);
         aboutAuthPassword.addEventListener("keydown", aboutEnterHandler);
+        aboutConfirmPassword.addEventListener("keydown", aboutEnterHandler);
 
         document.addEventListener("keydown", (event) => {
           if (event.key !== "Escape") return;

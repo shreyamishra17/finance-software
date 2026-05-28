@@ -33,12 +33,17 @@
         <section id="authGate" class="auth-gate" hidden>
           <div class="auth-gate-card">
             <button class="auth-gate-close" type="button" aria-label="Close sign in" onclick="_hideAuthGate()">✕</button>
-            <h2>Sign in to FIFO</h2>
+            <h2 id="demoAuthTitle">Sign in to FIFO</h2>
+            <div id="demoSignupFields" hidden>
+              <input id="demoFirstName" class="auth-input" type="text" placeholder="First name" />
+              <input id="demoLastName" class="auth-input" type="text" placeholder="Last name" />
+            </div>
             <input id="authEmail" class="auth-input" type="email" placeholder="Email" />
             <input id="authPassword" class="auth-input" type="password" placeholder="Password" />
+            <input id="demoConfirmPassword" class="auth-input" type="password" placeholder="Confirm password" hidden />
             <div class="auth-gate-actions">
-              <button class="demo-sandbox-btn" onclick="submitAuth('login')">Log in</button>
-              <a class="demo-connect-ghost-btn auth-link-btn" href="signup.html">Create account</a>
+              <button id="demoAuthSecondaryBtn" class="demo-connect-ghost-btn" type="button" onclick="demoLeftAction()">Log in</button>
+              <button id="demoAuthPrimaryBtn" class="demo-sandbox-btn" type="button" onclick="demoRightAction()">Create account</button>
             </div>
             <p id="authStatus" class="auth-status"></p>
           </div>
@@ -423,6 +428,7 @@
 
       function _showAuthGate(message = "") {
         document.getElementById("authGate").hidden = false;
+        setDemoAuthMode("login");
         document.getElementById("authStatus").textContent = message;
       }
 
@@ -441,20 +447,59 @@
         return false;
       }
 
-      async function submitAuth(mode) {
+      let demoAuthMode = "login";
+      function setDemoAuthMode(mode) {
+        demoAuthMode = mode;
+        const isSignup = mode === "signup";
+        document.getElementById("demoAuthTitle").textContent = isSignup ? "Create your FIFO account" : "Sign in to FIFO";
+        document.getElementById("demoSignupFields").hidden = !isSignup;
+        document.getElementById("demoConfirmPassword").hidden = !isSignup;
+        const primary = document.getElementById("demoAuthPrimaryBtn");
+        const secondary = document.getElementById("demoAuthSecondaryBtn");
+        primary.textContent = "Create account";
+        primary.className = isSignup ? "demo-sandbox-btn" : "demo-connect-ghost-btn";
+        secondary.textContent = "Log in";
+        secondary.className = isSignup ? "demo-connect-ghost-btn" : "demo-sandbox-btn";
+      }
+
+      function demoLeftAction() {
+        if (demoAuthMode === "signup") {
+          setDemoAuthMode("login");
+          return;
+        }
+        submitAuth();
+      }
+
+      function demoRightAction() {
+        if (demoAuthMode === "login") {
+          setDemoAuthMode("signup");
+          return;
+        }
+        submitAuth();
+      }
+
+      async function submitAuth() {
         const email = document.getElementById("authEmail").value.trim();
         const password = document.getElementById("authPassword").value;
+        const firstName = document.getElementById("demoFirstName").value.trim();
+        const lastName = document.getElementById("demoLastName").value.trim();
+        const confirmPassword = document.getElementById("demoConfirmPassword").value;
         const status = document.getElementById("authStatus");
         status.style.color = "#5f6f69";
-        status.textContent = mode === "signup" ? "Creating account..." : "Logging in...";
+        status.textContent = demoAuthMode === "signup" ? "Creating account..." : "Logging in...";
         try {
-          const resp = await fetch(`${window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "" : CLOUD_API_BASE}/api/auth/${mode}`, {
+          const base = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "" : CLOUD_API_BASE;
+          const endpoint = demoAuthMode === "signup" ? "/api/auth/signup" : "/api/auth/login";
+          const payload = demoAuthMode === "signup"
+            ? { first_name: firstName, last_name: lastName, email, password, confirm_password: confirmPassword }
+            : { email, password };
+          const resp = await fetch(`${base}${endpoint}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, password }),
+            body: JSON.stringify(payload),
           });
           const data = await resp.json();
-          if (!resp.ok) throw new Error(data.error || `${mode} failed`);
+          if (!resp.ok) throw new Error(data.error || (demoAuthMode === "signup" ? "Create account failed" : "Login failed"));
           localStorage.setItem(AUTH_TOKEN_KEY, data.token);
           currentUser = data.user;
           window.location.href = "about.html";
@@ -513,7 +558,7 @@
         }
         if (event.key === "Enter") {
           const gate = document.getElementById("authGate");
-          if (gate && !gate.hidden) submitAuth("login");
+          if (gate && !gate.hidden) submitAuth();
         }
       });
 

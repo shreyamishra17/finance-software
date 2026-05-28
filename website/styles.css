@@ -321,6 +321,15 @@ main {
   margin-top: 10px;
 }
 
+.password-form-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.password-form-grid .account-save-btn {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
 .account-input {
   margin-bottom: 0;
 }
@@ -1979,6 +1988,12 @@ body.demo-page::after {
   box-shadow: 0 14px 26px rgba(17, 17, 17, 0.25);
 }
 
+.ghost:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 26px rgba(17, 17, 17, 0.22);
+  border-color: #b9c0c6;
+}
+
 .auth-gate {
   position: fixed;
   inset: 0;
@@ -2050,6 +2065,7 @@ body.demo-page::after {
   align-items: center;
   justify-content: center;
   flex: 1 1 0;
+  transition: none;
 }
 
 .signup-page {

@@ -17,7 +17,7 @@
           <a href="demo.html">Demo</a>
         </nav>
         <div class="nav-cta">
-          <a class="primary" href="demo.html">My Finance</a>
+          <a id="accountTopFinanceCta" class="primary" href="demo.html">Get Started</a>
           <div id="accountNavMenu" class="account-menu-wrap" hidden>
             <button id="accountNavButton" class="nav-account-link" type="button" aria-label="Open account menu" onclick="toggleAccountNavMenu(event)">
               <svg viewBox="0 0 24 24" role="presentation">
@@ -82,36 +82,35 @@
                 <span class="account-label">Email</span>
                 <span id="accountEmail" class="account-value"></span>
               </div>
-              <div class="account-info-row" style="margin-top: 6px;">
-                <span class="account-label">Password</span>
-                <span class="account-value" title="Passwords are stored as one-way hashes and cannot be shown back.">Stored securely</span>
-              </div>
-            </section>
-
-            <section class="account-panel">
-              <div class="account-panel-head">
-                <h2>Change password</h2>
-                <span class="account-panel-note">Authenticated update</span>
-              </div>
-              <div class="account-form-grid">
-                <input id="currentPassword" class="auth-input account-input" type="password" placeholder="Current password" />
-                <input id="newPassword" class="auth-input account-input" type="password" placeholder="New password" />
-                <button class="ghost account-save-btn" onclick="changePassword()">Update password</button>
-              </div>
-              <p class="account-helper-copy">If you forgot your password entirely, we need a dedicated email reset flow. That is not implemented yet.</p>
-              <p id="passwordStatus" class="auth-status"></p>
             </section>
 
             <section class="account-panel">
               <div class="account-panel-head">
                 <h2>Connected banks</h2>
-                <a class="account-inline-link" href="demo.html">My Finance</a>
+                <a id="accountInlineFinanceCta" class="account-inline-link" href="demo.html">Get Started</a>
               </div>
               <div class="account-info-row">
                 <span class="account-label">Number of bank accounts</span>
                 <span id="accountCount" class="account-value">0</span>
               </div>
               <div id="bankLinks" class="account-link-list"></div>
+            </section>
+
+            <section class="account-panel">
+              <div class="account-panel-head">
+                <h2>Change password</h2>
+                <button id="togglePasswordBtn" class="ghost account-row-btn" type="button" onclick="togglePasswordPanel()">Change password</button>
+              </div>
+              <div id="passwordPanel" hidden>
+                <div class="account-form-grid password-form-grid">
+                  <input id="currentPassword" class="auth-input account-input" type="password" placeholder="Current password" />
+                  <input id="newPassword" class="auth-input account-input" type="password" placeholder="New password" />
+                  <input id="confirmNewPassword" class="auth-input account-input" type="password" placeholder="Retype new password" />
+                  <button class="ghost account-save-btn" onclick="changePassword()">Update password</button>
+                </div>
+                <p class="account-helper-copy">If you forgot your password entirely, we need a dedicated email reset flow. That is not implemented yet.</p>
+              </div>
+              <p id="passwordStatus" class="auth-status"></p>
             </section>
 
             <section class="account-panel account-panel-danger">
@@ -219,6 +218,10 @@
 
         const acctResp = await apiFetch("/api/accounts");
         const accounts = acctResp.ok ? await acctResp.json() : [];
+        const hasAccounts = Array.isArray(accounts) && accounts.length > 0;
+        const ctaText = hasAccounts ? "My Finance" : "Get Started";
+        document.getElementById("accountTopFinanceCta").textContent = ctaText;
+        document.getElementById("accountInlineFinanceCta").textContent = ctaText;
         document.getElementById("accountCount").textContent = String(accounts.length);
         const bankLinks = document.getElementById("bankLinks");
         bankLinks.innerHTML = accounts.length
@@ -263,10 +266,24 @@
         document.getElementById("nameEditor").hidden = true;
       }
 
+      function togglePasswordPanel() {
+        const panel = document.getElementById("passwordPanel");
+        const btn = document.getElementById("togglePasswordBtn");
+        panel.hidden = !panel.hidden;
+        btn.textContent = panel.hidden ? "Change password" : "Hide";
+      }
+
       async function changePassword() {
         const currentPassword = document.getElementById("currentPassword").value;
         const newPassword = document.getElementById("newPassword").value;
+        const confirmNewPassword = document.getElementById("confirmNewPassword").value;
         const status = document.getElementById("passwordStatus");
+        if (newPassword !== confirmNewPassword) {
+          status.style.color = "#8a2f2f";
+          status.textContent = "New passwords do not match.";
+          return;
+        }
+        status.style.color = "#5f6f69";
         status.textContent = "Updating password...";
         try {
           const resp = await apiFetch("/api/auth/password", {
@@ -278,6 +295,9 @@
           if (!resp.ok) throw new Error(data.error || "Password update failed");
           document.getElementById("currentPassword").value = "";
           document.getElementById("newPassword").value = "";
+          document.getElementById("confirmNewPassword").value = "";
+          document.getElementById("passwordPanel").hidden = true;
+          document.getElementById("togglePasswordBtn").textContent = "Change password";
           status.style.color = "#1f5f55";
           status.textContent = "Password updated.";
         } catch (err) {
