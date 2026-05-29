@@ -16,3 +16,6 @@ my_finance/shreya_mishra/processed/*.csv
 
 # Claude Code session artifacts (worktrees, scratch state)
 .claude/
+
+# Dead/retired code kept locally for reference, not tracked
+/DEAD/
