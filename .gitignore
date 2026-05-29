@@ -1,8 +1,14 @@
 __pycache__/
 *.pyc
 .DS_Store
-data/sessions/
-data/*.db
+
+# Local Python virtualenv (host-specific, never commit)
+.venv/
+
+# Local + sensitive user data — never commit
+data/
+my_finance/
+
 *-adminsdk-*.json
 *.serviceaccount.json
 config/banks/unknown_config.json
@@ -10,8 +16,6 @@ config/banks/*_bootstrap_report.json
 config/unknown_config.json
 config/*_bootstrap_report.json
 categorizer/models/
-my_finance/shreya_mishra/raw/
-my_finance/shreya_mishra/processed/*.csv
 .env
 
 # Claude Code session artifacts (worktrees, scratch state)
