@@ -31,7 +31,7 @@
       "matches": [
         "http://localhost:*/*",
         "http://127.0.0.1:*/*",
-        "https://finance-demo-486722019708.us-central1.run.app/*"
+        "https://finance-demo-hf4lgxwbvq-uc.a.run.app/*"
       ],
       "js": ["bridge.js"],
       "run_at": "document_idle",

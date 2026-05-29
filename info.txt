@@ -40,7 +40,8 @@ FRONTEND (Cloudflare Pages)
 ==================================================================
 - Source folder : website/  (static; demo/about/myaccounts/signup .html)
 - Backend URL   : CLOUD_API_BASE in website/*.html
-                  -> TO BE REPOINTED to the new 487822 Cloud Run URL after first deploy.
+                  -> NOW points to https://finance-demo-hf4lgxwbvq-uc.a.run.app
+                     (republish website/ to Cloudflare to pick this up)
 - No Cloudflare config in repo (managed in the Cloudflare dashboard).
 
 ==================================================================
@@ -61,11 +62,14 @@ DONE:
   [x] Cloud Run API + Artifact Registry API enabled
   [x] Artifact Registry repo "finance-demo" created (us-central1)
   [x] Code repointed: src/db.py uses ADC + FIRESTORE_DATABASE; deploy.sh + CI set env vars
+  [x] Deploy service account + GitHub secrets (GCP_PROJECT_ID, GCP_SA_KEY) in place
+  [x] First deploy to 487822 SUCCEEDED (rev finance-demo-00002, HTTP 200)
+      Service URL: https://finance-demo-hf4lgxwbvq-uc.a.run.app
+  [x] Website CLOUD_API_BASE + chrome extension repointed to the new URL
 TODO:
-  [ ] Create deploy service account + key in 487822; add GitHub secrets (GCP_PROJECT_ID, GCP_SA_KEY)
-  [ ] First deploy to 487822 (deploy.sh or push to main)
-  [ ] Repoint website CLOUD_API_BASE to the new Cloud Run URL; republish to Cloudflare
-  [ ] Verify end-to-end, then DECOMMISSION old services
+  [ ] Republish website/ to Cloudflare so visitors hit the new backend
+  [ ] Verify end-to-end (sign up, upload a statement) against 487822
+  [ ] DECOMMISSION old services (5c8e4, 487020) once verified
 
 ==================================================================
 OLD PROJECTS TO DECOMMISSION (after 487822 verified)

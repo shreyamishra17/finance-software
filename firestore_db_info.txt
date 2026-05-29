@@ -68,10 +68,13 @@ Files are organized per user, by a "user slug". Layout:
 So: Firestore holds the structured records; Storage holds the original PDF
 documents and their processed CSV exports.
 
-(Note: the transaction-categorizer ML model is currently BAKED INTO the
-container image at /app/categorizer/models, NOT fetched from a bucket.
-The code CAN pull it from GCS via CATEGORIZER_MODEL_GCS_URI, but that env
-var is not set today, so no separate model bucket is in use.)
+(Note on the transaction-categorizer ML model: the model directory
+categorizer/models/ is gitignored, so the CI-built image does NOT contain
+the BERT model. When the model is absent the categorizer falls back to the
+rule-based / rapidfuzz path (it does NOT crash). The code can also fetch the
+model from GCS via CATEGORIZER_MODEL_GCS_URI, but that env var is not set, so
+no model bucket is in use. This was true on the old project too — unchanged
+by the move to 487822.)
 
 ==================================================================
 3. FIREBASE AUTH  (who the users are)
@@ -88,7 +91,7 @@ Purpose : Each account gets a Firebase Auth uid. That uid is the key used
 Service        : finance-demo   (Cloud Run, region us-central1)
 Container image: us-central1-docker.pkg.dev/financesoftware-487822/finance-demo/finance-demo:latest
                  (stored in Artifact Registry repo "finance-demo", us-central1)
-Public URL     : <FILLED IN AFTER FIRST DEPLOY — see info.txt / Cloud Run console>
+Public URL     : https://finance-demo-hf4lgxwbvq-uc.a.run.app
 How it auths   : Application Default Credentials = the Cloud Run runtime
                  service account (586516908173-compute@developer.gserviceaccount.com),
                  which has roles/editor on the project (covers Firestore + Storage).
