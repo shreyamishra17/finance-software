@@ -1,0 +1,115 @@
+FIFO — WHERE ALL THE DATA LIVES (cloud data map)
+Last updated: 2026-05-28
+
+Plain-language guide to which account / project / service holds what.
+If you're reading this months later: this is the SINGLE place everything
+lives now. The old projects (bottom of file) are being retired.
+For deploy/CI details see info.txt; this file is about DATA.
+
+==================================================================
+THE ONE ACCOUNT + PROJECT (source of truth)
+==================================================================
+Google account (login) : personalfin994@gmail.com   <- dedicated project email
+GCP/Firebase project ID: financesoftware-487822
+GCP project number     : 586516908173
+Region (compute)       : us-central1
+
+To see any of this yourself:
+  - Console : https://console.cloud.google.com  (sign in as personalfin994@gmail.com)
+  - Firebase: https://console.firebase.google.com  (same login, pick "financesoftware-487822")
+  - CLI     : gcloud config set account personalfin994@gmail.com
+              gcloud config set project financesoftware-487822
+
+Everything below is inside this ONE project. Nothing else is in use.
+
+==================================================================
+1. FIRESTORE  (the structured database — accounts, transactions, etc.)
+==================================================================
+Database name : finance-database     (IMPORTANT: it is NAMED, not "(default)")
+Location      : nam5  (US multi-region)
+Type          : Firestore Native
+Console       : Firebase console -> Build -> Firestore Database
+                (or Cloud console -> Firestore -> select "finance-database")
+
+Data is organized PER USER. Every user has one document under "users",
+and their data hangs off it as subcollections:
+
+  users/{uid}                          <- one document per signed-in user
+    |
+    +-- accounts/{account_id}          bank/credit account records
+    |     fields: account_type, account_balance, investment_balance,
+    |             needs_login, has_credentials, last_url, ...
+    |
+    +-- transactions/{txn_id}          individual transactions for that user
+    |
+    +-- credentials/{...}              bank login secrets for auto-fetching
+    |                                  (sensitive — encrypted before storage)
+    |
+    +-- _meta/counters                 internal ID counters (next account id, etc.)
+
+  {uid} = the Firebase Auth user id (see section 3).
+
+==================================================================
+2. FIREBASE STORAGE  (the file bucket — raw PDFs + processed CSVs)
+==================================================================
+Bucket   : financesoftware-487822.firebasestorage.app
+Location : US-EAST1
+Console  : Firebase console -> Build -> Storage
+CLI      : gcloud storage ls gs://financesoftware-487822.firebasestorage.app
+
+Files are organized per user, by a "user slug". Layout:
+
+  {user_slug}/raw/{period}_{account_id}_{source}.pdf
+        -> the original uploaded bank-statement PDFs (kept as-is)
+
+  {user_slug}/processed/acc_{account_id}.csv
+        -> the cleaned/parsed transactions for that account, appended over time
+
+So: Firestore holds the structured records; Storage holds the original PDF
+documents and their processed CSV exports.
+
+(Note: the transaction-categorizer ML model is currently BAKED INTO the
+container image at /app/categorizer/models, NOT fetched from a bucket.
+The code CAN pull it from GCS via CATEGORIZER_MODEL_GCS_URI, but that env
+var is not set today, so no separate model bucket is in use.)
+
+==================================================================
+3. FIREBASE AUTH  (who the users are)
+==================================================================
+Service : Firebase Authentication (Identity Toolkit), enabled on 487822
+Console : Firebase console -> Build -> Authentication -> Users
+Purpose : Each account gets a Firebase Auth uid. That uid is the key used
+          everywhere above (users/{uid} in Firestore, {user_slug} in Storage).
+          Sign-up/sign-in happens on the website (signup.html / login flow).
+
+==================================================================
+4. THE RUNNING BACKEND  (Cloud Run — reads/writes all of the above)
+==================================================================
+Service        : finance-demo   (Cloud Run, region us-central1)
+Container image: us-central1-docker.pkg.dev/financesoftware-487822/finance-demo/finance-demo:latest
+                 (stored in Artifact Registry repo "finance-demo", us-central1)
+Public URL     : <FILLED IN AFTER FIRST DEPLOY — see info.txt / Cloud Run console>
+How it auths   : Application Default Credentials = the Cloud Run runtime
+                 service account (586516908173-compute@developer.gserviceaccount.com),
+                 which has roles/editor on the project (covers Firestore + Storage).
+                 No key file is bundled in the image.
+Console        : Cloud console -> Cloud Run -> finance-demo
+
+The website (Cloudflare Pages, static files in website/) calls this Cloud Run
+URL via CLOUD_API_BASE in the .html files.
+
+==================================================================
+OLD PLACES — BEING RETIRED (do NOT put new data here)
+==================================================================
+These belong to a DIFFERENT login (k21gupta@gmail.com) and are scheduled for
+decommission once 487822 is verified. Listed so you recognize them if you see
+them in a console and don't get confused:
+
+  - financesoftware-5c8e4   (#486722019708)  account k21gupta@gmail.com
+      Old Cloud Run + old Firebase/Firestore/Storage. Billing was DISABLED
+      (backend was returning HTTP 503). The website used to point here.
+
+  - finance-software-487020 (#558632999562)  account k21gupta@gmail.com
+      A duplicate finance-demo Cloud Run. Never used by the website.
+
+NO data was migrated from these — 487822 was a fresh start (no real users yet).

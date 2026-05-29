@@ -32,7 +32,6 @@ from db import (
     set_account_status, set_plaid_item_id, get_latest_transaction_date, set_investment_balance,
     set_current_uid, reset_current_uid, get_current_uid, list_user_ids,
 )
-from db import _SERVICE_ACCOUNT_PATH as _DB_SERVICE_ACCOUNT_PATH
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -2160,15 +2159,9 @@ def _backfill_missing_categories() -> None:
 
 def main() -> int:
     print("FIFO server v2 — smart-connect=YES pythonpath=YES", flush=True)
-    has_db_creds = _DB_SERVICE_ACCOUNT_PATH.exists() or bool(
-        os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    )
-    if has_db_creds:
-        init_db()
-        _backfill_missing_categories()
-        _start_auto_sync_scheduler()
-    else:
-        print("WARNING: database init skipped: no Firebase credentials found", flush=True)
+    init_db()
+    _backfill_missing_categories()
+    _start_auto_sync_scheduler()
     host = "0.0.0.0"
     port = int(os.environ.get("PORT", "8000"))
     server = None

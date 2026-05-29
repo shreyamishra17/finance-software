@@ -10,6 +10,7 @@
 .DS_Store
 deploy.sh
 info.txt
+firestore_db_info.txt
 *.md
 
 # Retired code kept locally only
