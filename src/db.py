@@ -13,7 +13,6 @@ import os
 import re
 from contextvars import ContextVar
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 import firebase_admin
@@ -25,10 +24,6 @@ from firebase_admin import credentials, firestore as fb_firestore
 
 _db = None
 _CURRENT_UID: ContextVar[str | None] = ContextVar("fifo_current_uid", default=None)
-_SERVICE_ACCOUNT_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "financesoftware-5c8e4-firebase-adminsdk-fbsvc-d456331984.json"
-)
 
 
 def _get_db():
@@ -36,12 +31,13 @@ def _get_db():
     if _db is not None:
         return _db
     if not firebase_admin._apps:
-        if _SERVICE_ACCOUNT_PATH.exists():
-            cred = credentials.Certificate(str(_SERVICE_ACCOUNT_PATH))
-        else:
-            cred = credentials.ApplicationDefault()
-        firebase_admin.initialize_app(cred)
-    _db = fb_firestore.client()
+        # Application Default Credentials:
+        #   Cloud Run -> the service's runtime service account
+        #   local dev -> `gcloud auth application-default login` or GOOGLE_APPLICATION_CREDENTIALS
+        firebase_admin.initialize_app(credentials.ApplicationDefault())
+    # The Firestore database is named (not "(default)"), so it must be selected explicitly.
+    database_id = os.environ.get("FIRESTORE_DATABASE", "").strip() or None
+    _db = fb_firestore.client(database_id=database_id) if database_id else fb_firestore.client()
     return _db
 
 

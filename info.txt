@@ -1,19 +1,80 @@
-GCloud / Firebase Deployment Info
+FIFO — CLOUD DEPLOYMENT MAP
+Last updated: 2026-05-28
 
-Google Cloud
-- Project Name: Finance-Software
-- Project ID: finance-software-487020
-- Region: us-central1
-- Cloud Run Service: finance-demo
-- Artifact Registry Repo: cloud-run-source-deploy
+==================================================================
+SOURCE OF TRUTH (everything consolidates here)
+==================================================================
+GCP/Firebase project : financesoftware-487822   (project #586516908173)
+Owner account        : personalfin994@gmail.com   <- the project's dedicated email
+Region               : us-central1
 
-Firebase
-- Project ID: financesoftware-5c8e4
-- Storage Bucket: financesoftware-5c8e4.firebasestorage.app
+This single project holds EVERYTHING:
+- Cloud Run service  : finance-demo  (the one container; ./Dockerfile)
+- Artifact Registry  : us-central1-docker.pkg.dev/financesoftware-487822/finance-demo
+- Firestore database : finance-database  (NOTE: named, not "(default)")  region nam5
+- Firebase Storage   : financesoftware-487822.firebasestorage.app
+- Firebase Auth      : Identity Toolkit enabled
+Billing              : ENABLED
 
-Runtime Env Vars (Cloud Run)
+==================================================================
+THE CONTAINER
+==================================================================
+- Source : ./Dockerfile  (only Dockerfile in the repo)
+- Image  : python:3.11-slim + Playwright/Chromium
+- Entry  : src/serve_demo.py  (stdlib HTTPServer, port 8000)
+- Only ONE container; no Cloud Build, app.yaml, or Firebase Functions.
+
+==================================================================
+RUNTIME ENV VARS (set on the Cloud Run service by deploy.sh + CI)
+==================================================================
 - PERSIST_MODE=firebase_storage
-- FIREBASE_STORAGE_BUCKET=financesoftware-5c8e4.firebasestorage.app
+- FIREBASE_STORAGE_BUCKET=financesoftware-487822.firebasestorage.app
+- FIRESTORE_DATABASE=finance-database
+- PYTHONPATH=/app   PORT=8000
+- CATEGORIZER_MODEL_DIR=/app/categorizer/models/...   (model fetched from GCS at runtime)
+Credentials: Application Default Credentials (Cloud Run runtime service account).
+No service-account key file is bundled into the image.
+
+==================================================================
+FRONTEND (Cloudflare Pages)
+==================================================================
+- Source folder : website/  (static; demo/about/myaccounts/signup .html)
+- Backend URL   : CLOUD_API_BASE in website/*.html
+                  -> TO BE REPOINTED to the new 487822 Cloud Run URL after first deploy.
+- No Cloudflare config in repo (managed in the Cloudflare dashboard).
+
+==================================================================
+GITHUB / CI
+==================================================================
+- Repo     : https://github.com/kg2789/Finance_Software.git
+- Workflow : .github/workflows/deploy-cloud-run.yml
+- Secrets needed:
+    GCP_PROJECT_ID = financesoftware-487822
+    GCP_SA_KEY     = JSON key of a deploy service account in 487822 with roles:
+                     Artifact Registry Writer, Cloud Run Admin, Service Account User
+
+==================================================================
+SETUP STATUS (migration to 487822)
+==================================================================
+DONE:
+  [x] Firebase added to 487822 (+ Auth, Firestore finance-database, Storage bucket)
+  [x] Cloud Run API + Artifact Registry API enabled
+  [x] Artifact Registry repo "finance-demo" created (us-central1)
+  [x] Code repointed: src/db.py uses ADC + FIRESTORE_DATABASE; deploy.sh + CI set env vars
+TODO:
+  [ ] Create deploy service account + key in 487822; add GitHub secrets (GCP_PROJECT_ID, GCP_SA_KEY)
+  [ ] First deploy to 487822 (deploy.sh or push to main)
+  [ ] Repoint website CLOUD_API_BASE to the new Cloud Run URL; republish to Cloudflare
+  [ ] Verify end-to-end, then DECOMMISSION old services
+
+==================================================================
+OLD PROJECTS TO DECOMMISSION (after 487822 verified)
+==================================================================
+- financesoftware-5c8e4    (#486722019708)  account k21gupta@gmail.com
+    finance-demo Cloud Run (billing DISABLED, currently HTTP 503), old Firebase/Storage.
+    Website currently still points here.
+- finance-software-487020  (#558632999562)  account k21gupta@gmail.com
+    Duplicate finance-demo Cloud Run (gcr.io image). Website does not use it.
 
 Notes
-- Keep this file updated when project/bucket/service names change.
+- Keep this file updated when project/bucket/service/billing state changes.

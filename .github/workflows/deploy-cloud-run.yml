@@ -48,4 +48,5 @@ jobs:
             --memory 2Gi \
             --cpu 2 \
             --timeout 300 \
-            --port 8000
+            --port 8000 \
+            --set-env-vars "PERSIST_MODE=firebase_storage,FIREBASE_STORAGE_BUCKET=financesoftware-487822.firebasestorage.app,FIRESTORE_DATABASE=finance-database"
