@@ -183,6 +183,7 @@ def _categorize_scraped(transactions: list[dict], account_type: Optional[str] = 
     # Step 1: clean every merchant name through the same pipeline used for PDF parsing.
     # Pre-strip BofA/ACH metadata (DES:, INDN:, CO ID:, ACH HOLD, etc.) first so
     # the merchant extractor gets a clean base string without unique transaction IDs.
+    acct_type_norm = (account_type or "").lower()
     for txn in transactions:
         raw = txn.get("description", "")
         # Pre-process: strip ACH structured metadata before calling merchant_clean
@@ -191,6 +192,27 @@ def _categorize_scraped(transactions: list[dict], account_type: Optional[str] = 
             txn["merchant_clean"] = _merchant_clean_fn(pre)
         except Exception:
             txn["merchant_clean"] = pre or raw
+
+        # Step 1b — normalize amount_type via description heuristic.
+        # BoA (and other banks) often send rows without a visible negative sign,
+        # so content.js can't tell credit from debit reliably and defaults to
+        # "debit". That makes Money In always $0 in the UI. Override here when
+        # the description clearly indicates money coming IN (DIRECT DEP / PAYROLL
+        # / REFUND / ZELLE FROM / etc) so the same fix applied by /recategorize
+        # also runs on every fresh ingest.
+        original_type = (txn.get("type") or txn.get("amount_type") or "").lower()
+        inferred = _infer_amount_type(
+            description=str(txn.get("description") or ""),
+            merchant_clean=str(txn.get("merchant_clean") or ""),
+            category="",  # category not yet assigned at this step
+            account_type=acct_type_norm,
+        )
+        # Only override "debit" → "credit" based on the heuristic; never the
+        # other way. If the extension is confident a row is credit (e.g. it
+        # parsed a "+" sign), trust it.
+        if original_type != "credit" and inferred == "credit":
+            txn["type"] = "credit"
+            txn["amount_type"] = "credit"
 
     # Step 2: build categorizer input with cleaned names
     cat_input = [
@@ -345,6 +367,10 @@ class DemoHandler(SimpleHTTPRequestHandler):
             "/api/auth/signup",
             "/api/auth/login",
             "/api/auth/me",
+            # Per-bank scrape config (CSS selectors etc.) — same for every
+            # user, so no need to auth-gate. The extension's content.js
+            # fetches this on every page load, and it has no auth context.
+            "/api/extension/scrape-config",
         }
 
     def _read_bearer_token(self) -> str | None:

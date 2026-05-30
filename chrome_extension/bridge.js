@@ -30,8 +30,13 @@
 
     sendStatus("logging_in");
 
+    // Forward the user's auth token so background.js can call the now-authenticated
+    // backend endpoints (/api/accounts and /api/smart-connect/extension-ingest).
+    // Content scripts share the page's localStorage, so this just works.
+    const authToken = localStorage.getItem("fifoAuthToken") || null;
+
     chrome.runtime.sendMessage(
-      { type: "SMART_CONNECT_SYNC", bank_key: bank, apiBase },
+      { type: "SMART_CONNECT_SYNC", bank_key: bank, apiBase, authToken },
       (response) => {
         if (chrome.runtime.lastError) {
           sendStatus("error", chrome.runtime.lastError.message);
@@ -44,7 +49,7 @@
         if (response.status === "scraping") {
           sendStatus("scraping");
         } else if (response.ok) {
-          sendStatus("done", null, { count: response.count });
+          sendStatus("done", null, { count: response.count, received: response.received });
         } else {
           sendStatus("error", response.error || "Sync failed.");
         }

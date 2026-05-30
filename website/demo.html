@@ -2401,7 +2401,16 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
             if (labels[msg.status]) { statusEl.textContent = labels[msg.status]; return; }
             if (msg.status === "done") {
               window.removeEventListener("message", handler);
-              statusEl.textContent = `Synced — ${msg.data?.count ?? 0} transactions imported.`;
+              const newCount = msg.data?.count ?? 0;
+              const received = msg.data?.received ?? 0;
+              if (newCount === 0 && received > 0) {
+                // We scraped data but every row was already in the DB.
+                statusEl.textContent = `✓ Already up to date (${received} transactions checked, 0 new).`;
+              } else if (newCount === 0) {
+                statusEl.textContent = `✓ Already up to date.`;
+              } else {
+                statusEl.textContent = `✅ Synced — ${newCount} new transaction${newCount !== 1 ? "s" : ""}.`;
+              }
               resolve();
             } else if (msg.status === "error") {
               window.removeEventListener("message", handler);

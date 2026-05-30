@@ -304,6 +304,10 @@ def store_transactions(account_id: int, transactions: list[dict]) -> int:
     inserted = 0
     batch = db.batch()
     batch_count = 0
+    # Track the max date in this batch so we can update the account's
+    # `last_txn_date` cache. The extension reads this back to know how far
+    # forward to scrape (instead of re-scraping a full year on every sync).
+    max_date_in_batch: str = ""
 
     for txn in transactions:
         date = _normalize_date_store(txn.get("date", "") or "")
@@ -311,12 +315,22 @@ def store_transactions(account_id: int, transactions: list[dict]) -> int:
         amount = txn.get("amount", "")
         doc_id = _txn_doc_id(account_id, date, description, amount, txn.get("balance", ""))
         ref = _transactions_collection().document(doc_id)
+        # Track max date — used for early-stop pagination on the next sync
+        if date and date > max_date_in_batch:
+            max_date_in_batch = date
 
         existing = ref.get()
         if existing.exists:
+            # ALWAYS update amount_type on existing rows. Without this, a row
+            # that was originally stored with the wrong direction (e.g. before
+            # we added the balance-delta normalizer) never gets fixed even
+            # after re-scraping — because the dedup key matches and we
+            # previously only refreshed category/merchant_clean. That kept
+            # Money In stuck at $0 indefinitely on historical data.
             batch.update(ref, {
                 "merchant_clean": txn.get("merchant_clean") or description,
                 "category":       txn.get("category"),
+                "amount_type":    txn.get("type") or txn.get("amount_type") or "debit",
             })
         else:
             batch.set(ref, {
@@ -344,13 +358,26 @@ def store_transactions(account_id: int, transactions: list[dict]) -> int:
     # Keep the cached tx_count on the account doc in sync. Cheap (single
     # write) and avoids scanning the transactions collection on every
     # /api/accounts read.
+    # Also persist max_date_in_batch as last_txn_date — used by the
+    # extension's scraper to stop paginating once it reaches dates we
+    # already have, instead of pulling a full year every sync.
+    updates: dict = {}
     if inserted > 0:
+        updates["tx_count"] = fb_firestore.Increment(inserted)
+    if max_date_in_batch:
+        # Only advance the cached date if the batch had something newer.
         try:
-            _accounts_collection().document(str(account_id)).update({
-                "tx_count": fb_firestore.Increment(inserted),
-            })
+            existing = _accounts_collection().document(str(account_id)).get()
+            existing_date = (existing.to_dict() or {}).get("last_txn_date") if existing.exists else None
+        except Exception:
+            existing_date = None
+        if not existing_date or max_date_in_batch > existing_date:
+            updates["last_txn_date"] = max_date_in_batch
+    if updates:
+        try:
+            _accounts_collection().document(str(account_id)).update(updates)
         except Exception as exc:
-            print(f"WARNING: failed to update tx_count for account {account_id}: {exc}")
+            print(f"WARNING: failed to update account {account_id}: {exc}")
 
     return inserted
 

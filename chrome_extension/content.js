@@ -4,11 +4,11 @@
 // To add a new bank: update the backend config — no extension update needed.
 
 (function () {
-  // Prevent re-running on the same page when background.js re-injects via executeScript.
-  // URL resets naturally on full-page navigation (new document = new isolated world).
-  if (window.__fifo_last_url === window.location.href) return;
-  window.__fifo_last_url = window.location.href;
-
+  // No same-URL guard anymore. Background.js explicitly re-injects content.js
+  // every time the user clicks Sync Now (or on every page navigation). If we
+  // bailed out because we'd already run on this URL, the user would click
+  // Sync Now and nothing would happen — exactly the bug that was eating 180s
+  // of background.js's wait window.
   const domain = window.location.hostname.toLowerCase();
   const url    = window.location.href;
   log("Universal content script loaded on:", domain, url);
@@ -153,14 +153,16 @@ async function runScrape(config, currentUrl) {
     config.first_connect_hint,
   );
   if (!rowsAppeared) {
-    if (!isFirstConnect) {
-      removeBanner();
-      sendError(`No transaction rows found on this page. Please do a manual login from FIFO first so the extension knows which page to open.`);
-    }
-    // First-connect: don't remove the banner and don't error.
-    // background.js's outer timeout will tear down the tab eventually if the
-    // user truly does nothing; meanwhile the navListener will re-inject this
-    // script on any URL change and a fresh instance will pick up the rows.
+    // Always tell background.js what happened. The error message intentionally
+    // contains "No transaction rows" so background.js's existing
+    // ignoreLoginErrors filter recognizes this as a transient first-connect
+    // signal (and keeps listening for the next re-injection). In sync-now
+    // mode, background propagates it as a clear UI error.
+    removeBanner();
+    sendError(
+      `No transaction rows found on this page. ` +
+      `Open your account's activity page in the bank tab, then click Sync Now again.`
+    );
     return;
   }
 
@@ -215,17 +217,30 @@ async function loadAllPages(config) {
       log(`Pagination iter ${i}: row count did not change in 12s — stopping.`);
       break;
     }
-    // Stop when the oldest visible row is older than the configured cutoff
-    // (e.g. 365 days). Activity pages sort newest-first, so the last visible
-    // row is the oldest — once it crosses the cutoff we have ≥1 year of data
-    // and don't need to paginate further.
-    if (config.stop_after_days && config.rows.date) {
+    // Stop when the oldest visible row reaches our cutoff. Two cutoffs apply:
+    //   1. last_txn_date — the date of the most recent transaction we've
+    //      already stored for this account. Anything older than that is
+    //      already in the database. This is the primary cutoff for any sync
+    //      after the first one.
+    //   2. stop_after_days — a hard limit (default 365) so the very first
+    //      sync of a new account doesn't pull infinite history.
+    // Whichever cutoff is MORE RECENT wins.
+    if (config.rows.date) {
       const oldest = oldestVisibleRowDate(config);
       if (oldest) {
-        const cutoff = new Date();
-        cutoff.setDate(cutoff.getDate() - config.stop_after_days);
-        if (oldest < cutoff) {
-          log(`Pagination: oldest row ${oldest.toISOString().slice(0,10)} < cutoff ${cutoff.toISOString().slice(0,10)} — done.`);
+        const cutoffs = [];
+        if (config.stop_after_days) {
+          const c = new Date();
+          c.setDate(c.getDate() - config.stop_after_days);
+          cutoffs.push({ name: `${config.stop_after_days}d`, date: c });
+        }
+        if (config.last_txn_date) {
+          const c = new Date(config.last_txn_date);
+          if (isFinite(c.valueOf())) cutoffs.push({ name: `last_txn_date(${config.last_txn_date})`, date: c });
+        }
+        const chosen = cutoffs.sort((a, b) => b.date - a.date)[0]; // most recent cutoff
+        if (chosen && oldest < chosen.date) {
+          log(`Pagination: oldest row ${oldest.toISOString().slice(0,10)} < cutoff [${chosen.name}] — done.`);
           break;
         }
       }
@@ -280,20 +295,29 @@ function scrapeRows(config) {
         const typeTxt = text(row.querySelector(r.amount_type)).toLowerCase();
         rawAmount = text(row.querySelector(r.amount));
         amount = parseAmount(rawAmount);
-        // Amount-sign is the most reliable signal: a leading "-" or wrapping
-        // parens means money out, anything else means money in. The bank's
-        // type column is unreliable (BoA's column-3 text doesn't always say
-        // literally "Credit"/"Debit", so we'd mis-tag every row as debit).
-        // Fall back to the type column only when the amount string is unsigned
-        // and the column gives us a clear hint.
-        if (rawAmount.includes("(") || rawAmount.trim().startsWith("-") || rawAmount.includes("-$") || rawAmount.includes("-")) {
-          amountType = "debit";
-        } else if (/credit|deposit/.test(typeTxt)) {
+        const desc = (description || "").toLowerCase();
+        // Safer default: assume debit. Most transactions on a checking
+        // account are spends; defaulting to credit was over-counting income.
+        amountType = "debit";
+        // Explicit type column wins for unambiguous cases.
+        if (/deposit/.test(typeTxt)) {
           amountType = "credit";
         } else if (/debit|withdrawal/.test(typeTxt)) {
           amountType = "debit";
-        } else {
-          amountType = "credit";  // unsigned positive amount with no hint = money in
+        } else if (/transfer/.test(typeTxt)) {
+          // Transfer = ambiguous. Look at description.
+          // "payment to" / " to " → money out
+          // "payment from" / " from " → money in
+          if (/\bfrom\b/.test(desc)) {
+            amountType = "credit";
+          } else if (/\bto\b/.test(desc)) {
+            amountType = "debit";
+          }
+        }
+        // Explicit negative sign in the amount string ALWAYS overrides
+        // (BoA mostly hides the sign via CSS, but if it's there, trust it).
+        if (rawAmount.includes("(") || rawAmount.trim().startsWith("-") || rawAmount.includes("-$")) {
+          amountType = "debit";
         }
         if (r.balance) balance = text(row.querySelector(r.balance));
       } else {
@@ -306,6 +330,10 @@ function scrapeRows(config) {
 
       if (!description && !amount) return; // skip empty rows
 
+      // Tag the row's pre-balance-delta direction guess so the post-pass below
+      // can override it without losing the original. (Diagnostic only.)
+      const _preDirGuess = amountType;
+
       const pending = row.classList.contains("pending") ||
                       (date || "").toLowerCase() === "pending";
 
@@ -313,7 +341,67 @@ function scrapeRows(config) {
     } catch (_) {}
   });
 
+  // ── Balance-delta post-pass (the truth-tier signal) ──────────────────────
+  // Banks that display a running balance per row let us compute each
+  // transaction's direction unambiguously: if my balance went UP, money came
+  // in (credit); if it went DOWN, money went out (debit). This trumps every
+  // other heuristic (amount-sign parsing, type-column text). Used on BoA,
+  // ICICI, and any other bank whose config maps `balance`.
+  _normalizeDirectionFromBalance(results);
+
   return results;
+}
+
+function _normalizeDirectionFromBalance(rows) {
+  if (!rows || rows.length < 2) return;
+  // Parse each balance once. Skip rows without a parseable balance.
+  const parsedBalance = rows.map((r) => {
+    const s = (r.balance || "").replace(/[$,₹€£¥\s]/g, "").replace(/[()]/g, "-");
+    const n = parseFloat(s);
+    return isFinite(n) ? n : null;
+  });
+  // Detect row order — newest-first vs oldest-first — from the first two
+  // parsed dates we can read. Most bank pages (BoA, ICICI, Capital One) show
+  // newest-first. If we can't tell, assume newest-first.
+  const _dateAt = (i) => {
+    const d = new Date(rows[i]?.date || "");
+    return isFinite(d.valueOf()) ? d : null;
+  };
+  let newestFirst = true;
+  for (let i = 0; i < Math.min(rows.length - 1, 10); i++) {
+    const a = _dateAt(i), b = _dateAt(i + 1);
+    if (a && b && a.valueOf() !== b.valueOf()) {
+      newestFirst = a > b;
+      break;
+    }
+  }
+  let flipped = 0, confirmed = 0, untrusted = 0, skipped = 0;
+  for (let i = 0; i < rows.length - 1; i++) {
+    const newerIdx = newestFirst ? i : i + 1;
+    const olderIdx = newestFirst ? i + 1 : i;
+    const newerBal = parsedBalance[newerIdx];
+    const olderBal = parsedBalance[olderIdx];
+    if (newerBal == null || olderBal == null) { skipped++; continue; }
+    const delta = newerBal - olderBal;
+    if (Math.abs(delta) < 0.01) { skipped++; continue; }
+    // CRITICAL: only trust delta when |delta| matches |amount| within $0.01.
+    // BoA reorders same-day transactions in its display, so consecutive rows
+    // are not always consecutive in time — if the math doesn't validate, two
+    // rows aren't truly adjacent and we can't trust the direction.
+    const amt = parseFloat(rows[newerIdx].amount);
+    if (!isFinite(amt) || Math.abs(Math.abs(delta) - amt) > 0.01) {
+      untrusted++;
+      continue;
+    }
+    const truth = delta > 0 ? "credit" : "debit";
+    if (rows[newerIdx].amount_type !== truth) {
+      rows[newerIdx].amount_type = truth;
+      flipped++;
+    } else {
+      confirmed++;
+    }
+  }
+  log(`Balance-delta normalization: ${flipped} flipped, ${confirmed} confirmed, ${untrusted} untrusted (math didn't validate), ${skipped} skipped`);
 }
 
 // ── Scrape ending balance ─────────────────────────────────────────────────
@@ -479,9 +567,12 @@ function waitForRowsOrNavigation(selector, timeoutMs, isFirstConnect, hint) {
       if (isFirstConnect && hint && elapsed % 30000 === 0) {
         showBanner(`${hint}  (still waiting…)`);
       }
-      if (!isFirstConnect && elapsed >= timeoutMs) finish(false);
-      // First-connect: never time out from here — background.js's outer
-      // timeout (10 min) is the upper bound.
+      // Always time out — even in first-connect mode. The previous behavior
+      // (never time out when first_connect_hint was set) meant Sync Now
+      // hung forever because it inherits the same config. background.js's
+      // navListener re-injects content.js on every navigation, so each
+      // user-driven nav restarts the wait with a fresh timeout.
+      if (elapsed >= timeoutMs) finish(false);
     }, 1000);
   });
 }
