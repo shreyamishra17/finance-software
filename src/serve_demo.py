@@ -29,7 +29,7 @@ from db import (
     delete_account, store_transactions, get_transactions, update_last_synced,
     set_auto_sync, set_needs_login, set_last_url, set_account_balance,
     set_has_credentials,
-    set_account_status, set_plaid_item_id, get_latest_transaction_date, set_investment_balance,
+    set_account_status, get_latest_transaction_date, set_investment_balance,
     set_current_uid, reset_current_uid, get_current_uid, list_user_ids,
 )
 
@@ -37,6 +37,43 @@ from db import (
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 WEB_ROOT = ROOT / "website"
+
+# ── Active-scrape registry (for cancel-on-window-close) ───────────────────────
+# Maps uid → set of live BankCrawler objects currently running a headless
+# scrape for that user. When the user closes the FIFO window, the browser sends
+# a /api/sync/cancel beacon; we look up the uid's crawlers and call
+# request_cancel() on each (a thread-safe bool flip — never touches Playwright
+# from this thread). The scrape thread notices at its next checkpoint and
+# unwinds cleanly, closing the headless browser in its own thread.
+_ACTIVE_SCRAPES: dict[str, set] = {}
+_ACTIVE_SCRAPES_LOCK = threading.Lock()
+
+
+def _register_scrape(uid: str, crawler) -> None:
+    with _ACTIVE_SCRAPES_LOCK:
+        _ACTIVE_SCRAPES.setdefault(uid or "anon", set()).add(crawler)
+
+
+def _unregister_scrape(uid: str, crawler) -> None:
+    with _ACTIVE_SCRAPES_LOCK:
+        bucket = _ACTIVE_SCRAPES.get(uid or "anon")
+        if bucket:
+            bucket.discard(crawler)
+            if not bucket:
+                _ACTIVE_SCRAPES.pop(uid or "anon", None)
+
+
+def _cancel_scrapes(uid: str) -> int:
+    """Request cancellation of every active scrape for this uid. Returns the
+    number signalled. Safe to call from any thread — only flips a bool."""
+    with _ACTIVE_SCRAPES_LOCK:
+        bucket = list(_ACTIVE_SCRAPES.get(uid or "anon", set()))
+    for crawler in bucket:
+        try:
+            crawler.request_cancel()
+        except Exception:
+            pass
+    return len(bucket)
 
 # ── ACH / BofA metadata stripping ────────────────────────────────────────────
 _ACH_DES_RE   = re.compile(r'\s+DES\s*:.*$', re.IGNORECASE)
@@ -474,11 +511,6 @@ class DemoHandler(SimpleHTTPRequestHandler):
                                     keyring.delete_password(svc, f"{uid_prefix}{label}")
                                 except Exception:
                                     pass
-                    for account_id in account_ids:
-                        try:
-                            keyring.delete_password("fifo_plaid", f"access_token_{user['uid']}:{account_id}")
-                        except Exception:
-                            pass
                 except Exception:
                     pass
 
@@ -690,6 +722,13 @@ class DemoHandler(SimpleHTTPRequestHandler):
         if path == "/api/auth/login":
             self._handle_auth_login()
             return
+        # Cancel in-flight headless scrapes for the current user. Routed BEFORE
+        # the normal auth gate because it's typically delivered via
+        # navigator.sendBeacon() on window close, which cannot set an
+        # Authorization header — so the token rides in the JSON body instead.
+        if path == "/api/sync/cancel":
+            self._handle_sync_cancel()
+            return
         auth_user = self._authenticate_request(path)
         if auth_user is False:
             return
@@ -713,26 +752,8 @@ class DemoHandler(SimpleHTTPRequestHandler):
             if path == "/api/import":
                 self._handle_import_transactions()
                 return
-            # Plaid endpoints
-            if path == "/api/plaid/create-link-token":
-                self._handle_plaid_create_link_token()
-                return
-            if path == "/api/plaid/exchange-token":
-                self._handle_plaid_exchange_token()
-                return
-            if path == "/api/plaid/sandbox-connect":
-                self._handle_plaid_sandbox_connect()
-                return
             if path == "/api/auth/profile":
                 self._handle_auth_profile()
-                return
-            if path.startswith("/api/plaid/sync/"):
-                try:
-                    acct_id = int(path.split("/")[-1])
-                except ValueError:
-                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid account id"})
-                    return
-                self._handle_plaid_sync(acct_id)
                 return
             # POST /api/accounts/<id>/sync
             if path.startswith("/api/accounts/") and path.endswith("/sync"):
@@ -973,6 +994,17 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 # accounts-overview.go?msgId=MSGOBOError). Otherwise we'd loop
                 # the error page indefinitely and dig the lockout hole deeper.
                 "skip_on_url_contains": ["MSGOBOError", "msgId=MSGOBO"],
+                # MSGOBOError is often a benign warning box on a fully usable
+                # overview page. Only honor skip_on_url_contains when NONE of
+                # these "page is usable" markers are present. If the real account
+                # links (or activity rows) exist, the page works — proceed and
+                # click, exactly as the user does by hand.
+                "skip_override_selector": (
+                    ".AccountItemDeposit a[href*='redirect.go'],"
+                    ".AccountItem a[href*='redirect.go?source=overview'],"
+                    "a[href*='/myaccounts/brain/redirect.go?source=overview'],"
+                    "tr.activity-row"
+                ),
                 "navigate": [
                     {
                         "action": "wait_and_click_selector",
@@ -993,6 +1025,33 @@ class DemoHandler(SimpleHTTPRequestHandler):
                             "bofa-trans-row,"
                             "tr[data-row-key]"
                         ),
+                        # The MSGOBOError page renders a "Continue" button that
+                        # ALSO matches the redirect.go selector and sits above the
+                        # account list, so a naive querySelector clicks it and
+                        # loops back to the error page. Skip it by text.
+                        # NOTE: don't skip bare "rewards" by text — a real
+                        # "Cash Rewards Visa" account contains that word. The
+                        # rewards *page* is excluded by href below instead.
+                        "click_skip_text": ["continue", "view rewards", "merrill", "open an account", "apply now"],
+                        # Promotional / cross-sell links share the same
+                        # redirect.go?source=overview href shape as the real
+                        # account link. Exclude them by href substring so the
+                        # picker can't wander into the Rewards or Merrill pages.
+                        "click_skip_href": [
+                            "rewards", "customer-rewards", "myrewards",
+                            "merrill", "deals", "special", "offer",
+                            "enroll", "/apply", "advertise",
+                        ],
+                        # Positively target the account link. BoA labels it with
+                        # the account type ("Adv Plus Banking - 7238",
+                        # "Customized Cash Rewards Visa - 1234", etc.); these
+                        # keywords + the masked account-number digits give it a
+                        # high score so it wins over any remaining decoy.
+                        "click_prefer_text": [
+                            "banking", "checking", "savings", "money market",
+                            "credit", "card", "visa", "mastercard",
+                            "advantage", "adv plus", "cash rewards", "platinum",
+                        ],
                         "timeout": 30000,
                     }
                 ],
@@ -1456,101 +1515,6 @@ class DemoHandler(SimpleHTTPRequestHandler):
             "months": sorted(by_month.values(), key=lambda x: x["month"])
         })
 
-    # ── Plaid endpoints ───────────────────────────────────────────────
-
-    def _handle_plaid_sandbox_connect(self) -> None:
-        """POST /api/plaid/sandbox-connect — create sandbox item without Plaid Link (bypasses CDN)."""
-        try:
-            from plaid_connector import create_sandbox_item, save_access_token, fetch_transactions, fetch_balance
-            access_token, item_id = create_sandbox_item()
-            display_name = "Chase (Sandbox)"
-            account_id = add_account("plaid", display_name, sync_period="1y")
-            save_access_token(account_id, access_token)
-            set_plaid_item_id(account_id, item_id)
-            since_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=365)
-            transactions = fetch_transactions(account_id, since_date)
-            store_transactions(account_id, transactions)
-            update_last_synced(account_id, datetime.now())
-            bal = fetch_balance(account_id)
-            if bal:
-                set_account_balance(account_id, bal)
-            account = get_account(account_id)
-            self._send_json(HTTPStatus.OK, {
-                "account": account,
-                "count": len(transactions),
-                "transactions": transactions,
-            })
-        except Exception as exc:
-            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
-
-    def _handle_plaid_create_link_token(self) -> None:
-        """POST /api/plaid/create-link-token — generate a Plaid Link token for the frontend."""
-        try:
-            from plaid_connector import create_link_token
-            token = create_link_token()
-            self._send_json(HTTPStatus.OK, {"link_token": token})
-        except Exception as exc:
-            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
-
-    def _handle_plaid_exchange_token(self) -> None:
-        """POST /api/plaid/exchange-token — exchange public_token for access_token, fetch transactions."""
-        try:
-            from plaid_connector import (
-                exchange_public_token, save_access_token,
-                fetch_transactions, fetch_balance,
-            )
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
-            public_token = body["public_token"]
-            display_name = body.get("institution_name", "Plaid Account")
-
-            access_token, item_id = exchange_public_token(public_token)
-            account_id = add_account("plaid", display_name, sync_period="1y")
-            save_access_token(account_id, access_token)
-            set_plaid_item_id(account_id, item_id)
-
-            since_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=365)
-            transactions = fetch_transactions(account_id, since_date)
-            store_transactions(account_id, transactions)
-            update_last_synced(account_id, datetime.now())
-
-            bal = fetch_balance(account_id)
-            if bal:
-                set_account_balance(account_id, bal)
-
-            account = get_account(account_id)
-            self._send_json(HTTPStatus.OK, {
-                "account": account,
-                "count": len(transactions),
-                "transactions": transactions,
-            })
-        except Exception as exc:
-            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
-
-    def _handle_plaid_sync(self, account_id: int) -> None:
-        """POST /api/plaid/sync/<id> — delta-sync a Plaid-connected account."""
-        try:
-            from plaid_connector import fetch_transactions, fetch_balance
-            account = get_account(account_id)
-            if account is None:
-                self._send_json(HTTPStatus.NOT_FOUND, {"error": "Account not found"})
-                return
-            last_sync = account.get("last_synced_at")
-            since_date = (
-                datetime.fromisoformat(last_sync)
-                if last_sync
-                else datetime.now() - timedelta(days=365)
-            )
-            transactions = fetch_transactions(account_id, since_date)
-            store_transactions(account_id, transactions)
-            update_last_synced(account_id, datetime.now())
-            bal = fetch_balance(account_id)
-            if bal:
-                set_account_balance(account_id, bal)
-            self._send_json(HTTPStatus.OK, {"count": len(transactions)})
-        except Exception as exc:
-            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
-
     def _handle_add_account(self) -> None:
         """POST /api/accounts — connect a new bank account, scrape, store.
 
@@ -1632,6 +1596,40 @@ class DemoHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
 
+    def _handle_sync_cancel(self) -> None:
+        """
+        POST /api/sync/cancel — abort the current user's in-flight headless
+        scrapes. Triggered when the user closes the FIFO window (sent via
+        navigator.sendBeacon, so auth rides in the body, not a header).
+
+        Body: {} (token from Authorization header) or {"token": "<jwt>"}.
+        Only ever signals cancellation — never an OTP/re-login condition.
+        """
+        # Resolve uid from the bearer header (normal fetch) OR a body token
+        # (sendBeacon can't set headers).
+        token = self._read_bearer_token()
+        body = {}
+        if not token:
+            try:
+                body = self._read_json_body()
+            except Exception:
+                body = {}
+            token = (body.get("token") or "").strip() if isinstance(body, dict) else ""
+        if not token:
+            # No identity → nothing we can safely cancel. Beacons are fire-and-
+            # forget, so just acknowledge without erroring.
+            self._send_json(HTTPStatus.OK, {"cancelled": 0})
+            return
+        try:
+            user = verify_token(token)
+        except Exception:
+            self._send_json(HTTPStatus.OK, {"cancelled": 0})
+            return
+        n = _cancel_scrapes(user.get("uid", ""))
+        if n:
+            print(f"SYNC CANCEL: signalled {n} active scrape(s) for uid={user.get('uid')}", flush=True)
+        self._send_json(HTTPStatus.OK, {"cancelled": n})
+
     def _handle_sync_account(self, account_id: int) -> None:
         """
         POST /api/accounts/<id>/sync — fully headless background sync. No window opens.
@@ -1647,7 +1645,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
         if _proj_root not in _sys.path:
             _sys.path.insert(0, _proj_root)
         from bank_fetcher import scrape_recent_transactions_headless, _load_fetcher_config
-        from bank_fetcher.base_crawler import BankCrawler, SessionExpiredError
+        from bank_fetcher.base_crawler import BankCrawler, SessionExpiredError, MfaRequiredError, ScrapeCancelled
         from bank_fetcher import DEFAULT_RAW_DIR
         from bank_fetcher.credential_manager import get_credentials_cloud, CredentialNotFoundError
 
@@ -1666,6 +1664,13 @@ class DemoHandler(SimpleHTTPRequestHandler):
         last_url      = account.get("last_url")
         txns          = None
         ending_balance = ""
+        # Track WHY the credential login didn't produce transactions so we only
+        # ever prompt re-login when it's genuinely warranted (real OTP challenge
+        # or expired session) — never for a technical failure (stale selector,
+        # navigation timeout, bot block). This is the anti-false-alarm guard.
+        mfa_required = False     # bank GENUINELY showed an OTP challenge we can't auto-solve
+        tech_error   = None      # non-OTP failure — must NOT masquerade as "re-login required"
+        cancelled    = False     # user closed the FIFO window → benign abort, NOT an error
 
         # ── Path 1: credentials in keychain → fresh headless login ───────────
         try:
@@ -1684,47 +1689,118 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 creds = None
             if creds and cfg.get("login_steps"):
                 crawler = BankCrawler(fetcher_cfg=cfg, raw_dir=DEFAULT_RAW_DIR)
-                records, new_last_url = crawler.run_scrape_automated(
-                    username=creds.username,
-                    password=creds.password,
-                    since_date=since_date,
-                    session_save_path=session_path,
-                )
+                _register_scrape(uid, crawler)   # so window-close can cancel it
+                try:
+                    records, new_last_url = crawler.run_scrape_automated(
+                        username=creds.username,
+                        password=creds.password,
+                        since_date=since_date,
+                        session_save_path=session_path,
+                    )
+                finally:
+                    _unregister_scrape(uid, crawler)
                 txns = [{"date": r.date, "description": r.description,
                          "amount": r.amount, "type": r.amount_type} for r in records]
                 ending_balance = crawler._ending_balance or ""
                 if new_last_url:
                     set_last_url(account_id, new_last_url)
                 print(f"SYNC (credentials): {account['display_name']} — {len(txns)} transactions", flush=True)
+        except ScrapeCancelled as cancel_err:
+            # User closed the FIFO window mid-sync. Benign — abort quietly and
+            # never touch needs_login or claim OTP.
+            cancelled = True
+            print(f"SYNC cancelled (credential path): {cancel_err}", flush=True)
+        except MfaRequiredError as mfa_err:
+            # GENUINE OTP challenge. Don't give up yet — a trusted saved session
+            # (Path 2) may still sync without any OTP. Remember it so we only
+            # prompt re-login if Path 2 also can't proceed.
+            mfa_required = True
+            print(f"SYNC: OTP genuinely required on credential login ({mfa_err}); trying session cookies…", flush=True)
         except Exception as cred_err:
+            # NOT an OTP issue — a real/technical failure (e.g. stale login
+            # selector, navigation timeout, bot block). NEVER surface this as
+            # "OTP/re-login required". Try session cookies; if that also fails
+            # we report a plain technical error without setting needs_login.
+            tech_error = str(cred_err)
             print(f"SYNC credential path failed ({cred_err}), trying session cookies…", flush=True)
+
+        # ── Cancelled mid-flight (window closed)? Abort quietly. ─────────────
+        # 409 Conflict, reason="cancelled" — NOT 422 (re-login) or 500 (error),
+        # so the extension treats it as a benign skip and never false-alarms.
+        if cancelled:
+            self._send_json(HTTPStatus.CONFLICT, {
+                "error": "Sync cancelled (window closed).",
+                "reason": "cancelled",
+            })
+            return
 
         # ── Path 2: session cookies fallback ─────────────────────────────────
         if txns is None:
             if not session_path.exists() or not last_url:
+                # No trusted session to fall back on — pick the HONEST reason:
+                if mfa_required:
+                    # Real OTP challenge → manual re-login is the correct ask.
+                    set_needs_login(account_id, True)
+                    self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {
+                        "error": "Your bank asked for a one-time verification code. Please click ↩ Re-login to verify.",
+                        "reason": "otp_required",
+                    })
+                    return
+                if tech_error is not None:
+                    # Technical failure → do NOT claim OTP/re-login and do NOT
+                    # set needs_login. Surface a plain error so we can fix the
+                    # cause instead of nagging the user to re-login.
+                    self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {
+                        "error": f"Sync couldn't complete (not an OTP issue): {tech_error}",
+                        "reason": "sync_error",
+                    })
+                    return
+                # Genuinely nothing to sync with: no saved credentials AND no session.
                 set_needs_login(account_id, True)
                 self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {
-                    "error": "No credentials or session found — please click ↩ Re-login."
+                    "error": "No saved login or session yet — please click ↩ Re-login to connect.",
+                    "reason": "no_session",
                 })
                 return
+            _replay_crawler = {}   # holds the crawler so we can unregister it
+            def _capture(c):
+                _replay_crawler["c"] = c
+                _register_scrape(uid, c)
             try:
                 txns = scrape_recent_transactions_headless(
                     bank_key=bank_key,
                     since_date=since_date,
                     session_path=session_path,
                     account_url=last_url,
+                    # Register the replay crawler too so window-close cancels it.
+                    on_crawler=_capture,
                 )
                 print(f"SYNC (session): {account['display_name']} — {len(txns)} transactions", flush=True)
+            except ScrapeCancelled as cancel_err:
+                # User closed the FIFO window mid-replay. Benign abort.
+                print(f"SYNC cancelled (session path): {cancel_err}", flush=True)
+                self._send_json(HTTPStatus.CONFLICT, {
+                    "error": "Sync cancelled (window closed).",
+                    "reason": "cancelled",
+                })
+                return
             except SessionExpiredError as err:
                 print(f"SYNC session expired for {account['display_name']}: {err}", flush=True)
                 set_needs_login(account_id, True)
                 self._send_json(HTTPStatus.UNPROCESSABLE_ENTITY, {
-                    "error": "Session expired — please click ↩ Re-login to authenticate again."
+                    "error": "Session expired — please click ↩ Re-login to authenticate again.",
+                    "reason": "session_expired",
                 })
                 return
             except Exception as exc:
-                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+                # Technical error during session replay — not an OTP/re-login case.
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {
+                    "error": str(exc), "reason": "sync_error",
+                })
                 return
+            finally:
+                if _replay_crawler.get("c") is not None:
+                    _unregister_scrape(uid, _replay_crawler["c"])
 
         _categorize_scraped(txns)
         store_transactions(account_id, txns)

@@ -49,34 +49,27 @@
         },
         {
             "action": "wait_for_selector",
-            "selector": "#onlineId1"
+            "selector": "#oid"
         },
         {
             "action": "fill",
-            "selector": "#onlineId1",
+            "selector": "#oid",
             "value": "$username"
         },
         {
-            "action": "click",
-            "selector": "#signIn"
-        },
-        {
-            "action": "wait_for_selector",
-            "selector": "#tlpvt-passcode-input"
-        },
-        {
             "action": "fill",
-            "selector": "#tlpvt-passcode-input",
+            "selector": "#pass",
             "value": "$password"
         },
         {
             "action": "click",
-            "selector": "#signIn"
+            "selector": "#secure-signin-submit"
         },
         {
             "action": "maybe_mfa",
-            "probe_selector": "#tlpvt-otp-input",
-            "probe_timeout": 5000
+            "probe_url_contains": ["/authcode", "/auth/signon"],
+            "probe_selectors": ["[id*='otp']", "[name*='code']", "#tlpvt-otp-input"],
+            "probe_timeout": 15000
         },
         {
             "action": "wait_for_url",

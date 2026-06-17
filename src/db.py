@@ -145,7 +145,6 @@ def add_account(bank_key: str, display_name: str, sync_period: str = "1m", accou
         "needs_login":         False,
         "last_url":            None,
         "account_balance":     None,
-        "plaid_item_id":       None,
         "source":              "scraped",
     })
     return account_id
@@ -241,12 +240,6 @@ def set_has_credentials(account_id: int, flag: bool) -> None:
 
 def set_account_balance(account_id: int, balance: str) -> None:
     _accounts_collection().document(str(account_id)).update({"account_balance": balance})
-
-
-def set_plaid_item_id(account_id: int, item_id: str) -> None:
-    _accounts_collection().document(str(account_id)).update(
-        {"plaid_item_id": item_id, "source": "plaid"}
-    )
 
 
 def set_investment_balance(account_id: int, balance: str) -> None:

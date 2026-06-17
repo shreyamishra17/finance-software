@@ -426,6 +426,35 @@
         return fetch(base + path, next);
       }
 
+      // ── Cancel in-flight headless sync when the FIFO window closes ──────────
+      // A server-side headless scrape (Playwright) keeps running even if the
+      // user walks away. When the window/tab is closed or hidden, fire a
+      // best-effort beacon so the backend aborts the scrape and shuts the
+      // headless browser down instead of leaving it running. sendBeacon can't
+      // set an Authorization header, so the token rides in the JSON body.
+      function _cancelHeadlessSyncBeacon() {
+        try {
+          const token = localStorage.getItem(AUTH_TOKEN_KEY);
+          if (!token) return;
+          const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+          const base = isLocal ? "" : CLOUD_API_BASE;
+          const url = base + "/api/sync/cancel";
+          const payload = JSON.stringify({ token });
+          if (navigator.sendBeacon) {
+            // Use a text/plain Blob — avoids a CORS preflight that would be
+            // skipped during unload anyway.
+            navigator.sendBeacon(url, new Blob([payload], { type: "text/plain" }));
+          } else {
+            // Fallback for browsers without sendBeacon.
+            fetch(url, { method: "POST", body: payload, headers: { "Content-Type": "text/plain" }, keepalive: true }).catch(() => {});
+          }
+        } catch (_) {}
+      }
+      // pagehide fires reliably on close/navigation (incl. bfcache); also catch
+      // the tab being hidden as a backstop.
+      window.addEventListener("pagehide", _cancelHeadlessSyncBeacon);
+      window.addEventListener("beforeunload", _cancelHeadlessSyncBeacon);
+
       function _showAuthGate(message = "") {
         document.getElementById("authGate").hidden = false;
         setDemoAuthMode("login");
@@ -1960,13 +1989,11 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
               <div class="acct-overflow-menu">
                 <button onclick="syncAccount(event,${acct.id})">↻ Sync now</button>
                 <button onclick="reloginAccount(event,${acct.id})">↩ Re-login</button>
-                <button onclick="openSaveCredentials(event,${acct.id})"${
-                  acct.has_credentials && acct.needs_login ? ' style="background:#fff4e6;color:#9a3412;font-weight:600"' : ""
+                ${acct.has_credentials ? `<button onclick="openSaveCredentials(event,${acct.id})"${
+                  acct.needs_login ? ' style="background:#fff4e6;color:#9a3412;font-weight:600"' : ""
                 }>${
-                  !acct.has_credentials
-                    ? "🔑 Save password"
-                    : (acct.needs_login ? "🔑 Re-update password" : "🔑 Update password")
-                }</button>
+                  acct.needs_login ? "🔑 Re-update password" : "🔑 Update password"
+                }</button>` : ""}
                 <button onclick="recategorizeAccount(event,${acct.id})">⟳ Fix Categories</button>
                 <button class="acct-overflow-del" onclick="deleteAccount(event,${acct.id})">✕ Remove</button>
                 <div class="acct-overflow-autosync" onclick="event.stopPropagation()">
@@ -2524,69 +2551,6 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
         document.getElementById("periodFilterRow").style.display = "";
       }
 
-      // ── Connect bank via Plaid Link ───────────────────────────────────
-      function _loadPlaidScript() {
-        return new Promise((resolve, reject) => {
-          if (window.Plaid) { resolve(); return; }
-          const s = document.createElement("script");
-          s.src = "https://cdn.plaid.com/link/v3/stable/link-initialize.js";
-          s.onload = resolve;
-          s.onerror = () => reject(new Error("Failed to load Plaid Link script. Check your internet connection."));
-          document.head.appendChild(s);
-        });
-      }
-
-      async function connectViaPlaid() {
-        document.getElementById("bankPickerOverlay").style.display = "none";
-        const status = document.getElementById("connectBankStatus");
-        status.style.display = "block";
-        status.textContent = "Opening Plaid Link…";
-
-        try {
-          await _loadPlaidScript();
-          const { link_token, error } = await _apiFetch("/api/plaid/create-link-token", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-          }).then(r => r.json());
-          if (error) throw new Error(error);
-
-          const handler = Plaid.create({
-            token: link_token,
-            onSuccess: async (public_token, metadata) => {
-              status.textContent = "Fetching your transactions — this may take a moment…";
-              try {
-                const data = await _apiFetch("/api/plaid/exchange-token", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    public_token,
-                    institution_name: metadata.institution?.name || "Plaid Account",
-                  }),
-                }).then(r => r.json());
-                if (data.error) throw new Error(data.error);
-                status.textContent = `${data.account.display_name} connected — ${data.count} transaction${data.count !== 1 ? "s" : ""} stored.`;
-                await loadAccounts();
-                _renderLiveTransactions(data.transactions, data.account.display_name, data.account);
-                currentAccountId = data.account.id;
-                document.getElementById("periodFilterRow").style.display = "";
-              } catch (err) {
-                status.textContent = `Error: ${err.message}`;
-              }
-            },
-            onExit: (err) => {
-              if (err) {
-                status.textContent = `Plaid error: ${err.display_message || err.error_code || "Unknown error"}`;
-              } else {
-                status.style.display = "none";
-              }
-            },
-          });
-          handler.open();
-        } catch (err) {
-          status.textContent = `Error: ${err.message}`;
-        }
-      }
-
       // ── Credential modal ──────────────────────────────────────────────
       const BANK_META = {
         capital_one: { name: "Capital One", icon: "💳" },
@@ -2725,12 +2689,10 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
               <div class="acct-overflow-menu sidebar-overflow-menu">
                 ${!isSandboxAcct ? `<button onclick="syncAccount(event,${acct.id})">↻ Sync now</button>` : ""}
                 ${!isSandboxAcct ? `<button onclick="reloginAccount(event,${acct.id})">↩ Re-login</button>` : ""}
-                ${!isSandboxAcct ? `<button onclick="openSaveCredentials(event,${acct.id})"${
-                  acct.has_credentials && acct.needs_login ? ' style="background:#fff4e6;color:#9a3412;font-weight:600"' : ""
+                ${(!isSandboxAcct && acct.has_credentials) ? `<button onclick="openSaveCredentials(event,${acct.id})"${
+                  acct.needs_login ? ' style="background:#fff4e6;color:#9a3412;font-weight:600"' : ""
                 }>${
-                  !acct.has_credentials
-                    ? "🔑 Save password"
-                    : (acct.needs_login ? "🔑 Re-update password" : "🔑 Update password")
+                  acct.needs_login ? "🔑 Re-update password" : "🔑 Update password"
                 }</button>` : ""}
                 <button class="acct-overflow-del" onclick="deleteAccount(event,${acct.id})">✕ Remove</button>
               </div>
@@ -2960,7 +2922,7 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
       // connections are fully automatic. No credentials ever leave their device.
 
       let _scBank = null;
-      const _scBankNames = { boa: "Bank of America", capital_one: "Capital One", discover: "Discover" };
+      const _scBankNames = { boa: "Bank of America", capital_one: "Capital One", discover: "Discover", icici: "ICICI Bank" };
 
       // Tracks whether bridge.js has confirmed the extension is present.
       // Set by the custom DOM event (method 2) before any user interaction.
@@ -3000,6 +2962,28 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
         document.getElementById("smartConnectOverlay").style.display = "none";
       }
 
+      // After a successful Smart Connect, offer (once) to save the bank login for
+      // unattended background sync. Skipped if the account already has credentials.
+      let _scCredsAccountId = null;
+      function _scOfferSaveCreds(bankKey) {
+        const acct = (_lastAccountsCache || []).find(a => a.bank_key === bankKey);
+        if (!acct || acct.has_credentials) return;
+        _scCredsAccountId = acct.id;
+        document.getElementById("saveCredsRecommendBank").textContent =
+          acct.display_name || _scBankNames[bankKey] || bankKey;
+        document.getElementById("saveCredsRecommendOverlay").style.display = "flex";
+      }
+      function acceptSaveCredsRecommend() {
+        document.getElementById("saveCredsRecommendOverlay").style.display = "none";
+        if (_scCredsAccountId != null) {
+          openSaveCredentials({ stopPropagation() {} }, _scCredsAccountId);
+        }
+      }
+      function declineSaveCredsRecommend() {
+        document.getElementById("saveCredsRecommendOverlay").style.display = "none";
+        _scCredsAccountId = null;
+      }
+
       function _scShowStatus(text) {
         document.getElementById("smartConnectInstallPrompt").style.display = "none";
         document.getElementById("smartConnectStatus").style.display = "";
@@ -3026,9 +3010,11 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
         if (msg.status === "done") {
           window.removeEventListener("message", _scOnMessage);
           _scShowStatus("✅ Connected! " + (msg.data?.count ?? 0) + " transactions imported.");
-          setTimeout(() => {
+          const connectedBank = _scBank;
+          setTimeout(async () => {
             document.getElementById("smartConnectOverlay").style.display = "none";
-            loadAccounts();
+            await loadAccounts();
+            _scOfferSaveCreds(connectedBank);
           }, 1400);
         } else if (msg.status === "error") {
           window.removeEventListener("message", _scOnMessage);
@@ -3047,34 +3033,22 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
           <span class="bank-soon" style="color:#1f5f55;font-weight:600">Try Demo Bank</span>
         </button>
         <div class="bank-picker-divider">— connect your bank —</div>
-        <div class="bank-option-row">
-          <button class="bank-option bank-option-manual" onclick="connectBank('boa')">
-            <span class="bank-name">Bank of America</span>
-            <span class="bank-option-method">Open in browser</span>
-          </button>
-          <button class="bank-option-auto" onclick="openSmartConnect('boa')">⚡ Let FIFO handle it</button>
-        </div>
-        <div class="bank-option-row">
-          <button class="bank-option bank-option-manual" onclick="connectBank('capital_one')">
-            <span class="bank-name">Capital One</span>
-            <span class="bank-option-method">Open in browser</span>
-          </button>
-          <button class="bank-option-auto" onclick="openCredentialModal('capital_one')">⚡ Let FIFO handle it</button>
-        </div>
-        <div class="bank-option-row">
-          <button class="bank-option bank-option-manual" onclick="connectBank('discover')">
-            <span class="bank-name">Discover</span>
-            <span class="bank-option-method">Open in browser</span>
-          </button>
-          <button class="bank-option-auto bank-option-auto-soon" disabled>⚡ Coming soon</button>
-        </div>
-        <div class="bank-option-row">
-          <button class="bank-option bank-option-manual" onclick="connectBank('icici')">
-            <span class="bank-name">ICICI Bank</span>
-            <span class="bank-option-method">Open in browser</span>
-          </button>
-          <button class="bank-option-auto bank-option-auto-soon" disabled>⚡ Coming soon</button>
-        </div>
+        <button class="bank-option" onclick="openSmartConnect('boa')">
+          <span class="bank-name">Bank of America</span>
+          <span class="bank-option-method">⚡ Connect</span>
+        </button>
+        <button class="bank-option" onclick="openSmartConnect('capital_one')">
+          <span class="bank-name">Capital One</span>
+          <span class="bank-option-method">⚡ Connect</span>
+        </button>
+        <button class="bank-option" onclick="openSmartConnect('discover')">
+          <span class="bank-name">Discover</span>
+          <span class="bank-option-method">⚡ Connect</span>
+        </button>
+        <button class="bank-option" onclick="openSmartConnect('icici')">
+          <span class="bank-name">ICICI Bank</span>
+          <span class="bank-option-method">⚡ Connect</span>
+        </button>
       </div>
       <button class="bank-picker-cancel" onclick="closeBankPicker()">Cancel</button>
     </div>
@@ -3176,6 +3150,23 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
   </div>
   <!-- Smart Connect modal -->
   <!-- Save credentials modal -->
+  <div id="saveCredsRecommendOverlay" class="bank-picker-overlay" style="display:none" onclick="if(event.target===this)declineSaveCredsRecommend()">
+    <div class="bank-picker-modal smart-connect-modal">
+      <div class="bank-picker-title">✅ Connected!</div>
+      <div class="smart-connect-subtitle">Keep <span id="saveCredsRecommendBank"></span> synced automatically?</div>
+      <p class="smart-connect-note" style="margin:14px 0;line-height:1.6;font-size:13px;color:#555">
+        Save your bank login so FIFO can refresh in the background even when you're not
+        signed in. It's kept in your device's secure Keychain and used only to log in on
+        your behalf — <strong>no one else can read it, and we never share it</strong>.
+        You can remove it anytime from the account menu.
+      </p>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
+        <button type="button" class="demo-sandbox-btn" onclick="acceptSaveCredsRecommend()">Yes, keep it synced (recommended)</button>
+        <button type="button" class="bank-picker-cancel" onclick="declineSaveCredsRecommend()">Not now</button>
+      </div>
+    </div>
+  </div>
+
   <div id="saveCredsOverlay" class="bank-picker-overlay" style="display:none" onclick="closeSaveCredentials(event)">
     <div class="bank-picker-modal smart-connect-modal">
       <div class="bank-picker-title">🔑 Save your bank password</div>

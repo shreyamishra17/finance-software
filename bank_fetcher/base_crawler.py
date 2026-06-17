@@ -26,6 +26,26 @@ class SessionExpiredError(RuntimeError):
     """Raised when a saved browser session is no longer valid."""
 
 
+class MfaRequiredError(RuntimeError):
+    """Raised when the bank GENUINELY presents an OTP/MFA challenge that we
+    cannot satisfy automatically (no TOTP secret, no interactive callback).
+
+    This is deliberately distinct from generic failures (stale selectors,
+    navigation timeouts, bot blocks) so callers can tell "the user must
+    complete a one-time code" apart from "something broke." Only THIS error
+    should ever surface a re-login/OTP prompt — never a generic exception."""
+
+
+class ScrapeCancelled(RuntimeError):
+    """Raised inside a running scrape when cancellation was requested (e.g. the
+    user closed the FIFO window mid-sync). The scrape unwinds through its
+    `finally` blocks, which close the headless browser cleanly in the SAME
+    thread that created it (Playwright's sync API is single-thread only).
+
+    This is NOT an error condition — callers should treat it as a benign abort,
+    never as an OTP/re-login situation."""
+
+
 @dataclass
 class TransactionRecord:
     date: str
@@ -111,6 +131,12 @@ class BankCrawler:
         self._is_automated: bool = False  # True during run_scrape_automated — disables input() blocking
         self._since_date: Optional[datetime] = None  # stored for use in step value resolution
         self._extra_values: dict[str, str] = {}  # arbitrary values captured via "capture" steps
+        # Cooperative cancellation. A *different* thread (the HTTP handler that
+        # receives a /api/sync/cancel beacon when the user closes the FIFO
+        # window) sets this True via request_cancel(); the scrape thread checks
+        # it at step boundaries and raises ScrapeCancelled, which unwinds and
+        # closes the browser in its own thread (Playwright sync is thread-bound).
+        self._cancelled: bool = False
 
     # ------------------------------------------------------------------ #
     # Public entry point
@@ -139,9 +165,27 @@ class BankCrawler:
     # Step execution engine
     # ------------------------------------------------------------------ #
 
+    # ------------------------------------------------------------------ #
+    # Cooperative cancellation
+    # ------------------------------------------------------------------ #
+
+    def request_cancel(self) -> None:
+        """Signal this scrape to abort at the next checkpoint. Safe to call
+        from another thread (a plain bool write is atomic in CPython). Does NOT
+        touch any Playwright object — the scrape thread owns those."""
+        self._cancelled = True
+
+    def _check_cancelled(self) -> None:
+        """Raise ScrapeCancelled if cancellation was requested. Called at step
+        boundaries and inside the scrape loop so a cancel lands promptly without
+        crossing threads into the Playwright sync API."""
+        if self._cancelled:
+            raise ScrapeCancelled("Scrape cancelled (FIFO window closed or cancel requested).")
+
     def _run_steps(self, steps: list[dict]) -> None:
         """Execute each step dict in sequence."""
         for step in steps:
+            self._check_cancelled()
             self._execute_step(step)
 
     def _execute_step(self, step: dict) -> None:
@@ -182,13 +226,49 @@ class BankCrawler:
             self._page.wait_for_load_state(step["state"], timeout=t["page_load"])
 
         elif action == "maybe_mfa":
-            # Probe for MFA field; call _handle_mfa() if found, silently skip if absent
+            # Probe for an MFA / "verify it's you" challenge after login. If one
+            # is detected, call _handle_mfa() — which, during an unattended sync,
+            # raises MfaRequiredError so the caller can honestly prompt re-login
+            # (never a silent technical timeout). If nothing shows up within the
+            # probe window, the device is trusted / no MFA this session → continue.
+            #
+            # Detection accepts ANY of:
+            #   probe_selector       — single CSS selector (back-compat)
+            #   probe_selectors      — list of CSS selectors (any match = MFA)
+            #   probe_url_contains   — substring(s) of the URL (e.g. "/authcode")
+            # We POLL across the window because the challenge page can take a few
+            # seconds to render after the login POST.
             probe_timeout = step.get("probe_timeout", 5000)
-            try:
-                self._page.wait_for_selector(step["probe_selector"], timeout=probe_timeout)
+            selectors = list(step.get("probe_selectors") or [])
+            if step.get("probe_selector"):
+                selectors.append(step["probe_selector"])
+            url_signals = step.get("probe_url_contains") or []
+            if isinstance(url_signals, str):
+                url_signals = [url_signals]
+            url_signals = [s.lower() for s in url_signals]
+
+            deadline = time.monotonic() + (probe_timeout / 1000.0)
+            detected = False
+            while time.monotonic() < deadline and not detected:
+                try:
+                    cur = (self._page.url or "").lower()
+                except Exception:
+                    cur = ""
+                if any(sig in cur for sig in url_signals):
+                    detected = True
+                    break
+                for sel in selectors:
+                    try:
+                        if self._page.locator(sel).count() > 0:
+                            detected = True
+                            break
+                    except Exception:
+                        pass
+                if not detected:
+                    self._page.wait_for_timeout(500)
+            if detected:
+                print(f"  [maybe_mfa] verification challenge detected (url={self._page.url})", flush=True)
                 self._handle_mfa()
-            except PWTimeoutError:
-                pass  # Trusted device or MFA not required this session
 
         elif action == "inject_banner":
             # Inject a visible guidance banner into the current page (non-blocking)
@@ -780,6 +860,7 @@ class BankCrawler:
 
         try:
             while not done:
+                self._check_cancelled()
                 rows = self._page.query_selector_all(row_sel)
                 # "next_page" mode: each page replaces rows — process ALL rows every iteration.
                 # "scroll" mode: rows accumulate — only process the newly added tail.
@@ -1546,35 +1627,50 @@ class BankCrawler:
         if mode == "none":
             return
 
-        if mode == "totp":
-            if not self._creds or not self._creds.totp_secret:
-                raise RuntimeError(
-                    "mfa_mode is 'totp' but no TOTP secret found in keychain. "
-                    f"Re-run: python -m bank_fetcher setup --bank {self._cfg['bank_key']}"
-                )
-            otp_code = generate_totp(self._creds.totp_secret)
-        else:  # otp_interactive
-            # If a TOTP secret is stored in credentials, use it automatically
-            # (enables background sync for banks configured as otp_interactive)
-            if self._creds and self._creds.totp_secret:
-                otp_code = generate_totp(self._creds.totp_secret)
-            elif self._mfa_callback:
-                # Server-side (Smart Connect): block until the API receives the OTP
-                otp_code = self._mfa_callback()
-            elif self._is_automated:
-                # Automated mode with no TOTP and no callback — can't proceed without blocking
-                bank_name = self._cfg.get("bank_display_name", self._cfg.get("bank_key", "this bank"))
-                raise RuntimeError(
-                    f"Automated sync for {bank_name} requires a TOTP secret for OTP automation. "
-                    f"Store your TOTP secret in the keychain "
-                    f"(python -m bank_fetcher setup --bank {self._cfg['bank_key']}), "
-                    "or click Re-login to authenticate manually."
-                )
-            else:
-                # Local dev / interactive mode: prompt in the terminal
-                bank_name = self._cfg["bank_display_name"]
-                otp_code = input(f"\n[{bank_name}] Enter the OTP sent to your phone/email: ").strip()
+        # ── TODO: OTP automation deferred ─────────────────────────────────────
+        # Automatic OTP solving (TOTP-secret generation + server-side interactive
+        # callback) is intentionally disabled for now — we'll build it out as a
+        # dedicated effort later. Until then, a genuine OTP challenge means a
+        # human must complete it via manual re-login; we raise MfaRequiredError
+        # so callers can prompt for that WITHOUT mistaking it for a technical
+        # failure. Original automation preserved below (commented) for when we
+        # resume the work:
+        #
+        # if mode == "totp":
+        #     if not self._creds or not self._creds.totp_secret:
+        #         raise RuntimeError("mfa_mode is 'totp' but no TOTP secret found in keychain. "
+        #                            f"Re-run: python -m bank_fetcher setup --bank {self._cfg['bank_key']}")
+        #     otp_code = generate_totp(self._creds.totp_secret)
+        # else:  # otp_interactive
+        #     if self._creds and self._creds.totp_secret:
+        #         otp_code = generate_totp(self._creds.totp_secret)
+        #     elif self._mfa_callback:
+        #         otp_code = self._mfa_callback()        # Smart Connect: block for API-delivered OTP
+        #     elif self._is_automated:
+        #         raise RuntimeError("Automated sync requires a TOTP secret for OTP automation …")
+        #     else:
+        #         otp_code = input(f"\n[{bank_name}] Enter the OTP sent to your phone/email: ").strip()
+        # self._page.fill(mfa_sel["otp_field"], otp_code)
+        # self._page.click(mfa_sel["submit_button"])
+        # self._page.wait_for_load_state("networkidle", timeout=t["page_load"])
+        # ──────────────────────────────────────────────────────────────────────
 
+        bank_name = self._cfg.get("bank_display_name", self._cfg.get("bank_key", "this bank"))
+
+        if self._is_automated:
+            # Unattended/headless sync + OTP automation deferred → there is no
+            # human to type the code. Signal a GENUINE OTP requirement so the
+            # caller can request a manual re-login. This is the ONLY condition
+            # that should ever produce an OTP/re-login prompt (never a generic
+            # exception or a stale-selector timeout).
+            raise MfaRequiredError(
+                f"{bank_name} asked for a one-time verification code, which can't be "
+                "completed during an unattended sync. Please re-login to verify."
+            )
+
+        # Local/interactive (headed) CLI run: a human is watching the terminal
+        # and can type the code. Left intact for manual dev use.
+        otp_code = input(f"\n[{bank_name}] Enter the OTP sent to your phone/email: ").strip()
         self._page.fill(mfa_sel["otp_field"], otp_code)
         self._page.click(mfa_sel["submit_button"])
         self._page.wait_for_load_state("networkidle", timeout=t["page_load"])

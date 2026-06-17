@@ -31,9 +31,22 @@ async function runScrape(config, currentUrl) {
   // BoA returns accounts-overview.go?msgId=MSGOBOError when it flags a
   // session for anti-abuse. Don't touch the DOM there — any click would
   // just trigger another error redirect and dig the hole deeper.
+  // A marker (URL or body text) is only a REAL block if the page is genuinely
+  // unusable. BoA routinely renders a benign "problem processing your request"
+  // warning box on a fully functional accounts-overview page (msgId=MSGOBOError)
+  // where the real account links are present and clickable. In that case we must
+  // NOT bail — we proceed and click the account just like the user would.
+  // skip_override_selector names the elements that prove the page is usable.
+  const pageIsUsable = !!(config.skip_override_selector &&
+    document.querySelector(config.skip_override_selector));
+
   if (Array.isArray(config.skip_on_url_contains)) {
     for (const marker of config.skip_on_url_contains) {
       if (currentUrl.includes(marker)) {
+        if (pageIsUsable) {
+          log(`URL marker "${marker}" present but page is usable — treating as benign warning, continuing.`);
+          break;
+        }
         log(`Detected error/lockout URL marker "${marker}" — aborting scrape entirely.`);
         showBanner("Bank session blocked — please log out, clear cookies, and try again.", "error");
         return;
@@ -44,8 +57,9 @@ async function runScrape(config, currentUrl) {
   // cases where the URL hasn't changed yet but BoA already rendered the error.
   const bodyText = (document.body?.innerText || "").slice(0, 5000).toLowerCase();
   if (
-    bodyText.includes("your access is restricted") ||
-    bodyText.includes("there was a problem processing your request")
+    !pageIsUsable &&
+    (bodyText.includes("your access is restricted") ||
+     bodyText.includes("there was a problem processing your request"))
   ) {
     log("Detected restriction message in page body — aborting scrape.");
     showBanner("Bank session blocked — please log out, clear cookies, and try again.", "error");
@@ -91,10 +105,66 @@ async function runScrape(config, currentUrl) {
       }
     } else if (step.action === "wait_and_click_selector") {
       try {
+        // ── Loop guard ────────────────────────────────────────────────────
+        // If clicking lands us back on the SAME url (e.g. BoA's "Continue"
+        // button bouncing to accounts-overview.go?msgId=MSGOBOError), content.js
+        // re-runs and we'd click again forever. Track clicks per-URL in
+        // sessionStorage (survives same-tab reloads) and bail after 2 attempts.
+        const loopKey = "fifo_nav_clicks_" + location.pathname + location.search;
+        const priorClicks = parseInt(sessionStorage.getItem(loopKey) || "0", 10);
+        if (priorClicks >= 2) {
+          log(`Loop guard: already clicked ${priorClicks}x from this URL with no progress — stopping to avoid a refresh loop.`);
+          showBanner(config.first_connect_hint || "Please click your account to continue.");
+          return;
+        }
+
         log(`Navigation: waiting for selector: ${step.selector}`);
         showBanner("Opening your account…");
-        const el = await waitForElement(() => document.querySelector(step.selector), step.timeout || 30000);
+        // The selector is deliberately broad (BoA renames classes often), so it
+        // matches several decoys alongside the real account link: a "Continue"
+        // button, a rewards/special-offer link, a Merrill cross-sell — all share
+        // the same redirect.go?source=overview href shape. Rather than blocklist
+        // each decoy, SCORE every candidate and click the best one:
+        //   • hard-exclude by visible text   (click_skip_text  → e.g. "continue")
+        //   • hard-exclude by href substring  (click_skip_href  → "rewards", …)
+        //   • positively prefer account links (click_prefer_text → "banking", …)
+        //   • positively prefer links whose text has a masked acct number (digits)
+        // This positively targets the account link instead of guessing which
+        // decoy comes next in DOM order.
+        const skipText = (step.click_skip_text || []).map(s => s.toLowerCase());
+        const skipHref = (step.click_skip_href || []).map(s => s.toLowerCase());
+        const preferText = (step.click_prefer_text || []).map(s => s.toLowerCase());
+        const scoreOf = (cand) => {
+          const t = (cand.innerText || cand.textContent || "").trim().toLowerCase();
+          const href = (cand.getAttribute("href") || cand.href || "").toLowerCase();
+          // Hard excludes — never click these.
+          if (t && skipText.some(s => t === s || t.includes(s))) return -1;
+          if (href && skipHref.some(s => href.includes(s))) return -1;
+          let score = 0;
+          if (t && preferText.some(s => t.includes(s))) score += 100; // account-type keyword
+          if (/\d{3,}/.test(t)) score += 20;                          // masked account number
+          if (t) score += 1;                                          // any visible label
+          return score;
+        };
+        const pick = () => {
+          const all = [...document.querySelectorAll(step.selector)];
+          let best = null, bestScore = 0;
+          for (const cand of all) {
+            const s = scoreOf(cand);
+            // Read-only diagnostic: dump every candidate so the console shows
+            // exactly what matched (text + href + score) — no guessing which
+            // link won or why.
+            const t = (cand.innerText || cand.textContent || "").trim().slice(0, 60);
+            const h = (cand.getAttribute("href") || cand.href || "").slice(0, 120);
+            log(`  candidate score=${s} text="${t}" href="${h}"`);
+            if (s > bestScore) { bestScore = s; best = cand; }
+          }
+          if (best) log(`Navigation: picked best candidate score=${bestScore} of ${all.length} matches`);
+          return best; // null → nothing scored > 0 (all excluded); waitForElement keeps polling
+        };
+        const el = await waitForElement(pick, step.timeout || 30000);
         log("Navigation: clicking", el.innerText?.trim() || el.href);
+        sessionStorage.setItem(loopKey, String(priorClicks + 1));
         // Some BoA links navigate via an in-page router; a plain .click() can
         // be swallowed if the element isn't fully wired. dispatch a real
         // MouseEvent so the framework's listeners fire.

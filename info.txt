@@ -1,5 +1,5 @@
 FIFO — CLOUD DEPLOYMENT MAP
-Last updated: 2026-05-28
+Last updated: 2026-05-30
 
 ==================================================================
 SOURCE OF TRUTH (everything consolidates here)
@@ -34,6 +34,50 @@ RUNTIME ENV VARS (set on the Cloud Run service by deploy.sh + CI)
 - CATEGORIZER_MODEL_DIR=/app/categorizer/models/...   (model fetched from GCS at runtime)
 Credentials: Application Default Credentials (Cloud Run runtime service account).
 No service-account key file is bundled into the image.
+
+==================================================================
+LOCAL DEVELOPMENT (running the backend on your own machine)
+==================================================================
+WHY A SETUP STEP IS NEEDED
+  src/db.py authenticates to Firestore with Application Default
+  Credentials (ADC). On Cloud Run this is automatic (the runtime
+  service account). On a laptop there are NO credentials by default,
+  so `python3 src/serve_demo.py` crashes at startup with:
+      google.auth.exceptions.DefaultCredentialsError
+  IMPORTANT: this is INFRASTRUCTURE auth — one credential the SERVER
+  holds to reach the database. It is NOT the app's email/password
+  login. End-users of the deployed app never touch it; only people
+  running the server OUTSIDE Cloud Run (i.e. locally) hit this.
+
+WHO CAN RUN IT LOCALLY (against the real shared data)
+  Anyone with IAM access to Firestore in project 487822, via either:
+    (a) a Google account granted a Firestore role (e.g. "Cloud
+        Datastore User") on 487822 — the project owner adds people, OR
+    (b) a service-account key JSON for 487822 (no Google login needed).
+  Confirmed-working account: personalfin994@gmail.com.
+  Without 487822 access you can still run the CODE against your OWN
+  Firebase project (point the env vars below at yours) — the server
+  boots fine, you just won't see the shared data (empty/fresh DB).
+
+ONE-TIME SETUP — Option A (your own Google account, via gcloud)
+  1. gcloud auth application-default login --account=<you@gmail.com>
+  2. gcloud auth application-default set-quota-project financesoftware-487822
+  3. Add to .env  (auto-loaded by serve_demo.py; .env is gitignored):
+        GOOGLE_CLOUD_PROJECT=financesoftware-487822
+        FIRESTORE_DATABASE=finance-database
+  4. python3 src/serve_demo.py     ->  http://localhost:8000
+
+ONE-TIME SETUP — Option B (service-account key file)
+  1. Get a JSON key for a service account in 487822 with Firestore
+     access. Keep it OUT of git — it is a secret.
+  2. Add to .env:
+        GOOGLE_APPLICATION_CREDENTIALS=/abs/path/to/key.json
+        FIRESTORE_DATABASE=finance-database
+  3. python3 src/serve_demo.py
+
+GOTCHA: FIRESTORE_DATABASE MUST be "finance-database" (the DB is
+  named, not "(default)"). Omitting it points the server at a
+  different/empty database and you'll see no data.
 
 ==================================================================
 FRONTEND (Cloudflare Pages)

@@ -176,8 +176,88 @@ function _bankKeyToStartUrl(bank_key) {
     capital_one: "https://myaccounts.capitalone.com/accountSummary",
     boa:         "https://secure.bankofamerica.com/auth/signon/",
     icici:       "https://retailnetbanking.icici.bank.in/",
+    discover:    "https://card.discover.com/cardmembersvcs/achome/homepage",
   };
   return map[bank_key] || null;
+}
+
+// ── Headless fallback (unified sync ladder, step 2) ───────────────────────
+// When the live-session path can't run (session expired, or no open bank
+// tab) AND the user saved their password, ask the FIFO backend to log in
+// headlessly via Playwright (POST /api/accounts/<id>/sync, which reads the
+// OS Keychain). Returns a STATUS object so callers can react precisely:
+//   { status: "ok",      newCount, scrapedCount }  — synced, badge cleared
+//   { status: "relogin", reason, error }           — GENUINE OTP / expired
+//                                                     session: a human must
+//                                                     re-login (HTTP 422)
+//   { status: "error",   error }                    — TECHNICAL failure (HTTP
+//                                                     500 / network). NOT an
+//                                                     OTP case — callers must
+//                                                     NOT raise a re-login
+//                                                     prompt (anti-false-alarm)
+//   { status: "skip" }                              — no saved password to try
+async function _headlessSyncFallback(account, fifoUrl, authToken) {
+  if (!account?.id) return { status: "skip" };
+  // Only attempt if a password is actually saved — otherwise there's nothing
+  // to log in with.
+  if (!account.has_credentials) {
+    log(`${account.bank_key} (#${account.id}): no saved password — skipping headless fallback.`);
+    return { status: "skip" };
+  }
+  log(`${account.bank_key} (#${account.id}): live session unavailable — trying headless login with saved password…`);
+  try {
+    const resp = await fetch(`${fifoUrl}/api/accounts/${account.id}/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ..._authHeaders(authToken) },
+      body: JSON.stringify({}),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.ok) {
+      log(`${account.bank_key} (#${account.id}): headless sync succeeded — ${data.count ?? 0} new transactions.`);
+      // Clear any stale needs_login badge now that we synced successfully.
+      try {
+        await fetch(`${fifoUrl}/api/accounts/${account.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", ..._authHeaders(authToken) },
+          body: JSON.stringify({ needs_login: false, status: "connected" }),
+        });
+      } catch (_) {}
+      return { status: "ok", newCount: data.count ?? 0, scrapedCount: data.count ?? 0 };
+    }
+    if (resp.status === 422) {
+      // Server already separated genuine "human re-login needed" (OTP /
+      // expired session / no session) from technical errors. 422 == genuine.
+      log(`${account.bank_key} (#${account.id}): headless sync needs human re-login [${data.reason || "?"}]: ${data.error || ""}`);
+      return { status: "relogin", reason: data.reason, error: data.error };
+    }
+    if (resp.status === 409 || data.reason === "cancelled") {
+      // Sync was deliberately cancelled (user closed the FIFO window). Benign —
+      // NOT an error, NOT a re-login. Just skip; next cycle will retry.
+      log(`${account.bank_key} (#${account.id}): headless sync cancelled (window closed).`);
+      return { status: "skip" };
+    }
+    // 500 / other == technical failure. Do NOT treat as OTP/re-login.
+    log(`${account.bank_key} (#${account.id}): headless sync technical error (${resp.status}): ${data.error || "unknown"}`);
+    return { status: "error", error: data.error };
+  } catch (e) {
+    log(`${account.bank_key} (#${account.id}): headless sync network error: ${e.message}`);
+    return { status: "error", error: e.message };
+  }
+}
+
+// Flag an account as genuinely needing a human re-login (OTP / expired session).
+// IMPORTANT: only call this for GENUINE re-login situations — never for plain
+// technical failures, which must retry silently next cycle instead of nagging
+// the user with a false "re-login required" alarm.
+async function _markNeedsLogin(account, fifoUrl, authToken) {
+  if (!account?.id) return;
+  try {
+    await fetch(`${fifoUrl}/api/accounts/${account.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ..._authHeaders(authToken) },
+      body: JSON.stringify({ needs_login: true, status: "needs_relogin" }),
+    });
+  } catch (_) {}
 }
 
 // ── Main sync orchestrator ────────────────────────────────────────────────
@@ -296,8 +376,33 @@ async function syncBank(account, fifoUrl, startUrl, timeoutMs, firstConnect = fa
           );
         }
       } else {
-        // No existing tab — tell the caller we can't do a silent sync without
-        // one. The UI will prompt the user to open the bank and try again.
+        // No existing tab — the live-session path can't run. Unified ladder
+        // step 2: if a password is saved, log in headlessly server-side
+        // instead of failing. This is the common case for the unattended
+        // 6-hour background sync when no bank tab is open.
+        const fb = await _headlessSyncFallback(account, fifoUrl, authToken);
+        if (fb.status === "ok") {
+          _syncResult = { newCount: fb.newCount, scrapedCount: fb.scrapedCount };
+          await chrome.storage.local.set({ lastSync: new Date().toISOString(), lastError: null, syncing: false });
+          return _syncResult;
+        }
+        if (fb.status === "relogin") {
+          // GENUINE OTP / expired session — manual re-login is warranted.
+          await _markNeedsLogin(account, fifoUrl, authToken);
+          throw new Error(
+            `${account.display_name || account.bank_key} needs you to re-login` +
+            (fb.reason === "otp_required" ? " (your bank asked for a verification code)." : ".")
+          );
+        }
+        if (fb.status === "error") {
+          // TECHNICAL failure — NOT an OTP/re-login case. Don't set a re-login
+          // badge or claim OTP; report a soft, retryable error.
+          throw new Error(
+            `${account.display_name || account.bank_key}: sync couldn't complete right now — will retry next cycle.`
+          );
+        }
+        // fb.status === "skip": no saved password to try silently. Tell the
+        // user to open the bank (or save their password) and try again.
         throw new Error(
           `Open ${account.display_name || account.bank_key} in a tab (and log in) before clicking Sync now. ` +
           `Sync now uses your existing logged-in session — it doesn't open a new login window.`
@@ -335,18 +440,29 @@ async function syncBank(account, fifoUrl, startUrl, timeoutMs, firstConnect = fa
     // NOT_LOGGED_IN, we bail with a clear message. The user then explicitly
     // clicks Re-login (a separate action) which opens a visible tab.
     if (result.error === "NOT_LOGGED_IN") {
-      // User didn't log in within the window, OR this was a first-connect
-      // already (no further promotion possible). Mark the account so the
-      // sidebar shows a re-login badge.
-      if (account.id) {
-        try {
-          await fetch(`${fifoUrl}/api/accounts/${account.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json", ..._authHeaders(authToken) },
-            body: JSON.stringify({ needs_login: true, status: "needs_relogin" }),
-          });
-        } catch (_) {}
+      // Live session is dead. Unified ladder step 2: before surfacing
+      // "re-login required", try the headless password login. Only on a
+      // silent/background sync (not first-connect, where the user is actively
+      // logging in themselves).
+      if (!firstConnect) {
+        const fb = await _headlessSyncFallback(account, fifoUrl, authToken);
+        if (fb.status === "ok") {
+          _syncResult = { newCount: fb.newCount, scrapedCount: fb.scrapedCount };
+          await chrome.storage.local.set({ lastSync: new Date().toISOString(), lastError: null, syncing: false });
+          return _syncResult;
+        }
+        if (fb.status === "error") {
+          // Live session was down AND the headless path hit a TECHNICAL error
+          // (not a confirmed OTP). Don't false-alarm a re-login/OTP — leave the
+          // account untouched and report a soft, retryable error.
+          await setError(`${account.display_name || account.bank_key}: sync couldn't complete right now — will retry next cycle.`);
+          return;
+        }
+        // fb.status === "relogin" or "skip" → genuine re-login needed; fall through.
       }
+      // Genuine: live session dead and we can't auto-recover (OTP required, or
+      // no saved password). Mark the account so the sidebar shows a re-login badge.
+      await _markNeedsLogin(account, fifoUrl, authToken);
       await setError(`${account.display_name || account.bank_key} session expired — please re-login.`);
       return;
     }

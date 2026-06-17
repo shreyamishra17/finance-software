@@ -126,13 +126,24 @@ def scrape_recent_transactions_headless(
     since_date: datetime | None = None,
     session_path: Path | None = None,
     account_url: str | None = None,
+    on_crawler=None,
 ) -> list[dict]:
     """
     Attempt a silent headless sync using a saved browser session.
     Raises SessionExpiredError if the session is no longer valid.
+
+    on_crawler: optional callable invoked with the freshly-created BankCrawler
+    before the scrape starts, so the caller can register it for cooperative
+    cancellation (e.g. cancel-on-window-close). It must NOT touch Playwright
+    objects from another thread — only call crawler.request_cancel().
     """
     fetcher_cfg = _load_fetcher_config(bank_key)
     crawler = BankCrawler(fetcher_cfg=fetcher_cfg, raw_dir=DEFAULT_RAW_DIR)
+    if on_crawler is not None:
+        try:
+            on_crawler(crawler)
+        except Exception:
+            pass
     records = crawler.run_scrape_headless(
         since_date=since_date,
         session_path=session_path,
