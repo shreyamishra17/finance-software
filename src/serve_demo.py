@@ -645,6 +645,17 @@ class DemoHandler(SimpleHTTPRequestHandler):
                         return
                     self._handle_get_transactions(acct_id)
                     return
+            # /api/accounts/<id>/auto-login-config
+            if path.startswith("/api/accounts/") and path.endswith("/auto-login-config"):
+                parts = path.strip("/").split("/")
+                if len(parts) == 4 and parts[3] == "auto-login-config":
+                    try:
+                        acct_id = int(parts[2])
+                    except ValueError:
+                        self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid account id"})
+                        return
+                    self._handle_auto_login_config(acct_id)
+                    return
             if path == "/api/smart-connect/status":
                 self._handle_smart_connect_status()
                 return
@@ -1629,6 +1640,93 @@ class DemoHandler(SimpleHTTPRequestHandler):
         if n:
             print(f"SYNC CANCEL: signalled {n} active scrape(s) for uid={user.get('uid')}", flush=True)
         self._send_json(HTTPStatus.OK, {"cancelled": n})
+
+    def _handle_auto_login_config(self, account_id: int) -> None:
+        """
+        GET /api/accounts/<id>/auto-login-config
+
+        Returns the saved login config + credentials so the Chrome extension can
+        open a BACKGROUND TAB IN THE USER'S REAL CHROME and auto-login when the
+        live session is gone. The real Chrome holds the bank's device-trust, so
+        this avoids the OTP that a server-side (untrusted) browser always triggers.
+
+        SECURITY: this returns the plaintext bank password to the caller. It is
+        auth-gated (do_GET authenticates the request and sets the current uid),
+        so only the authenticated owner can fetch their own credentials, and it's
+        intended for the local desktop FIFO + extension over localhost.
+        """
+        account = get_account(account_id)
+        if account is None:
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Account not found"})
+            return
+
+        import sys as _sys
+        if str(ROOT) not in _sys.path:
+            _sys.path.insert(0, str(ROOT))
+        from bank_fetcher import _load_fetcher_config  # noqa: PLC0415
+        from bank_fetcher.credential_manager import (  # noqa: PLC0415
+            get_credentials,
+            CredentialNotFoundError,
+        )
+
+        bank_key = account["bank_key"]
+        try:
+            cfg = _load_fetcher_config(bank_key)
+        except Exception as e:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": f"No fetcher config for {bank_key}: {e}"})
+            return
+
+        try:
+            creds = get_credentials(cfg)
+        except CredentialNotFoundError:
+            self._send_json(HTTPStatus.OK, {"has_credentials": False})
+            return
+
+        # Derive form selectors + URL signals from the bank's login_steps so this
+        # works for any bank that has a fetcher config — no per-bank code here.
+        start_url = None
+        username_selector = None
+        password_selector = None
+        submit_selector = None
+        success_url_substr = None
+        for step in cfg.get("login_steps", []):
+            action = step.get("action")
+            if action == "goto" and not start_url:
+                start_url = step.get("url")
+            elif action == "fill":
+                val = step.get("value") or ""
+                if "$username" in val and not username_selector:
+                    username_selector = step.get("selector")
+                elif "$password" in val and not password_selector:
+                    password_selector = step.get("selector")
+                elif not username_selector:
+                    username_selector = step.get("selector")
+                elif not password_selector:
+                    password_selector = step.get("selector")
+            elif action == "click" and not submit_selector:
+                submit_selector = step.get("selector")
+            elif action == "wait_for_url" and not success_url_substr:
+                pat = (step.get("pattern") or "").replace("*", "").strip("/")
+                success_url_substr = pat or None
+
+        self._send_json(HTTPStatus.OK, {
+            "has_credentials":    True,
+            "username":           creds.username,
+            "password":           creds.password,
+            "bank_key":           bank_key,
+            "start_url":          start_url or "",
+            "username_selector":  username_selector,
+            "password_selector":  password_selector,
+            "submit_selector":    submit_selector,
+            "success_url_substr": success_url_substr or "myaccounts",
+            # URL/markers that mean "still on a login/verification screen".
+            "login_url_substrs":  ["signon", "/login", "sign-in", "signin"],
+            # ONLY the genuine OTP/verification screen. NOTE: do NOT include the
+            # bare "/auth/signon" path here — the normal BoA login page also lives
+            # under /auth/signon (e.g. #/signOn), so it would false-positive as OTP
+            # the instant we submit. The real challenge is .../#/authcode.
+            "otp_url_substrs":    ["authcode"],
+        })
 
     def _handle_sync_account(self, account_id: int) -> None:
         """

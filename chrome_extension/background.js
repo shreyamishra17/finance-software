@@ -260,6 +260,140 @@ async function _markNeedsLogin(account, fifoUrl, authToken) {
   } catch (_) {}
 }
 
+// ── Background-tab auto-login (desktop, real Chrome) ──────────────────────
+// Fetch the saved login config (creds + form selectors) for an account.
+// Returns null if there are no saved credentials or the call fails.
+async function _fetchAutoLoginConfig(account, fifoUrl, authToken) {
+  try {
+    const r = await fetch(`${fifoUrl}/api/accounts/${account.id}/auto-login-config`, {
+      headers: _authHeaders(authToken),
+    });
+    if (!r.ok) {
+      log(`auto-login-config for ${account.bank_key} returned ${r.status}`);
+      return null;
+    }
+    const cfg = await r.json();
+    if (!cfg.has_credentials) {
+      log(`${account.bank_key}: no saved credentials for auto-login.`);
+      return null;
+    }
+    if (!cfg.username_selector || !cfg.password_selector) {
+      log(`${account.bank_key}: login selectors missing from config; can't auto-login.`);
+      return null;
+    }
+    return cfg;
+  } catch (e) {
+    log("auto-login-config fetch failed:", e.message);
+    return null;
+  }
+}
+
+const _sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Run a function in the page context of a tab and return its result.
+async function _execInTab(tabId, func, arg) {
+  try {
+    const res = await chrome.scripting.executeScript({ target: { tabId }, func, args: [arg] });
+    return res && res[0] ? res[0].result : null;
+  } catch (e) {
+    log("execInTab failed:", e.message);
+    return null;
+  }
+}
+
+// Resolve once the tab finishes loading (or after timeoutMs).
+function _waitTabComplete(tabId, timeoutMs) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    };
+    const listener = (id, info) => {
+      if (id === tabId && info.status === "complete") finish();
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+    chrome.tabs.get(tabId).then((t) => { if (t && t.status === "complete") finish(); }).catch(() => {});
+    setTimeout(finish, timeoutMs);
+  });
+}
+
+// Open page probe / fill helpers run IN the page via _execInTab.
+function _probePage(c) {
+  const href = location.href.toLowerCase();
+  const onSuccess = !!(c.success_url_substr && href.includes(c.success_url_substr.toLowerCase()));
+  // OTP by URL: only the genuine challenge substrings (e.g. "authcode").
+  const urlOtp = (c.otp_url_substrs || []).some((s) => href.includes(s.toLowerCase()));
+  // OTP by field: ONLY a VISIBLE one-time-code input counts. Broad selectors
+  // like [name*='code'] match unrelated hidden fields and false-positive.
+  let fieldOtp = false;
+  const otpEls = document.querySelectorAll("#tlpvt-otp-input, input[autocomplete='one-time-code']");
+  for (const el of otpEls) { if (el.offsetParent !== null) { fieldOtp = true; break; } }
+  const u = c.username_selector ? document.querySelector(c.username_selector) : null;
+  const p = c.password_selector ? document.querySelector(c.password_selector) : null;
+  return { href, onSuccess, urlOtp, fieldOtp, otp: (urlOtp || fieldOtp), hasForm: !!(u && p) };
+}
+
+function _fillAndSubmit(c) {
+  const setVal = (el, val) => {
+    if (!el) return;
+    el.focus();
+    el.value = val;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  setVal(document.querySelector(c.username_selector), c.username);
+  setVal(document.querySelector(c.password_selector), c.password);
+  const btn = c.submit_selector ? document.querySelector(c.submit_selector) : null;
+  if (btn) { btn.click(); return true; }
+  // Fallback: submit the password field's form.
+  const p = document.querySelector(c.password_selector);
+  if (p && p.form) { p.form.submit(); return true; }
+  return false;
+}
+
+// Drive the background tab: detect already-logged-in / OTP / login form, fill
+// the saved creds, submit, then wait for success or OTP.
+// Returns { status: "ok" | "otp" | "error" }.
+async function _autoLoginInTab(tabId, cfg) {
+  await _waitTabComplete(tabId, 45000);
+  await _sleep(1500);
+
+  let probe = await _execInTab(tabId, _probePage, cfg);
+  if (probe && probe.otp) return { status: "otp" };
+  if (probe && probe.onSuccess) return { status: "ok" }; // already logged in
+
+  // Give a slow redirect one more chance to render the login form.
+  if (!probe || !probe.hasForm) {
+    await _sleep(3000);
+    probe = await _execInTab(tabId, _probePage, cfg);
+    if (probe && probe.otp) return { status: "otp" };
+    if (probe && probe.onSuccess) return { status: "ok" };
+  }
+  if (!probe || !probe.hasForm) {
+    log("auto-login: no login form found and not logged in.");
+    return { status: "error" };
+  }
+
+  log("auto-login: filling saved credentials and submitting…");
+  await _execInTab(tabId, _fillAndSubmit, cfg);
+
+  // Poll for the outcome. Log each probe so we can see exactly where BoA lands.
+  const deadline = Date.now() + 45000;
+  while (Date.now() < deadline) {
+    await _sleep(1500);
+    const st = await _execInTab(tabId, _probePage, cfg);
+    if (!st) continue;
+    log(`auto-login probe: url=${st.href} success=${st.onSuccess} urlOtp=${st.urlOtp} fieldOtp=${st.fieldOtp} hasForm=${st.hasForm}`);
+    if (st.onSuccess) return { status: "ok" };
+    if (st.otp) return { status: "otp" };
+  }
+  log("auto-login: timed out without reaching success or OTP.");
+  return { status: "error" };
+}
+
 // ── Main sync orchestrator ────────────────────────────────────────────────
 async function syncAllAccounts() {
   const { fifoUrl = DEFAULT_FIFO, fifoAuthToken } = await chrome.storage.local.get(["fifoUrl", "fifoAuthToken"]);
@@ -320,16 +454,23 @@ async function syncAllAccounts() {
 // firstConnect=true → tab is visible so the user can log in manually;
 //                     we ignore "not logged in" signals and keep waiting.
 // firstConnect=false → tab is hidden (background sync); fail fast on expiry.
-async function syncBank(account, fifoUrl, startUrl, timeoutMs, firstConnect = false, fifoTabId = null, authToken = null) {
+async function syncBank(account, fifoUrl, startUrl, timeoutMs, firstConnect = false, fifoTabId = null, authToken = null, allowAutoLogin = true) {
   log(`Syncing ${account.bank_key} (account #${account.id}) — opening ${startUrl} [firstConnect=${firstConnect}]`);
   await chrome.storage.local.set({ syncing: true });
 
   let tab;
   let backgroundWindow = null;       // only set for first-connect (visible) or as last-resort hidden window
   let usingExistingTab = false;      // true when we reused a tab the user already had open
+  let openedBackgroundTab = false;   // true when WE opened a hidden tab in the real Chrome to auto-login
   let navListener;
-  let keepAlive;
   let _syncResult = null;            // populated on successful ingest, returned to caller
+
+  // MV3 service workers are killed after ~30s of inactivity. Poll a chrome API
+  // every 15s to keep the worker alive for the ENTIRE sync — including the
+  // auto-login phase (which can take 45s+) BEFORE the scrape even starts. If the
+  // worker dies mid-sync, sendResponse never fires and the page hangs until its
+  // 5-min "Sync timed out". Start the keepalive up front, clear it in finally.
+  const keepAlive = setInterval(() => chrome.storage.local.get("syncing"), 15000);
   try {
     if (firstConnect) {
       // First connect: user must log in interactively. Visible focused tab.
@@ -376,43 +517,78 @@ async function syncBank(account, fifoUrl, startUrl, timeoutMs, firstConnect = fa
           );
         }
       } else {
-        // No existing tab — the live-session path can't run. Unified ladder
-        // step 2: if a password is saved, log in headlessly server-side
-        // instead of failing. This is the common case for the unattended
-        // 6-hour background sync when no bank tab is open.
-        const fb = await _headlessSyncFallback(account, fifoUrl, authToken);
-        if (fb.status === "ok") {
-          _syncResult = { newCount: fb.newCount, scrapedCount: fb.scrapedCount };
-          await chrome.storage.local.set({ lastSync: new Date().toISOString(), lastError: null, syncing: false });
-          return _syncResult;
-        }
-        if (fb.status === "relogin") {
-          // GENUINE OTP / expired session — manual re-login is warranted.
-          await _markNeedsLogin(account, fifoUrl, authToken);
+        // No existing tab. PRIMARY desktop path: open a hidden background tab
+        // in the user's REAL Chrome and (if logged out) auto-login with the
+        // saved password. The real Chrome holds the bank's device-trust cookie,
+        // so this avoids the OTP that the server-side Playwright path ALWAYS
+        // triggers (proven: even a full profile clone in a fresh browser gets
+        // an OTP challenge). Only when no password is saved do we fall back.
+        const loginCfg = allowAutoLogin
+          ? await _fetchAutoLoginConfig(account, fifoUrl, authToken)
+          : null;
+
+        if (loginCfg && loginCfg.start_url) {
+          log(`${account.bank_key} (#${account.id}): opening background tab for auto-login (${loginCfg.start_url})`);
+          tab = await chrome.tabs.create({ url: loginCfg.start_url, active: false });
+          openedBackgroundTab = true;
+
+          const auto = await _autoLoginInTab(tab.id, loginCfg);
+          if (auto.status === "otp") {
+            // GENUINE OTP even in the real Chrome → manual re-login warranted.
+            await _markNeedsLogin(account, fifoUrl, authToken);
+            throw new Error(
+              `${account.display_name || account.bank_key} needs you to re-login ` +
+              `(your bank asked for a verification code).`
+            );
+          }
+          if (auto.status === "error") {
+            // Neither logged-in nor OTP within the timeout → soft, retryable.
+            throw new Error(
+              `${account.display_name || account.bank_key}: auto-login couldn't complete right now — will retry next cycle.`
+            );
+          }
+          // auto.status === "ok": logged in (or already was). Kick off the scrape
+          // by injecting content.js once; the navListener below re-injects on the
+          // subsequent in-page navigations (overview → account activity).
+          log(`${account.bank_key} (#${account.id}): auto-login OK — injecting content.js to scrape`);
+          try {
+            await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
+          } catch (e) {
+            log("content.js inject after auto-login failed:", e.message);
+          }
+          // fall through to navListener + waitForScrapeResult below.
+        } else {
+          // No saved password (or auto-login disabled). Last resort: the old
+          // server-side headless path. It will OTP if a real challenge appears,
+          // but it's the only option left when we have no creds to type.
+          const fb = await _headlessSyncFallback(account, fifoUrl, authToken);
+          if (fb.status === "ok") {
+            _syncResult = { newCount: fb.newCount, scrapedCount: fb.scrapedCount };
+            await chrome.storage.local.set({ lastSync: new Date().toISOString(), lastError: null, syncing: false });
+            return _syncResult;
+          }
+          if (fb.status === "relogin") {
+            await _markNeedsLogin(account, fifoUrl, authToken);
+            throw new Error(
+              `${account.display_name || account.bank_key} needs you to re-login` +
+              (fb.reason === "otp_required" ? " (your bank asked for a verification code)." : ".")
+            );
+          }
+          if (fb.status === "error") {
+            throw new Error(
+              `${account.display_name || account.bank_key}: sync couldn't complete right now — will retry next cycle.`
+            );
+          }
+          // fb.status === "skip": nothing we can do silently.
           throw new Error(
-            `${account.display_name || account.bank_key} needs you to re-login` +
-            (fb.reason === "otp_required" ? " (your bank asked for a verification code)." : ".")
+            `Open ${account.display_name || account.bank_key} in a tab (and log in) before clicking Sync now, ` +
+            `or save your password so FIFO can sign in for you.`
           );
         }
-        if (fb.status === "error") {
-          // TECHNICAL failure — NOT an OTP/re-login case. Don't set a re-login
-          // badge or claim OTP; report a soft, retryable error.
-          throw new Error(
-            `${account.display_name || account.bank_key}: sync couldn't complete right now — will retry next cycle.`
-          );
-        }
-        // fb.status === "skip": no saved password to try silently. Tell the
-        // user to open the bank (or save their password) and try again.
-        throw new Error(
-          `Open ${account.display_name || account.bank_key} in a tab (and log in) before clicking Sync now. ` +
-          `Sync now uses your existing logged-in session — it doesn't open a new login window.`
-        );
       }
     }
 
-    // MV3 service workers are killed after ~30s of inactivity.
-    // Poll storage every 20s so the worker stays alive for the full sync window.
-    keepAlive = setInterval(() => chrome.storage.local.get("syncing"), 20000);
+    // (keepAlive started at the top of syncBank so it also covers auto-login.)
 
     // Safety-net: re-inject content.js on every navigation, including SPA pushState.
     // - Full page load: changeInfo.status === "complete"
@@ -541,15 +717,18 @@ async function syncBank(account, fifoUrl, startUrl, timeoutMs, firstConnect = fa
 // ignoreLoginErrors=true: skip NOT_LOGGED_IN and "no rows" results — used
 // during first-connect when the user is still navigating to transactions.
 function waitForScrapeResult(tabId, timeoutMs, { ignoreLoginErrors = false } = {}) {
+  log(`waitForScrapeResult: listening on tab #${tabId} (timeout ${timeoutMs / 1000}s)`);
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       chrome.runtime.onMessage.removeListener(handler);
+      log(`waitForScrapeResult: TIMED OUT on tab #${tabId} after ${timeoutMs / 1000}s — content.js never sent a SCRAPE_RESULT.`);
       reject(new Error(`Timed out waiting for scrape result after ${timeoutMs / 1000}s`));
     }, timeoutMs);
 
     function handler(msg, sender) {
       if (msg.type !== "SCRAPE_RESULT" || sender.tab?.id !== tabId) return;
       const p = msg.payload;
+      log(`waitForScrapeResult: got SCRAPE_RESULT on tab #${tabId} — error=${p.error || "none"} rows=${p.transactions ? p.transactions.length : 0}`);
       // During first connect the user is still logging in / navigating — skip
       // transient failures and keep waiting until transactions are actually found.
       if (ignoreLoginErrors && (
@@ -573,6 +752,35 @@ async function setError(msg) {
   await chrome.storage.local.set({ lastError: msg, syncing: false });
 }
 
+// Persistent log ring buffer. MV3 service workers are killed after ~30s idle
+// and their DevTools console does NOT survive a restart — so console-only logs
+// vanish exactly when we need them (mid-sync). We mirror every log line into
+// chrome.storage.local so it persists across worker restarts.
+//
+// Dump from the service-worker console with:
+//   chrome.storage.local.get("fifoLog", d => console.log((d.fifoLog||[]).join("\n")))
+// Clear with:
+//   chrome.storage.local.remove("fifoLog")
+let _logChain = Promise.resolve();
+function _persistLog(line) {
+  // Serialize writes through a promise chain so concurrent log() calls don't
+  // clobber each other's read-modify-write. Reads fresh from storage each time,
+  // so it keeps appending correctly even after a worker restart.
+  _logChain = _logChain.then(async () => {
+    try {
+      const { fifoLog = [] } = await chrome.storage.local.get("fifoLog");
+      fifoLog.push(line);
+      if (fifoLog.length > 500) fifoLog.splice(0, fifoLog.length - 500);
+      await chrome.storage.local.set({ fifoLog });
+    } catch (_) { /* storage may be unavailable during teardown */ }
+  });
+}
+
 function log(...args) {
   console.log("[FIFO]", ...args);
+  try {
+    const line = `[${new Date().toISOString()}] ` +
+      args.map(a => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
+    _persistLog(line);
+  } catch (_) {}
 }
