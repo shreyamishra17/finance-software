@@ -2346,6 +2346,12 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
               reloginBtn.style.outline = "2px solid #f97316";
               setTimeout(() => { reloginBtn.style.outline = ""; }, 3000);
             }
+            // No saved password → offer to save it so the NEXT sync can sign in
+            // automatically (auto-login). We just save; the user re-clicks Sync.
+            if (acct && !acct.has_credentials) {
+              openSaveCredentials(null, accountId,
+                "Couldn't sign in — save your bank password so FIFO can sync automatically next time, then click Sync now again.");
+            }
             return;
           }
           if (!resp.ok) throw new Error(data.error || "Sync failed");
@@ -2354,6 +2360,12 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
           await loadAccountTransactions(accountId);
         } catch (err) {
           status.textContent = `Error: ${err.message}`;
+          // If the sync failed because the session is dead / re-login needed and
+          // there's no saved password yet, prompt to save it for future syncs.
+          if (acct && !acct.has_credentials && _isReloginFailure(err.message)) {
+            openSaveCredentials(null, accountId,
+              "Couldn't sign in — save your bank password so FIFO can sync automatically next time, then click Sync now again.");
+          }
         } finally {
           btn.disabled = false;
           btn.textContent = "↻";
@@ -2365,8 +2377,8 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
       let _lastAccountsCache = null;
 
       // ── Save credentials modal ────────────────────────────────────────
-      function openSaveCredentials(event, accountId) {
-        event.stopPropagation();
+      function openSaveCredentials(event, accountId, promptMsg) {
+        if (event && typeof event.stopPropagation === "function") event.stopPropagation();
         const acct = (_lastAccountsCache || []).find(a => a.id === accountId);
         if (!acct) return;
         document.getElementById("saveCredsAccountId").value = accountId;
@@ -2374,10 +2386,29 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
         document.getElementById("saveCredsUsername").value = "";
         document.getElementById("saveCredsPassword").value = "";
         const statusEl = document.getElementById("saveCredsStatus");
-        statusEl.style.display = "none";
-        statusEl.textContent = "";
+        if (promptMsg) {
+          // Contextual hint, e.g. when we prompt right after a sync failed for
+          // lack of a saved password. Shown in amber, not as an error.
+          statusEl.style.display = "block";
+          statusEl.style.color = "#9a3412";
+          statusEl.textContent = promptMsg;
+        } else {
+          statusEl.style.display = "none";
+          statusEl.textContent = "";
+        }
         document.getElementById("saveCredsOverlay").style.display = "flex";
         setTimeout(() => document.getElementById("saveCredsUsername").focus(), 50);
+      }
+
+      // Does this sync-failure message indicate a dead session / re-login /
+      // missing-password situation (as opposed to a transient/technical error)?
+      // Used to decide whether to offer "save your password for next time".
+      function _isReloginFailure(msg) {
+        const m = (msg || "").toLowerCase();
+        return m.includes("re-login") || m.includes("relogin") ||
+               m.includes("session expired") || m.includes("verification code") ||
+               m.includes("save your password") || m.includes("log in") ||
+               m.includes("sign in") || m.includes("signin");
       }
       function closeSaveCredentials(event) {
         if (event && event.target !== document.getElementById("saveCredsOverlay")) return;
