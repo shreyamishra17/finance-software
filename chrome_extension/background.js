@@ -19,6 +19,28 @@ chrome.alarms.get(SYNC_ALARM, (alarm) => {
   }
 });
 
+// Catch-up sync on Chrome launch. The 6-hour alarm only ticks while Chrome is
+// running, so a tick scheduled while the Mac was asleep/off is missed. When the
+// user reopens Chrome we run one sync immediately (if the last sync is older
+// than the normal interval) instead of waiting up to 6 more hours for the next
+// tick. This is the honest answer to the "closed laptop" gap — device trust is
+// machine-bound, so sync can only happen while this real Chrome is awake.
+chrome.runtime.onStartup.addListener(async () => {
+  try {
+    const { lastSync } = await chrome.storage.local.get("lastSync");
+    const stale = !lastSync ||
+      (Date.now() - new Date(lastSync).getTime()) > SYNC_MINUTES * 60 * 1000;
+    if (stale) {
+      log("Chrome started — last sync is stale, running catch-up sync…");
+      syncAllAccounts();
+    } else {
+      log("Chrome started — last sync still fresh, skipping catch-up.");
+    }
+  } catch (e) {
+    log("onStartup catch-up check failed:", e.message);
+  }
+});
+
 // ── Alarm handler ─────────────────────────────────────────────────────────
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === SYNC_ALARM) {
