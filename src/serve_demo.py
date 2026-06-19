@@ -960,7 +960,91 @@ class DemoHandler(SimpleHTTPRequestHandler):
                     "AuthenticationController", "authForm",
                 ],
                 "start_url": None,   # uses last_url from account record
-                "navigate": [],      # rely on last_url pointing directly to statement page
+                # ICICI is an Angular SPA: auto-login lands on /overview and the
+                # statement table is several clicks away with NO distinct URL, so
+                # reloading last_url can't deep-link to it. These steps must replay
+                # on every (incl. background) sync. Translated from the Playwright
+                # transactions_steps in icici_fetcher_config.json. The
+                # wait_and_click_icase action (content.js) is case-insensitive,
+                # searches multiple tags, and clicks the innermost control.
+                "navigate": [
+                    {
+                        "action": "wait_and_click_icase",
+                        "text": "accounts",
+                        "tags": ["a", "li", "span", "button", "div", "[role='tab']"],
+                        "exact": False,
+                        "max_text_len": 12,
+                        "timeout": 15000,
+                        "sleep_after": 2000,
+                    },
+                    {
+                        "action": "wait_and_click_icase",
+                        "text": "view statement",
+                        "tags": ["button", "a", "[class*='viewStatement']",
+                                 "[class*='view-statement']", "div", "span", "li"],
+                        "exact": False,
+                        "max_text_len": 25,
+                        "timeout": 20000,
+                        "sleep_after": 4000,
+                    },
+                    {
+                        "action": "wait_and_click_icase",
+                        "text": "detailed statement",
+                        "tags": ["button", "[role='tab']", "li", "a", "div", "span"],
+                        "exact": False,
+                        "max_text_len": 40,
+                        "timeout": 20000,
+                        "sleep_after": 3000,
+                    },
+                    {
+                        "action": "wait_and_click_icase",
+                        "text": "date",
+                        "tags": ["button", "div[class*='filter']",
+                                 "span[class*='filter']", "div[class*='sort']",
+                                 "button[class*='sort']"],
+                        "exact": False,
+                        "max_text_len": 8,
+                        "timeout": 10000,
+                        "sleep_after": 1000,
+                    },
+                    {
+                        "action": "wait_and_click_icase",
+                        "text": "transaction period",
+                        "tags": ["button", "div", "span", "li", "label"],
+                        "exact": False,
+                        "max_text_len": 22,
+                        "timeout": 8000,
+                        # Selecting "Transaction Period" auto-opens the period
+                        # dropdown (already showing "Today" + the full list). Give
+                        # it a moment to render, then pick "Last 1 Year" directly.
+                        # We deliberately DO NOT click "Today" first: that matches
+                        # the "Today" list item, selects it, and collapses the list
+                        # — which is exactly what filtered everything to an empty
+                        # TODAY view. Go straight to the year option.
+                        "sleep_after": 2000,
+                    },
+                    {
+                        # ICICI's "Select transaction period" is an ng-select
+                        # component. It ignores plain clicks on its label — it only
+                        # opens on a mousedown against its .ng-select-container, and
+                        # its options render in a detached .ng-dropdown-panel. This
+                        # dedicated action opens the ng-select that currently shows
+                        # "Today" and clicks the "Last 1 Year" option.
+                        "action": "select_ngselect",
+                        "trigger_text": "today",
+                        "value": "last 1 year",
+                        "sleep_after": 2500,
+                    },
+                    {
+                        "action": "wait_and_click_icase",
+                        "text": "apply filter",
+                        "tags": ["button", "div", "span"],
+                        "exact": False,
+                        "max_text_len": 15,
+                        "timeout": 8000,
+                        "sleep_after": 8000,
+                    },
+                ],
                 "ready_selector": "tr.transfer:not(.trans_space)",
                 "ready_url_pattern": None,
                 "ready_timeout": 45000,
@@ -977,7 +1061,13 @@ class DemoHandler(SimpleHTTPRequestHandler):
                     "td.balance p",   # first row's balance = current balance
                 ],
                 "pagination": {
+                    # ICICI's pager REPLACES the rows each page (not infinite
+                    # scroll), and the next/prev controls are bare <svg> icons
+                    # after the "Page X of Y" text. "replace" mode scrapes every
+                    # page and accumulates; it stops at the last page (X >= Y).
                     "type": "next_button",
+                    "mode": "replace",
+                    "max_pages": 60,
                     "button_texts": [">", "›", "❯"],
                     "page_info_pattern": r"page\s+\d+\s+of\s+\d+",
                 },

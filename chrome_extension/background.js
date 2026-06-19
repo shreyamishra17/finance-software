@@ -358,22 +358,59 @@ function _probePage(c) {
   return { href, onSuccess, urlOtp, fieldOtp, otp: (urlOtp || fieldOtp), hasForm: !!(u && p) };
 }
 
-function _fillAndSubmit(c) {
-  const setVal = (el, val) => {
-    if (!el) return;
-    el.focus();
-    el.value = val;
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
+// Fill username + password the framework-safe way. Angular/React track input
+// via a value SETTER on the prototype and a native `input` event — a plain
+// `el.value = x` bypasses that, leaving the reactive form "pristine" so the
+// submit button stays disabled (exactly what we saw on ICICI). So: set via the
+// native setter, then fire focus → input → change → keyup → blur to drive the
+// validators and flip the button to enabled. Returns which fields were filled.
+function _fillForm(c) {
+  const nativeSet = (el, val) => {
+    try {
+      const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value")
+                || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+      if (desc && desc.set) desc.set.call(el, val); else el.value = val;
+    } catch (_) { el.value = val; }
   };
-  setVal(document.querySelector(c.username_selector), c.username);
-  setVal(document.querySelector(c.password_selector), c.password);
-  const btn = c.submit_selector ? document.querySelector(c.submit_selector) : null;
-  if (btn) { btn.click(); return true; }
-  // Fallback: submit the password field's form.
+  const fill = (el, val) => {
+    if (!el) return false;
+    el.focus();
+    el.dispatchEvent(new Event("focus", { bubbles: true }));
+    nativeSet(el, val);
+    el.dispatchEvent(new InputEvent("input", { bubbles: true, data: val, inputType: "insertText" }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "x" }));
+    el.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+    return true;
+  };
+  const u = document.querySelector(c.username_selector);
   const p = document.querySelector(c.password_selector);
-  if (p && p.form) { p.form.submit(); return true; }
-  return false;
+  const okU = fill(u, c.username);
+  const okP = fill(p, c.password);
+  return { filledUser: okU, filledPass: okP };
+}
+
+// Click submit, AFTER giving the framework a tick to enable the button.
+// If it's still disabled (validation didn't take), clear the flag as a last
+// resort and fall back to Enter / form.requestSubmit. Returns diagnostics.
+function _clickSubmit(c) {
+  const btn = c.submit_selector ? document.querySelector(c.submit_selector) : null;
+  if (btn) {
+    const wasDisabled = !!btn.disabled;
+    if (btn.disabled) btn.disabled = false;   // belt-and-suspenders
+    btn.click();
+    return { clicked: true, wasDisabled, method: "button" };
+  }
+  const p = document.querySelector(c.password_selector);
+  if (p) {
+    p.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter", code: "Enter", keyCode: 13 }));
+    if (p.form) {
+      p.form.requestSubmit ? p.form.requestSubmit() : p.form.submit();
+      return { clicked: true, wasDisabled: null, method: "form" };
+    }
+    return { clicked: true, wasDisabled: null, method: "enter" };
+  }
+  return { clicked: false };
 }
 
 // Drive the background tab: detect already-logged-in / OTP / login form, fill
@@ -395,12 +432,19 @@ async function _autoLoginInTab(tabId, cfg) {
     if (probe && probe.onSuccess) return { status: "ok" };
   }
   if (!probe || !probe.hasForm) {
-    log("auto-login: no login form found and not logged in.");
+    log("auto-login: no login form found and not logged in.",
+        `url=${probe && probe.href} onSuccess=${probe && probe.onSuccess}`,
+        `hasForm=${probe && probe.hasForm} urlOtp=${probe && probe.urlOtp}`,
+        `(success_url_substr='${cfg.success_url_substr}' username_selector='${cfg.username_selector}')`);
     return { status: "error" };
   }
 
-  log("auto-login: filling saved credentials and submitting…");
-  await _execInTab(tabId, _fillAndSubmit, cfg);
+  log("auto-login: filling saved credentials…");
+  const fillRes = await _execInTab(tabId, _fillForm, cfg);
+  log("auto-login: fill result:", JSON.stringify(fillRes));
+  await _sleep(1200);   // let the framework run validators + enable the submit button
+  const clickRes = await _execInTab(tabId, _clickSubmit, cfg);
+  log("auto-login: submit click result:", JSON.stringify(clickRes));
 
   // Poll for the outcome. Log each probe so we can see exactly where BoA lands.
   const deadline = Date.now() + 45000;
@@ -750,6 +794,13 @@ function waitForScrapeResult(tabId, timeoutMs, { ignoreLoginErrors = false } = {
     function handler(msg, sender) {
       if (msg.type !== "SCRAPE_RESULT" || sender.tab?.id !== tabId) return;
       const p = msg.payload;
+      // content.js ships its accumulated nav-log inside the payload. The tab is
+      // closed moments after a failure, so content.js's own async writes to
+      // chrome.storage often don't flush in time — persisting from here (the
+      // service worker, which outlives the tab) guarantees we see every step.
+      if (Array.isArray(p.navLog)) {
+        for (const line of p.navLog) _persistLog(line);
+      }
       log(`waitForScrapeResult: got SCRAPE_RESULT on tab #${tabId} — error=${p.error || "none"} rows=${p.transactions ? p.transactions.length : 0}`);
       // During first connect the user is still logging in / navigating — skip
       // transient failures and keep waiting until transactions are actually found.

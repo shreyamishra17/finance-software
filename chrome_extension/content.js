@@ -20,8 +20,24 @@
       log("No config available:", chrome.runtime.lastError?.message || response?.error);
       return;
     }
+    // Re-entrancy guard: background.js re-injects content.js on page loads, so a
+    // single SPA navigation can spawn several copies that all run the navigate
+    // flow at once — they click ACCOUNTS / View Statement / Detailed Statement
+    // on top of each other and fight. Allow only ONE scrape per document. The
+    // flag lives on globalThis (per JS world): a full page navigation creates a
+    // fresh world and is correctly allowed to start its own run. The check+set
+    // is synchronous (before any await), so two callbacks can't both pass.
+    if (globalThis.__fifoScrapeRunning) {
+      log("Duplicate injection — a scrape is already running on this document, skipping.");
+      return;
+    }
+    globalThis.__fifoScrapeRunning = true;
     log("Got scrape config for", response.config.bank_key);
-    await runScrape(response.config, url);
+    try {
+      await runScrape(response.config, url);
+    } finally {
+      globalThis.__fifoScrapeRunning = false;
+    }
   });
 })();
 
@@ -186,6 +202,171 @@ async function runScrape(config, currentUrl) {
         }
         return;
       }
+    } else if (step.action === "select_ngselect") {
+      // Drive an ng-select dropdown (ICICI's "Select transaction period"). The
+      // library does NOT respond to a plain click on its value label — it toggles
+      // open on a `mousedown` against its `.ng-select-container`, then renders
+      // options in a detached `.ng-dropdown-panel` as `.ng-option` nodes. So:
+      // (1) find the right ng-select (by its current value, e.g. "Today"),
+      // (2) mousedown its container to open, (3) wait for the panel, (4) click
+      // the `.ng-option` whose text matches `value` (e.g. "Last 1 Year").
+      try {
+        const dispatch = (el, types) => {
+          for (const t of types) {
+            const Ev = t.startsWith("pointer") && typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
+            try { el.dispatchEvent(new Ev(t, { bubbles: true, cancelable: true, view: window })); } catch (_) {}
+          }
+        };
+        const trigWant = (step.trigger_text || "").toLowerCase();
+        const selects = [...document.querySelectorAll("ng-select, .ng-select")]
+          .filter((s) => s.offsetParent !== null);
+        let target = null;
+        for (const s of selects) {
+          const lbl = (s.querySelector(".ng-value-label")?.innerText || "").trim().toLowerCase();
+          if (!trigWant || lbl.includes(trigWant)) { target = s; break; }
+        }
+        if (!target) target = selects[0];
+        if (!target) {
+          log(`select_ngselect: no ng-select found (wanted trigger "${step.trigger_text}")`);
+        } else {
+          const container = target.querySelector(".ng-select-container") || target;
+          log("select_ngselect: opening ng-select (current value:",
+              JSON.stringify((target.querySelector(".ng-value-label")?.innerText || "").trim()) + ")");
+          target.focus && target.focus();
+          dispatch(container, ["pointerdown", "mousedown", "mouseup"]);
+          const want = (step.value || "").toLowerCase();
+          const findOpt = () => [...document.querySelectorAll(
+            ".ng-dropdown-panel .ng-option, .ng-option, [role='option']")]
+            .find((o) => o.offsetParent !== null &&
+                   (o.innerText || o.textContent || "").trim().toLowerCase().includes(want));
+          let opt = null;
+          for (let i = 0; i < 40 && !opt; i++) { opt = findOpt(); if (!opt) await sleep(150); }
+          if (!opt) {
+            log(`select_ngselect: option "${step.value}" not found after opening panel`);
+            // Diagnostic: list what options DID render.
+            const opts = [...document.querySelectorAll(".ng-dropdown-panel .ng-option, .ng-option")]
+              .filter((o) => o.offsetParent !== null)
+              .map((o) => `"${(o.innerText || "").trim().slice(0, 20)}"`);
+            log("select_ngselect: visible ng-options:", opts.join(", ") || "(none — panel never opened)");
+          } else {
+            log("select_ngselect: clicking option", JSON.stringify((opt.innerText || "").trim().slice(0, 30)));
+            opt.scrollIntoView({ block: "center" });
+            dispatch(opt, ["pointerdown", "mousedown", "mouseup", "click"]);
+          }
+        }
+        await sleep(step.sleep_after || 1500);
+      } catch (e) {
+        log("select_ngselect failed (non-fatal):", e.message);
+        await sleep(500);
+      }
+    } else if (step.action === "debug_dropdown") {
+      // Diagnostic-only: find the ICICI period control. Scan the whole document
+      // for visible elements whose OWN text is a period value (Today / Last 1
+      // Month / Last 1 Year / FY 20xx-20xx) and log tag.class for each — that
+      // reveals both the closed trigger (shows "Today") and, if open, the option
+      // list items, regardless of container nesting. Short output (resists log
+      // truncation). Also reports a native <select> if one exists. Never fatal.
+      try {
+        await sleep(step.sleep_before || 0);
+        const tc = (el) => {
+          const cls = (el.className || "").toString().trim().replace(/\s+/g, ".");
+          const role = el.getAttribute && el.getAttribute("role");
+          return el.tagName.toLowerCase() + (cls ? "." + cls : "") + (role ? `[role=${role}]` : "");
+        };
+        const periodRe = /^(today|last\s+\d+\s+(month|months|year|years)|fy\s*\d{4}\s*-\s*\d{4})$/i;
+        const hits = [];
+        for (const el of document.querySelectorAll("*")) {
+          if (el.offsetParent === null) continue;
+          const own = [...el.childNodes].filter((n) => n.nodeType === 3)
+            .map((n) => n.textContent.trim()).join(" ").trim();
+          if (own && periodRe.test(own)) hits.push(`${tc(el)}="${own}"`);
+          if (hits.length >= 30) break;
+        }
+        log("debug_dropdown period-value elements:", hits.join("  |  ") || "(none)");
+        const sels = [...document.querySelectorAll("select")].filter((s) => s.offsetParent !== null);
+        if (sels.length) {
+          log("debug_dropdown native <select> found:", sels.map((s) =>
+            `${tc(s)} opts=[${[...s.options].map((o) => o.text.trim()).join(",")}]`).join(" || "));
+        }
+      } catch (e) {
+        log("debug_dropdown failed (non-fatal):", e.message);
+      }
+    } else if (step.action === "debug_rows") {
+      // Diagnostic-only: dump the current page's row/cell structure right now
+      // (e.g. while the default Detailed-Statement rows are showing, before a
+      // date filter possibly empties the table). Pure logging, never fatal.
+      try {
+        await sleep(step.sleep_before || 0);
+        debugRowSelectors(step.selector || "tr");
+      } catch (e) {
+        log("debug_rows failed (non-fatal):", e.message);
+      }
+    } else if (step.action === "wait_and_click_icase") {
+      // Case-insensitive, tag-flexible click for SPA tabs/dropdowns (e.g. ICICI
+      // Angular controls that aren't <a>/<button>). Mirrors the Playwright
+      // click_icase: search across configurable tags, match visible text
+      // (substring unless `exact`), skip oversized wrapper elements via
+      // `max_text_len`, and click the SMALLEST matching element (the real
+      // control, not its parent). Does NOT return — SPA clicks don't change the
+      // URL, so we continue to the next step after `sleep_after`.
+      try {
+        const want = (step.text || "").toLowerCase();
+        const tags = (step.tags && step.tags.length)
+          ? step.tags
+          : ["button", "a", "div", "span", "li", "[role='tab']", "[role='option']"];
+        const exact = !!step.exact;
+        const maxLen = step.max_text_len || 0;
+        const finder = () => {
+          const seen = new Set();
+          let best = null, bestArea = Infinity;
+          for (const sel of tags) {
+            let nodes;
+            try { nodes = document.querySelectorAll(sel); } catch (_) { continue; }
+            for (const el of nodes) {
+              if (seen.has(el)) continue;
+              seen.add(el);
+              if (el.offsetParent === null) continue;        // skip hidden (mobile/desktop dupes)
+              const txt = (el.innerText || el.textContent || "").trim();
+              if (!txt) continue;
+              if (maxLen && txt.length > maxLen) continue;    // skip big wrappers
+              const lc = txt.toLowerCase();
+              const hit = exact ? (lc === want) : lc.includes(want);
+              if (!hit) continue;
+              const area = (el.offsetWidth || 0) * (el.offsetHeight || 0);
+              if (area < bestArea) { bestArea = area; best = el; } // smallest = innermost control
+            }
+          }
+          return best;
+        };
+        log(`Navigation (icase): looking for "${step.text}" in [${tags.join(", ")}]`);
+        const el = await waitForElement(finder, step.timeout || 15000);
+        log("Navigation (icase): clicking", (el.innerText || "").trim().slice(0, 40));
+        el.scrollIntoView({ block: "center" });
+        _robustClick(el);
+        await sleep(step.sleep_after || 2000);
+      } catch (e) {
+        // Non-fatal: a missed intermediate step shouldn't kill the whole flow.
+        // The logs show which step missed; content.js still tries the rest and
+        // then waits for ready_selector.
+        log("Navigation step (icase) failed (non-fatal):", e.message);
+        // Diagnostic: dump the visible short-text candidates that ARE on screen
+        // right now, so we can see what the dropdown/tab actually offers (e.g.
+        // whether "Last 1 Year" is present, and under which tag/text).
+        try {
+          const want = (step.text || "").toLowerCase();
+          const cand = [];
+          for (const el of document.querySelectorAll("li,div,span,button,a,option,label")) {
+            if (el.offsetParent === null) continue;
+            if (el.children.length > 1) continue;          // leaf-ish only
+            const t = (el.innerText || el.textContent || "").trim();
+            if (!t || t.length > 24) continue;
+            cand.push(`${el.tagName.toLowerCase()}:"${t}"`);
+            if (cand.length >= 40) break;
+          }
+          log(`Nav-miss candidates (looking for "${step.text}"):`, cand.join("  |  "));
+        } catch (_) {}
+        await sleep(500);
+      }
     }
   }
 
@@ -236,16 +417,27 @@ async function runScrape(config, currentUrl) {
     return;
   }
 
-  // ── 5. Load all pages ─────────────────────────────────────────────────
+  // ── 5 + 6. Paginate & scrape ──────────────────────────────────────────
+  // Two pagination styles:
+  //  • "replace" (ICICI): each page REPLACES the visible rows, so we must
+  //    scrape every page as we go and accumulate, otherwise we'd only capture
+  //    the last page. The "next" control is an icon after the "Page X of Y"
+  //    text; we stop when X >= Y.
+  //  • default (BoA etc.): pages ACCUMULATE (view-more / infinite scroll), so
+  //    load everything first, then scrape once.
   const startCount = document.querySelectorAll(config.rows.selector).length;
   log(`Rows visible before pagination: ${startCount}`);
   showBanner(`Loading all transactions… (${startCount} so far)`);
-  await loadAllPages(config);
-  const afterCount = document.querySelectorAll(config.rows.selector).length;
-  log(`Rows visible after pagination: ${afterCount}`);
 
-  // ── 6. Scrape rows ────────────────────────────────────────────────────
-  const transactions = scrapeRows(config);
+  let transactions;
+  if (config.pagination && config.pagination.mode === "replace") {
+    transactions = await scrapeAllPagesReplace(config);
+  } else {
+    await loadAllPages(config);
+    const afterCount = document.querySelectorAll(config.rows.selector).length;
+    log(`Rows visible after pagination: ${afterCount}`);
+    transactions = scrapeRows(config);
+  }
   const endingBalance = scrapeBalance(config);
 
   log(`Scraped ${transactions.length} transactions, balance: ${endingBalance}`);
@@ -254,7 +446,7 @@ async function runScrape(config, currentUrl) {
 
   chrome.runtime.sendMessage({
     type: "SCRAPE_RESULT",
-    payload: { transactions, endingBalance, currentUrl: window.location.href },
+    payload: { transactions, endingBalance, currentUrl: window.location.href, navLog: _navLog() },
   });
 }
 
@@ -319,6 +511,95 @@ async function loadAllPages(config) {
   }
 }
 
+// Parse "Page X of Y" → {cur, total, el}. Returns the SMALLEST (innermost)
+// element carrying that text — important because the whole pager box's innerText
+// is ALSO "Page X of Y" (its arrow icons have no text), and matching the box
+// would put its right edge past the last arrow, breaking the geometry that finds
+// the "next" control beside the number.
+function currentPageInfo(pattern) {
+  if (!pattern) return null;
+  const re = new RegExp(pattern, "i");
+  let best = null, bestArea = Infinity;
+  for (const el of document.querySelectorAll("div, span, p, li, b, strong, em")) {
+    const t = (el.innerText || "").trim();
+    if (t.length > 24 || !re.test(t)) continue;
+    const m = t.match(/(\d+)\s*of\s*(\d+)/i);
+    if (!m) continue;
+    const r = el.getBoundingClientRect();
+    const area = (r.width * r.height) || Infinity;
+    if (area < bestArea) {
+      bestArea = area;
+      best = { cur: parseInt(m[1], 10), total: parseInt(m[2], 10), el };
+    }
+  }
+  return best;
+}
+
+// A cheap signature of the current page's content, to detect when a "next"
+// click has actually swapped the rows (page-info may not always update first).
+function firstRowSignature(config) {
+  const rows = document.querySelectorAll(config.rows.selector);
+  if (!rows.length) return "";
+  const f = rows[0], l = rows[rows.length - 1];
+  return `${rows.length}|${(f.innerText || "").trim().slice(0, 60)}|${(l.innerText || "").trim().slice(0, 60)}`;
+}
+
+// Wait until the page content changes after a "next" click: either the page-info
+// current number advances, or the row signature changes.
+function waitForPageChange(config, prevCur, prevSig, timeoutMs) {
+  const pattern = config.pagination && config.pagination.page_info_pattern;
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const t = setInterval(() => {
+      const info = currentPageInfo(pattern);
+      const sig = firstRowSignature(config);
+      if ((info && prevCur != null && info.cur !== prevCur) || (sig && sig !== prevSig)) {
+        clearInterval(t); resolve(true);
+      } else if (Date.now() - start > timeoutMs) {
+        clearInterval(t); resolve(false);
+      }
+    }, 250);
+  });
+}
+
+// Replace-style pagination: scrape the current page, click "next", wait for the
+// content to swap, repeat until the last page. Dedupes across pages by a
+// (date|desc|amount|balance) key in case of any overlap.
+async function scrapeAllPagesReplace(config) {
+  const all = [];
+  const seen = new Set();
+  const pattern = config.pagination.page_info_pattern;
+  const MAX = config.pagination.max_pages || 60;
+
+  for (let p = 0; p < MAX; p++) {
+    const pageRows = scrapeRows(config);
+    let added = 0;
+    for (const t of pageRows) {
+      const key = `${t.date}|${t.description}|${t.amount}|${t.balance}`;
+      if (seen.has(key)) continue;
+      seen.add(key); all.push(t); added++;
+    }
+    const info = currentPageInfo(pattern);
+    log(`Page ${info ? info.cur + "/" + info.total : "?"}: scraped ${pageRows.length} rows (+${added} new, total ${all.length})`);
+    showBanner(`Loading all transactions… (page ${info ? info.cur + " of " + info.total : p + 1}, ${all.length} so far)`);
+
+    if (info && info.cur >= info.total) { log("Pagination: reached last page."); break; }
+
+    const next = findNextPageButton(config.pagination.button_texts, pattern);
+    if (!next) { log("Pagination: no next control found — stopping."); break; }
+
+    const prevCur = info ? info.cur : null;
+    const prevSig = firstRowSignature(config);
+    next.scrollIntoView({ block: "center" });
+    _robustClick(next);
+    const changed = await waitForPageChange(config, prevCur, prevSig, 15000);
+    if (!changed) { log("Pagination: page did not change after clicking next — stopping."); break; }
+    await sleep(350);
+  }
+  log(`Pagination (replace): done — ${all.length} unique transactions across pages.`);
+  return all;
+}
+
 // Find the oldest visible row's date by looking at the last row in the table.
 function oldestVisibleRowDate(config) {
   const rows = document.querySelectorAll(config.rows.selector);
@@ -336,6 +617,25 @@ function scrapeRows(config) {
   const rows = document.querySelectorAll(config.rows.selector);
   const results = [];
   const r = config.rows;
+
+  // ── One-time DOM diagnostic (set rows.debug_cells:true in scrape-config) ──
+  // Logs the first matched row's cell structure + what each configured
+  // sub-selector currently extracts, so we can tune selectors against the
+  // real (often obfuscated) bank DOM via the persisted fifoLog.
+  if (r.debug_cells && rows.length && !globalThis.__fifoDebugCellsLogged) {
+    globalThis.__fifoDebugCellsLogged = true;
+    try {
+      const sample = rows[0];
+      const cells = [...sample.querySelectorAll("td")].map((td, i) =>
+        `td[${i}].${(td.className || "").trim().replace(/\s+/g, ".") || "(noclass)"}=` +
+        `"${(td.innerText || "").trim().slice(0, 30)}"`);
+      log("ROW DEBUG: selector matched", rows.length, "rows. Row[0] cells:", cells.join("  |  "));
+      log("ROW DEBUG: desc=", JSON.stringify(text(sample.querySelector(r.description || "x__none"))),
+          "credit=", JSON.stringify(text(sample.querySelector(r.credit || "x__none"))),
+          "debit=", JSON.stringify(text(sample.querySelector(r.debit || "x__none"))),
+          "balance=", JSON.stringify(text(sample.querySelector(r.balance || "x__none"))));
+    } catch (e) { log("ROW DEBUG failed:", e.message); }
+  }
 
   rows.forEach((row) => {
     try {
@@ -496,18 +796,40 @@ function extractDateByParentWalk(row) {
       if (dateEl) {
         const day   = dateEl.querySelector("p.date-1, span.date-1")?.innerText?.trim();
         const month = dateEl.querySelector("p.date-2, span.date-2")?.innerText?.trim();
-        if (day && month) return normalizeDate(`${day} ${month} ${new Date().getFullYear()}`);
+        if (day && month) return parseDayMonthDate(`${day} ${month}`) || normalizeDate(`${day} ${month} ${new Date().getFullYear()}`);
         const full = dateEl.innerText?.trim();
-        if (full) return normalizeDate(full);
+        if (full) return parseDayMonthDate(full) || normalizeDate(full);
       }
       const prev = el.previousElementSibling;
       if (prev && /\d{1,2}[\s/-]\w+/i.test(prev.innerText || "")) {
-        return normalizeDate(prev.innerText.trim());
+        return parseDayMonthDate(prev.innerText.trim()) || normalizeDate(prev.innerText.trim());
       }
       el = el.parentElement;
     }
   } catch (_) {}
   return "";
+}
+
+// ICICI puts the date in a side block as "MMM\n\nDD" (e.g. "Dec\n\n29") or
+// "DD\nMMM" — month + day, NO year, often with stray newlines / a weekday
+// ("14\nJun\n14 SUN"). Pull out month + day and infer the year from a
+// "last 1 year" window: a month LATER than the current month must belong to
+// last year (e.g. "Dec" seen in June → previous year). Returns "" if it can't
+// find a month+day, so callers fall back to normalizeDate.
+function parseDayMonthDate(raw) {
+  const MON = { jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11 };
+  const toks = (raw || "").split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+  let mon = null, day = null;
+  for (const t of toks) {
+    const key = t.toLowerCase().slice(0, 3);
+    if (mon === null && key in MON) { mon = MON[key]; continue; }
+    if (day === null && /^\d{1,2}$/.test(t)) day = parseInt(t, 10);
+  }
+  if (mon === null || day === null || day < 1 || day > 31) return "";
+  const now = new Date();
+  let year = now.getFullYear();
+  if (mon > now.getMonth()) year -= 1;
+  return `${year}-${String(mon + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 // ── Button finders ────────────────────────────────────────────────────────
@@ -521,19 +843,52 @@ function findButtonByTexts(texts) {
 }
 
 function findNextPageButton(buttonTexts, pageInfoPattern) {
+  // 1. Plain text glyph match (">", "›", …) on real buttons/links.
   for (const el of document.querySelectorAll("button, a, span")) {
     const t = el.innerText?.trim();
-    if (buttonTexts.includes(t) && !el.disabled && el.getAttribute("aria-disabled") !== "true") return el;
+    if ((buttonTexts || []).includes(t) && !el.disabled && el.getAttribute("aria-disabled") !== "true") return el;
   }
+  // 2. aria-label / title containing "next".
+  for (const el of document.querySelectorAll("button, a, [role='button'], svg, i, span, div")) {
+    const lbl = ((el.getAttribute && (el.getAttribute("aria-label") || el.getAttribute("title"))) || "").toLowerCase();
+    if (/\bnext\b/.test(lbl) && !el.disabled && el.getAttribute("aria-disabled") !== "true") return el;
+  }
+  // 3. Position-relative: the first clickable control AFTER the "Page X of Y"
+  //    text. ICICI renders pager arrows as bare <svg> icons (no text/label), in
+  //    order [first][prev][PageInfo][next][last]. If we're already on the last
+  //    page (X >= Y), return null so pagination stops.
   if (pageInfoPattern) {
-    const re = new RegExp(pageInfoPattern, "i");
-    const allEls = Array.from(document.querySelectorAll("*"));
-    const pageEl = allEls.find(el => re.test(el.innerText || ""));
-    if (pageEl) {
-      let sib = pageEl.nextElementSibling;
-      while (sib) {
-        if ((sib.tagName === "BUTTON" || sib.tagName === "A") && !sib.disabled) return sib;
-        sib = sib.nextElementSibling;
+    const info = currentPageInfo(pageInfoPattern);
+    if (info) {
+      if (info.cur >= info.total) return null;       // on last page — done
+      // Collect clickable pager controls near the "Page X of Y" text. Climb
+      // parents (the text is itself a <div>, so closest('div') is useless) until
+      // some controls turn up.
+      let node = info.el.parentElement, controls = [];
+      for (let up = 0; up < 6 && node && !controls.length; up++, node = node.parentElement) {
+        controls = [...node.querySelectorAll("button, a, svg, i, [role='button']")]
+          .filter((c) => c.offsetParent !== null && !c.contains(info.el) && !info.el.contains(c));
+      }
+      if (controls.length) {
+        // DOM order is misleading: ICICI lists ALL arrow svgs after the page
+        // number even though first/prev sit visually to its left. Use GEOMETRY —
+        // "next" is the control immediately to the RIGHT of the page number on
+        // the same row. (first/prev are left; "last" and any download button are
+        // further right, so the CLOSEST right-side control is "next".)
+        const r0 = info.el.getBoundingClientRect();
+        if (r0.width > 0) {
+          const cy = (r0.top + r0.bottom) / 2;
+          const right = controls
+            .map((c) => ({ c, r: c.getBoundingClientRect() }))
+            .filter(({ r }) => r.width > 0 && r.left >= r0.right - 4 &&
+                    Math.abs((r.top + r.bottom) / 2 - cy) < 60)
+            .sort((a, b) => a.r.left - b.r.left);
+          if (right.length) return right[0].c;
+        }
+        // Geometry unavailable (zero-size layout) — fall back to DOM order.
+        const after = controls.filter((c) =>
+          info.el.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING);
+        if (after.length) return after[0];
       }
     }
   }
@@ -699,6 +1054,31 @@ function debugRowSelectors(combinedSelector) {
       catch { return `${sel}=ERR`; }
     });
     log("Selector probe:", counts.join("  |  "));
+
+    // If the primary row selector actually matches rows, dump the FIRST row's
+    // full cell structure (tag.class="text"). This is the authoritative source
+    // for the description/credit/debit/balance selectors — far more reliable
+    // than the currency-anchored walk below, which can latch onto the account
+    // summary card instead of a transaction row.
+    if (parts.length) {
+      const matched = document.querySelectorAll(parts[0]);
+      if (matched.length) {
+        const tc = (el) =>
+          `${el.tagName.toLowerCase()}.${(el.className || "").toString().trim().replace(/\s+/g, ".") || "(noclass)"}`;
+        const row0 = matched[0];
+        // The <td> column classes are what credit_debit_cols needs (credit vs
+        // debit vs balance column). Dump each direct <td> with its class + text.
+        const tds = [...row0.querySelectorAll("td")]
+          .map((td, i) => `td[${i}].${(td.className || "").toString().trim().replace(/\s+/g, ".") || "(noclass)"}="${(td.innerText || "").trim().replace(/\s+/g, " ").slice(0, 30)}"`);
+        log(`PRIMARY ROW[0] TDs:`, tds.join("  |  "));
+        const cells = [...row0.querySelectorAll("td, th, p, span, div")]
+          .filter((el) => el.children.length === 0 && (el.innerText || "").trim())
+          .slice(0, 18)
+          .map((el) => `${tc(el)}="${(el.innerText || "").trim().slice(0, 26)}"`);
+        log(`PRIMARY ROW[0] leaf cells:`, cells.join("  |  "));
+      }
+    }
+
     const sampleClasses = new Set();
     const sampleAttrs = new Set();
     document.querySelectorAll("tr, [role='row']").forEach((row, i) => {
@@ -710,6 +1090,39 @@ function debugRowSelectors(combinedSelector) {
     });
     log("Sample row classes:", [...sampleClasses].slice(0, 12).join(" || "));
     log("Sample row data-attrs:", [...sampleAttrs].join(", "));
+
+    // Currency-anchored probe: modern ICICI renders rows as <div>s, not <tr>s,
+    // so the tr-based sample above comes back empty. Find elements whose text is
+    // a money value (₹1,234.56), then walk up to the repeating ROW container
+    // (the nearest ancestor that has several same-class siblings) and dump its
+    // tag.class plus the tag.class of each descendant cell. That's exactly the
+    // info needed to write the selector/description/credit/debit/balance config.
+    const money = /(₹|rs\.?|inr)\s*[\d,]+\.\d{2}/i;
+    const moneyEls = [...document.querySelectorAll("div,span,p,td")]
+      .filter((el) => el.children.length === 0 && money.test((el.innerText || "").trim()));
+    log("Currency-text elements found:", moneyEls.length);
+    if (moneyEls.length) {
+      let row = moneyEls[0];
+      // climb until the element has >=3 siblings sharing its className (a list)
+      for (let hops = 0; hops < 8 && row.parentElement; hops++) {
+        const p = row.parentElement;
+        const sibs = [...p.children].filter(
+          (c) => c.className && c.className === row.className,
+        );
+        if (sibs.length >= 3) break;
+        row = p;
+      }
+      const tc = (el) =>
+        `${el.tagName.toLowerCase()}.${(el.className || "").toString().trim().replace(/\s+/g, ".") || "(noclass)"}`;
+      log("ROW CONTAINER candidate:", tc(row), "siblings=",
+        [...(row.parentElement ? row.parentElement.children : [])]
+          .filter((c) => c.className === row.className).length);
+      const cells = [...row.querySelectorAll("*")]
+        .filter((el) => el.children.length === 0 && (el.innerText || "").trim())
+        .slice(0, 14)
+        .map((el) => `${tc(el)}="${(el.innerText || "").trim().slice(0, 24)}"`);
+      log("ROW CONTAINER cells:", cells.join("  |  "));
+    }
   } catch (e) {
     log("Selector probe failed:", e.message);
   }
@@ -717,10 +1130,59 @@ function debugRowSelectors(combinedSelector) {
 
 function sendError(msg) {
   log("ERROR:", msg);
-  chrome.runtime.sendMessage({ type: "SCRAPE_RESULT", payload: { error: msg } });
+  chrome.runtime.sendMessage({ type: "SCRAPE_RESULT", payload: { error: msg, navLog: _navLog() } });
 }
 
-function log(...args) { console.log("[FIFO]", ...args); }
+// Fire ONE realistic click gesture. Custom Angular controls (e.g. ICICI's period
+// dropdown) often open on pointerdown/mousedown rather than a bare synthetic
+// `click`, so dispatch the full pointer→mouse→click chain. CRUCIAL: this counts
+// as a SINGLE activation. Do NOT also call el.click() — that's a second click,
+// and on a toggle (an open dropdown) it immediately closes it again, so the
+// option we want disappears before we can pick it. One gesture = one toggle.
+function _robustClick(el) {
+  try { el.focus(); } catch (_) {}
+  const opts = { bubbles: true, cancelable: true, view: window };
+  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+    try {
+      const Ev = type.startsWith("pointer") && typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
+      el.dispatchEvent(new Ev(type, opts));
+    } catch (_) {}
+  }
+}
+
+// Persist content.js logs into the SAME chrome.storage.local "fifoLog" ring
+// buffer that background.js uses, so the navigate-step and ROW DEBUG output is
+// visible in the dump even after the (often background) tab closes. Content
+// scripts can use chrome.storage when the extension has the "storage" perm.
+// NOTE: background.js re-injects content.js into the SAME tab on every Sync Now,
+// so this file's top-level scope can run twice in one page. A top-level
+// `let`/`const` would throw "already declared" on the 2nd injection. Keep the
+// log-chain state on globalThis (idempotent) and avoid any top-level let/const.
+function _persistLog(line) {
+  globalThis.__fifoLogChain = (globalThis.__fifoLogChain || Promise.resolve()).then(async () => {
+    try {
+      const { fifoLog = [] } = await chrome.storage.local.get("fifoLog");
+      fifoLog.push(line);
+      if (fifoLog.length > 500) fifoLog.splice(0, fifoLog.length - 500);
+      await chrome.storage.local.set({ fifoLog });
+    } catch (_) {}
+  });
+}
+function log(...args) {
+  console.log("[FIFO]", ...args);
+  try {
+    const line = `[${new Date().toISOString()}] [content] ` +
+      args.map(a => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
+    _persistLog(line);
+    // Also keep an in-memory copy so it can ride along in the SCRAPE_RESULT
+    // payload — background.js persists that, which survives the tab being closed
+    // on failure (the async chrome.storage writes above often don't flush first).
+    (globalThis.__fifoNavLog || (globalThis.__fifoNavLog = [])).push(line);
+  } catch (_) {}
+}
+function _navLog() {
+  return (globalThis.__fifoNavLog || []).slice(-150);
+}
 
 // ── Status banner injected into the bank page ─────────────────────────────
 function showBanner(message, type = "info") {

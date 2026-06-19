@@ -187,21 +187,21 @@
         },
         {
             "action": "wait_for_selector",
-            "selector": "#AuthenticationFG\\.userId, input[name='AuthenticationFG.userId'], #cust-id"
+            "selector": "#user-id, input[name='username-l']"
         },
         {
             "action": "fill",
-            "selector": "#AuthenticationFG\\.userId, input[name='AuthenticationFG.userId'], #cust-id",
+            "selector": "#user-id, input[name='username-l']",
             "value": "$username"
         },
         {
             "action": "fill",
-            "selector": "#AuthenticationFG\\.password, input[name='AuthenticationFG.password'], #password",
+            "selector": "#password, input[name='password-l']",
             "value": "$password"
         },
         {
             "action": "click",
-            "selector": "button[type='submit'], input[type='submit'], #login-btn"
+            "selector": "button.login-btn, button[type='submit']"
         },
         {
             "action": "maybe_mfa",

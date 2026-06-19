@@ -2766,12 +2766,34 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
         return `<span class="merch-avatar" style="width:${size}px;height:${size}px;background:${bg};color:${fg};font-size:${fs}px">${initials}</span>`;
       }
 
+      // Turn a stored date into a "YYYY-MM" bucket. Handles clean ISO dates
+      // (2025-12-29) AND messy bank blocks with no year, e.g. ICICI's
+      // "Dec\n\n29" / "14 Jun" — month + day only. For the year-less case we
+      // infer the year from a "last 1 year" window: a month later than the
+      // current month belongs to last year (Dec seen in June → previous year).
+      function _monthKeyFromDate(raw) {
+        raw = (raw || "").trim();
+        const iso = raw.match(/^(\d{4})-(\d{2})/);
+        if (iso) return raw.slice(0, 7);
+        const MON = { jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11 };
+        let mon = null;
+        for (const tok of raw.split(/[\s,]+/)) {
+          const k = tok.trim().toLowerCase().slice(0, 3);
+          if (k in MON) { mon = MON[k]; break; }
+        }
+        if (mon === null) return "";
+        const now = new Date();
+        let y = now.getFullYear();
+        if (mon > now.getMonth()) y -= 1;
+        return `${y}-${String(mon + 1).padStart(2, "0")}`;
+      }
+
       function _computeMonthlyFromPayload(payload) {
         const txns = payload.transactions || [];
         const isCreditCard = !!payload._isCreditCard;
         const monthMap = {};
         txns.forEach(t => {
-          const month = (t.date || "").slice(0, 7);
+          const month = _monthKeyFromDate(t.date);
           if (!month || !/^\d{4}-\d{2}$/.test(month)) return;
           if (!monthMap[month]) monthMap[month] = { income: 0, expenses: 0, charges: 0, payments: 0 };
           const n = parseAmount(t.amount);
@@ -2780,7 +2802,7 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
             if (n < 0) { monthMap[month].payments += Math.abs(n); monthMap[month].income += Math.abs(n); }
             else       { monthMap[month].charges  += n;           monthMap[month].expenses += n; }
           } else {
-            const atype = (t.txn_type || "").toLowerCase();
+            const atype = (t.txn_type || t.amount_type || "").toLowerCase();
             const isCredit = atype === "credit";
             if (isCredit) monthMap[month].income += Math.abs(n);
             else          monthMap[month].expenses += Math.abs(n);
