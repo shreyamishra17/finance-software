@@ -2820,6 +2820,11 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
       function renderOverviewContent(payload) {
         const txns = payload.transactions || [];
         const isCreditCard = !!payload._isCreditCard;
+        // Currency for this account (₹ for Indian banks, else $). Used by the
+        // recent-transactions list and the chart axis/tooltip so the Overview
+        // matches the summary cards instead of hardcoding "$".
+        const _rsym = payload._currSym || "$";
+        const _rloc = _rsym === "₹" ? "en-IN" : "en-US";
 
         // ── Update panel labels ─────────────────────────────────────────
         const chartLabelEl  = document.getElementById("overviewChartLabel");
@@ -2858,13 +2863,13 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
                 plugins: {
                   legend: { position: "top", labels: { font: { size: 11, family: "Inter" }, boxWidth: 8, padding: 10 } },
                   tooltip: { backgroundColor: "#fff", titleColor: "#111", bodyColor: "#444", borderColor: "#e5e7eb", borderWidth: 1, padding: 8,
-                    callbacks: { label: ctx => ` ${ctx.dataset.label}: $${ctx.parsed.y.toLocaleString()}` } },
+                    callbacks: { label: ctx => ` ${ctx.dataset.label}: ${_rsym}${ctx.parsed.y.toLocaleString(_rloc)}` } },
                 },
                 scales: {
                   x: { grid: { display: false }, ticks: { font: { size: 10 }, color: "#9ca3af" } },
                   y: { border: { display: false }, grid: { color: "#f3f4f6" },
                        ticks: { font: { size: 10 }, color: "#9ca3af",
-                                callback: v => "$" + (v >= 1000 ? (v / 1000).toFixed(0) + "k" : v) } },
+                                callback: v => _rsym + (v >= 1000 ? (v / 1000).toFixed(0) + "k" : v) } },
                 },
               },
             });
@@ -2906,7 +2911,7 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
                   <span class="overview-recent-merchant">${merchant}</span>
                   <span class="overview-recent-cat">${cat}${dateStr ? " · " + dateStr : ""}</span>
                 </div>
-                <span class="overview-recent-amount neg">-$${amt.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span class="overview-recent-amount neg">-${_rsym}${amt.toLocaleString(_rloc, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>`;
             }).join("");
           } else {
@@ -2918,7 +2923,7 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
           const recent = txns.slice(0, 5);
           recentEl.innerHTML = recent.map(t => {
             const merchant = t.merchant_clean || t.raw_description || "";
-            const amount = _displayAmt(t.amount || "", t.txn_type, false);
+            const amount = _displayAmt(t.amount || "", t.txn_type, false, _rsym);
             const isNeg = amount.startsWith("-");
             const cat = t.category || "Other";
             return `<div class="overview-recent-row">
