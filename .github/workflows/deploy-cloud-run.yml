@@ -4,11 +4,14 @@ on:
   push:
     branches: [main]
     paths:
-      # Only redeploy when backend code actually changes
+      # Redeploy when backend OR frontend changes. The Cloud Run service serves
+      # the website/ static files too (demo.html etc.), so frontend-only edits
+      # must redeploy to reach …run.app — not just backend code.
       - 'src/**'
       - 'core/**'
       - 'bank_fetcher/**'
       - 'api/**'
+      - 'website/**'
       - 'requirements.txt'
       - 'Dockerfile'
       - '.github/workflows/**'
