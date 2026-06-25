@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Demo — FIFO</title>
     <meta name="description" content="Upload a PDF and preview it in the browser." />
-    <link rel="stylesheet" href="styles.css?v=20" />
+    <link rel="stylesheet" href="styles.css?v=21" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231f5f55'/><text x='50%25' y='50%25' font-family='system-ui,sans-serif' font-size='20' font-weight='800' fill='white' text-anchor='middle' dominant-baseline='central'>F</text></svg>" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   </head>
@@ -650,6 +650,20 @@
         renderTransactions(lastPayload, activeCategory);
       }
 
+      // Errored balance cards (Starting/Ending) are clickable: let the user
+      // supply the account balance the sync couldn't read. Reuses the existing
+      // setAccountBalance flow, which re-fetches and re-renders the 4 cards.
+      function _promptSetBalance() {
+        if (!currentAccountId) return;
+        const entered = window.prompt(
+          "We couldn't detect this account's balance from the sync.\n" +
+          "Enter the current (ending) balance to show starting & ending balances:"
+        );
+        if (entered === null) return;
+        const cleaned = String(entered).trim();
+        if (cleaned) setAccountBalance(currentAccountId, cleaned);
+      }
+
       function renderSummary(payload) {
         const dynamicCards = Array.isArray(payload.summary_cards) ? payload.summary_cards : [];
         if (dynamicCards.length) {
@@ -661,8 +675,16 @@
               const direction = _LABEL_TO_DIRECTION[label];
               const dirAttr = direction ? ` data-direction="${direction}"` : "";
               const activeClass = direction && direction === activeDirectionFilter ? " is-active" : "";
-              const clickAttr = direction ? ` onclick="_onSummaryCardClick('${direction}')"` : "";
-              return `<div class="result-card${activeClass}"${dirAttr}${clickAttr}><div class="result-label">${label}</div><div class="result-value${colorClass}">${value}</div></div>`;
+              const isErr = !!card.error;
+              const errClass = isErr ? " is-error" : "";
+              const titleAttr = isErr ? ` title="${String(card.error).replace(/"/g, "&quot;")}"` : "";
+              const clickAttr = direction
+                ? ` onclick="_onSummaryCardClick('${direction}')"`
+                : (card.setBalance ? ` onclick="_promptSetBalance()"` : "");
+              const note = isErr
+                ? `<div class="result-error-note">⚠ Not detected${card.setBalance ? " · set manually" : ""}</div>`
+                : "";
+              return `<div class="result-card${activeClass}${errClass}"${dirAttr}${titleAttr}${clickAttr}><div class="result-label">${label}</div><div class="result-value${colorClass}">${value}</div>${note}</div>`;
             })
             .join("");
           return;
@@ -2218,7 +2240,7 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
             { label: "Money Out",    amount: "-" + fmt(totalExpenses), color: "negative" },
             { label: "Money In",     amount: "+" + fmt(totalIncome),   color: totalIncome > 0 ? "positive" : "" },
           ];
-        } else if (!isCreditCard && currentBalNum !== null) {
+        } else if (currentBalNum !== null) {
           // Checking/savings with known balance: show starting → ending
           const startingBal = currentBalNum - netChange;
           summaryCards = [
@@ -2228,10 +2250,17 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
             { label: "Ending Balance",   amount: fmt(currentBalNum),    color: currentBalNum >= 0 ? "positive" : "negative" },
           ];
         } else {
+          // Checking/savings but the account balance wasn't detected this sync.
+          // Keep the full 4-card layout — Money In/Out are exact from the
+          // transactions — and flag the two balance cards as errored instead of
+          // silently collapsing to a 3-card "Net Change" view. Starting Balance
+          // is derived from the ending balance, so both are unknown together.
+          const balErr = "Couldn't read the account balance from this sync. Click to enter it manually.";
           summaryCards = [
-            { label: "Money In",   amount: "+" + fmt(totalIncome),   color: "positive" },
-            { label: "Money Out",  amount: "-" + fmt(totalExpenses),  color: "negative" },
-            { label: "Net Change", amount: (netChange >= 0 ? "+" : "-") + fmt(Math.abs(netChange)), color: netChange >= 0 ? "positive" : "negative" },
+            { label: "Starting Balance", amount: "—", color: "", error: balErr, setBalance: true },
+            { label: "Money In",         amount: "+" + fmt(totalIncome),   color: "positive" },
+            { label: "Money Out",        amount: "-" + fmt(totalExpenses),  color: "negative" },
+            { label: "Ending Balance",   amount: "—", color: "", error: balErr, setBalance: true },
           ];
         }
 

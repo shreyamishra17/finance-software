@@ -115,6 +115,12 @@ def scrape_automated(
             "description": r.description,
             "amount": r.amount,
             "type": r.amount_type,
+            # Must carry balance: it's part of the dedup key in
+            # store_transactions(). Dropping it here keyed automated-intake
+            # rows with an empty balance, so the same transaction re-synced
+            # via the extension (which always sends balance) got a different
+            # doc_id and duplicated.
+            "balance": r.balance,
         }
         for r in records
     ]

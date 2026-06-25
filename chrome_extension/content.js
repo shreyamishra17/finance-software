@@ -669,10 +669,15 @@ function scrapeRows(config) {
         // Safer default: assume debit. Most transactions on a checking
         // account are spends; defaulting to credit was over-counting income.
         amountType = "debit";
-        // Explicit type column wins for unambiguous cases.
-        if (/deposit/.test(typeTxt)) {
+        // Explicit type column wins for unambiguous cases. BoA's type column
+        // reads "Credit"/"Debit" (NOT "Deposit"), so match the same credit
+        // keyword set the server crawler uses (base_crawler _CREDIT_KEYWORDS).
+        // Without "credit" here, every deposit — including payroll/company
+        // income — fell through to the debit default above and was mislabeled
+        // as money out.
+        if (/credit|deposit|refund|reversal/.test(typeTxt)) {
           amountType = "credit";
-        } else if (/debit|withdrawal/.test(typeTxt)) {
+        } else if (/debit|withdrawal|purchase/.test(typeTxt)) {
           amountType = "debit";
         } else if (/transfer/.test(typeTxt)) {
           // Transfer = ambiguous. Look at description.
@@ -904,7 +909,12 @@ function parseAmount(raw) {
 }
 
 function normalizeDate(raw) {
-  if (!raw || raw.toLowerCase() === "pending") return "Pending";
+  // BoA (and others) label a not-yet-posted row "Pending" or "Processing" in
+  // the date column. Both must map to the pending sentinel — otherwise the
+  // `new Date(`${raw} ${year}`)` fallback below silently coerces "Processing"
+  // to 2026-01-01 (V8 grabs the year, defaults to Jan 1), which then drops out
+  // of the dashboard's recent-window date filter and the row vanishes.
+  if (!raw || /^(pending|processing)\b/i.test(raw.trim())) return "Pending";
   try {
     const d = new Date(raw);
     if (!isNaN(d)) return d.toISOString().split("T")[0];

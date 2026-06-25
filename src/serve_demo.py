@@ -278,7 +278,47 @@ def _categorize_scraped(transactions: list[dict], account_type: Optional[str] = 
     except Exception as exc:
         print(f"WARNING: recurrence detection failed: {exc}")
 
+    # TEMP diagnostic — shows the credit/debit split the scraper+categorizer
+    # produced, so we can tell whether deposits are being classified at all.
+    _types = [(t.get("type") or t.get("amount_type") or "").lower() for t in transactions]
+    _credits = sum(1 for x in _types if x == "credit")
+    _sample = [{"desc": str(t.get("description") or "")[:28],
+                "type": t.get("type") or t.get("amount_type")} for t in transactions[:6]]
+    print(f"[amount-type] {_credits} credit / {len(_types) - _credits} non-credit "
+          f"of {len(_types)}; sample={_sample}", flush=True)
+
     return transactions
+
+
+def _derive_ending_balance(transactions: list[dict], ending_balance: str = "") -> str:
+    """Best-effort ending balance for an account.
+
+    The ending balance is simply the running balance after the most recent
+    transaction, which we already scrape per row (txn['balance']). Bank pages
+    don't always render a separate account-balance header — BoA's
+    .available-balance-amount / .current-balance-amount selectors frequently
+    return nothing in a background-tab sync — so when the scraped account-level
+    ending_balance is blank, fall back to the newest transaction's running
+    balance instead of leaving the account with no balance at all.
+
+    Scrape order is newest-first for every bank we support, so the newest
+    transaction is the first one with a non-empty balance cell.
+    """
+    txns = transactions or []
+    if ending_balance and str(ending_balance).strip():
+        result = str(ending_balance).strip()
+    else:
+        result = ""
+        for txn in txns:
+            bal = str(txn.get("balance") or "").strip()
+            if bal:
+                result = bal
+                break
+    # TEMP diagnostic — shows whether the scraped rows actually carry a balance.
+    _sample = [{k: t.get(k) for k in ("date", "amount", "balance")} for t in txns[:3]]
+    print(f"[ending-balance] header={ending_balance!r} derived={result!r} "
+          f"n={len(txns)} sample={_sample}", flush=True)
+    return result or (ending_balance or "")
 
 
 def _smart_since_date(account_id: int, fallback_days: int = 365) -> datetime:
@@ -371,6 +411,7 @@ def _smart_connect_worker(
         update_last_synced(account_id, datetime.now())
         if last_url:
             set_last_url(account_id, last_url)
+        ending_balance = _derive_ending_balance(transactions, ending_balance)
         if ending_balance:
             set_account_balance(account_id, ending_balance)
         set_needs_login(account_id, False)
@@ -1358,6 +1399,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
             # when 1175 were duplicates.
             new_count = store_transactions(account_id, transactions)
             update_last_synced(account_id, datetime.now())
+            ending_balance = _derive_ending_balance(transactions, ending_balance)
             if ending_balance:
                 set_account_balance(account_id, ending_balance)
             if last_url:
@@ -1662,8 +1704,12 @@ class DemoHandler(SimpleHTTPRequestHandler):
                     session_save_path=session_path,
                 )
                 transactions = [
+                    # balance is part of the dedup key (store_transactions);
+                    # omitting it keys these rows with an empty balance and
+                    # duplicates them against the balance-carrying extension sync.
                     {"date": r.date, "description": r.description,
-                     "amount": r.amount, "type": r.amount_type}
+                     "amount": r.amount, "type": r.amount_type,
+                     "balance": r.balance}
                     for r in records
                 ]
                 ending_balance   = crawler._ending_balance
@@ -1680,6 +1726,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
             update_last_synced(account_id, datetime.now())
             if last_url:
                 set_last_url(account_id, last_url)
+            ending_balance = _derive_ending_balance(transactions, ending_balance)
             if ending_balance:
                 set_account_balance(account_id, ending_balance)
             if inv_bal := (extra_vals or {}).get("investment_balance", ""):
@@ -1993,6 +2040,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
         _categorize_scraped(txns)
         store_transactions(account_id, txns)
         update_last_synced(account_id, datetime.now())
+        ending_balance = _derive_ending_balance(txns, ending_balance)
         if ending_balance:
             set_account_balance(account_id, ending_balance)
         set_needs_login(account_id, False)
@@ -2056,6 +2104,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
             update_last_synced(account_id, datetime.now())
             if last_url:
                 set_last_url(account_id, last_url)
+            ending_balance = _derive_ending_balance(transactions, ending_balance)
             if ending_balance:
                 set_account_balance(account_id, ending_balance)
             if inv_bal := extra_vals.get("investment_balance", ""):

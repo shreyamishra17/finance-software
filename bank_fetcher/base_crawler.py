@@ -934,8 +934,11 @@ class BankCrawler:
                         _d3 = _text(row, col_cfg.get("credit_amount", ""))
                         _d4 = _text(row, col_cfg.get("debit_amount", ""))
                         _d5 = _text(row, col_cfg.get("balance", ""))
+                        _d6 = _text(row, col_cfg.get("amount", ""))
+                        _d7 = _text(row, col_cfg.get("amount_type", ""))
                         print(f"  [diag row {_diag_row_count}] date={_d1!r:20} desc={_d2!r:40} "
-                              f"credit={_d3!r:12} debit={_d4!r:12} bal={_d5!r:12}")
+                              f"credit={_d3!r:12} debit={_d4!r:12} bal={_d5!r:12} "
+                              f"amount={_d6!r:12} type={_d7!r:18}")
 
                     description = _text(row, col_cfg.get("description", ""))
 

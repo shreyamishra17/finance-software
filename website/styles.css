@@ -1246,6 +1246,29 @@ body.demo-page::after {
   font-size: 22px;
 }
 
+/* Balance card whose value the sync couldn't detect: keep the card in place
+   (so the 4-card layout is stable) but mark it as errored + clickable. */
+#resultsSummary .result-card.is-error {
+  border-color: rgba(202, 138, 4, 0.45);
+  background: linear-gradient(180deg, rgba(255, 251, 235, 0.98), rgba(254, 249, 231, 0.96));
+  cursor: pointer;
+}
+#resultsSummary .result-card.is-error:hover {
+  border-color: rgba(202, 138, 4, 0.7);
+}
+#resultsSummary .result-card.is-error .result-value {
+  color: var(--muted);
+}
+.result-error-note {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  color: #b45309;
+  overflow-wrap: anywhere;
+}
+
 .category-summary {
   margin-top: 12px;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

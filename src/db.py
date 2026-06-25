@@ -277,8 +277,62 @@ def _normalize_date_store(raw: str) -> str:
     return s
 
 
-def _txn_doc_id(account_id: int, date: str, description: str, amount: str, balance: str = "") -> str:
-    key = f"{account_id}|{date}|{description}|{amount}|{balance}"
+def _norm_amount_key(s: str, amount_type: str = "") -> str:
+    """Canonicalize a transaction amount for the dedup key, WITH sign.
+
+    The server fetcher stores the raw cell text (e.g. '-$21.24') while the
+    extension sends a bare absolute number ('21.24'), so the string's own sign
+    is unreliable — the extension drops it. We instead derive the sign from
+    amount_type, which BOTH paths set and both run through _categorize_scraped,
+    so it's consistent across scrapers. A debit and a same-amount credit (e.g. a
+    charge vs. its refund) therefore stay distinct in the key.
+    debit/withdrawal -> negative; credit/deposit -> positive."""
+    cleaned = re.sub(r"[^\d.]", "", s or "")
+    try:
+        val = abs(float(cleaned))
+    except (ValueError, TypeError):
+        return (s or "").strip()
+    at = (amount_type or "").strip().lower()
+    sign = "-" if at.startswith(("debit", "withdrawal", "dr")) else ""
+    return f"{sign}{val:.2f}"
+
+
+def _norm_balance_key(s: str) -> str:
+    """Canonicalize a running-balance string (strip currency/commas; keep its
+    own sign so an overdraft stays negative). Both scrapers read balance from
+    the same cell as raw text, so normalizing here makes them agree."""
+    cleaned = re.sub(r"[^\d.]", "", s or "")
+    try:
+        val = abs(float(cleaned))
+    except (ValueError, TypeError):
+        return (s or "").strip()
+    neg = bool(re.search(r"[-(]", s or ""))
+    return f"{'-' if neg else ''}{val:.2f}"
+
+
+def _norm_desc_key(s: str) -> str:
+    """First line, lowercased, non-alphanumerics collapsed to single spaces.
+
+    The extension stores only the first line of the description cell
+    (firstLine()) while the server stores the full innerText; reducing both to
+    first-line + alphanumerics makes them hash identically."""
+    first = (s or "").split("\n")[0]
+    return re.sub(r"[^a-z0-9]+", " ", first.lower()).strip()
+
+
+def _txn_doc_id(account_id: int, date: str, description: str, amount: str,
+                balance: str = "", amount_type: str = "") -> str:
+    # Normalize every component so the same transaction hashes identically
+    # regardless of which scraper produced it. Hashing raw strings here caused
+    # fresh-intake rows (server: '-$21.24', full multi-line description) to
+    # mismatch the extension's re-sync ('21.24', first-line description) and
+    # duplicate the entire account on the first Sync Now. The amount keeps its
+    # sign (debit vs credit) via amount_type — see _norm_amount_key.
+    date_n = _normalize_date_store((date or "").strip())
+    desc_n = _norm_desc_key(description)
+    amount_n = _norm_amount_key(amount, amount_type)
+    balance_n = _norm_balance_key(balance) if (balance or "").strip() else ""
+    key = f"{account_id}|{date_n}|{desc_n}|{amount_n}|{balance_n}"
     return hashlib.sha1(key.encode("utf-8")).hexdigest()
 
 
@@ -306,7 +360,8 @@ def store_transactions(account_id: int, transactions: list[dict]) -> int:
         date = _normalize_date_store(txn.get("date", "") or "")
         description = txn.get("description", "")
         amount = txn.get("amount", "")
-        doc_id = _txn_doc_id(account_id, date, description, amount, txn.get("balance", ""))
+        doc_id = _txn_doc_id(account_id, date, description, amount, txn.get("balance", ""),
+                             txn.get("type") or txn.get("amount_type") or "")
         ref = _transactions_collection().document(doc_id)
         # Track max date — used for early-stop pagination on the next sync
         if date and date > max_date_in_batch:
@@ -333,7 +388,13 @@ def store_transactions(account_id: int, transactions: list[dict]) -> int:
                 "description":    description,
                 "merchant_clean": txn.get("merchant_clean") or description,
                 "amount":         amount,
-                "amount_type":    txn.get("type", "debit"),
+                # Must mirror the update path above: the extension sends
+                # "amount_type" (not "type"), and _categorize_scraped only sets
+                # "type" when it flips a row to credit. Reading "type" alone here
+                # defaulted every scraper-credit to debit on first insert — so a
+                # brand-new account showed all transactions as money out, while a
+                # re-sync (which hits the update path) looked correct.
+                "amount_type":    txn.get("type") or txn.get("amount_type") or "debit",
                 "category":       txn.get("category"),
                 "scraped_at":     now,
             })
@@ -385,7 +446,8 @@ def update_transaction_categories(account_id: int, transactions: list[dict]) -> 
         if not category and not merchant:
             continue
         date = _normalize_date_store(txn.get("date", "") or "")
-        doc_id = _txn_doc_id(account_id, date, txn.get("description", ""), txn.get("amount", ""))
+        doc_id = _txn_doc_id(account_id, date, txn.get("description", ""), txn.get("amount", ""),
+                             txn.get("balance", ""), txn.get("type") or txn.get("amount_type") or "")
         ref = _transactions_collection().document(doc_id)
         batch.update(ref, {"category": category, "merchant_clean": merchant})
         batch_count += 1

@@ -1,15 +1,14 @@
 {
   "manifest_version": 3,
   "name": "FIFO Sync",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Automatically syncs your bank transactions with FIFO in the background.",
 
   "permissions": [
     "tabs",
     "alarms",
     "storage",
-    "scripting",
-    "cookies"
+    "scripting"
   ],
   "host_permissions": [
     "*://*.capitalone.com/*",
