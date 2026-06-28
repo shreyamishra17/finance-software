@@ -23,3 +23,7 @@ categorizer/models/
 
 # Dead/retired code kept locally for reference, not tracked
 /DEAD/
+
+# Packaged Chrome-extension builds (Web Store upload artifacts) — not source.
+*.zip
+chrome_extension/*.zip
