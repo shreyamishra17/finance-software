@@ -321,19 +321,52 @@ def _norm_desc_key(s: str) -> str:
 
 
 def _txn_doc_id(account_id: int, date: str, description: str, amount: str,
-                balance: str = "", amount_type: str = "") -> str:
+                balance: str = "", amount_type: str = "", occurrence: int = 0) -> str:
     # Normalize every component so the same transaction hashes identically
     # regardless of which scraper produced it. Hashing raw strings here caused
     # fresh-intake rows (server: '-$21.24', full multi-line description) to
     # mismatch the extension's re-sync ('21.24', first-line description) and
     # duplicate the entire account on the first Sync Now. The amount keeps its
     # sign (debit vs credit) via amount_type — see _norm_amount_key.
+    #
+    # `balance` is DELIBERATELY NOT in the key (kept as a param only for
+    # call-site compatibility, and ignored). The running balance is flaky across
+    # syncs — the scraper reads it one sync and blank the next — so including it
+    # forged a NEW id for the SAME transaction every time the balance read
+    # differed, duplicating real rows (e.g. ICICI: 5 real ₹2,000 debits became
+    # 10). The description already carries the bank's own unique reference
+    # (".../304027881"), which distinguishes genuine same-day/same-amount repeats.
+    #
+    # `occurrence` is a last-resort tiebreaker for banks whose rows have NO
+    # unique ref AND collide on (date, desc, amount). It is 0 — absent from the
+    # key — for everything else, so it never changes ids for ref-bearing banks.
     date_n = _normalize_date_store((date or "").strip())
     desc_n = _norm_desc_key(description)
     amount_n = _norm_amount_key(amount, amount_type)
-    balance_n = _norm_balance_key(balance) if (balance or "").strip() else ""
-    key = f"{account_id}|{date_n}|{desc_n}|{amount_n}|{balance_n}"
+    key = f"{account_id}|{date_n}|{desc_n}|{amount_n}"
+    if occurrence:
+        key += f"|#{occurrence}"
     return hashlib.sha1(key.encode("utf-8")).hexdigest()
+
+
+def _assign_occurrences(transactions: list[dict]) -> list[int]:
+    """Occurrence index per transaction: the Nth row sharing an identical
+    (date, desc, amount) base key within this batch. 0 for unique rows — which
+    is the vast majority, and ALL rows on banks whose descriptions carry a
+    unique reference. Lets genuinely-identical, ref-less repeats stay distinct
+    without relying on the flaky balance."""
+    counts: dict = {}
+    out: list[int] = []
+    for txn in transactions:
+        date_n = _normalize_date_store((txn.get("date", "") or "").strip())
+        desc_n = _norm_desc_key(txn.get("description", ""))
+        amount_n = _norm_amount_key(txn.get("amount", ""),
+                                    txn.get("type") or txn.get("amount_type") or "")
+        base = f"{date_n}|{desc_n}|{amount_n}"
+        idx = counts.get(base, 0)
+        out.append(idx)
+        counts[base] = idx + 1
+    return out
 
 
 def _parse_amount_float(amt_str: str) -> float | None:
@@ -356,12 +389,13 @@ def store_transactions(account_id: int, transactions: list[dict]) -> int:
     # forward to scrape (instead of re-scraping a full year on every sync).
     max_date_in_batch: str = ""
 
-    for txn in transactions:
+    occurrences = _assign_occurrences(transactions)
+    for i, txn in enumerate(transactions):
         date = _normalize_date_store(txn.get("date", "") or "")
         description = txn.get("description", "")
         amount = txn.get("amount", "")
         doc_id = _txn_doc_id(account_id, date, description, amount, txn.get("balance", ""),
-                             txn.get("type") or txn.get("amount_type") or "")
+                             txn.get("type") or txn.get("amount_type") or "", occurrences[i])
         ref = _transactions_collection().document(doc_id)
         # Track max date — used for early-stop pagination on the next sync
         if date and date > max_date_in_batch:
@@ -440,14 +474,16 @@ def update_transaction_categories(account_id: int, transactions: list[dict]) -> 
     db = _get_db()
     batch = db.batch()
     batch_count = 0
-    for txn in transactions:
+    occurrences = _assign_occurrences(transactions)
+    for i, txn in enumerate(transactions):
         category = txn.get("category")
         merchant = txn.get("merchant_clean") or txn.get("description", "")
         if not category and not merchant:
             continue
         date = _normalize_date_store(txn.get("date", "") or "")
         doc_id = _txn_doc_id(account_id, date, txn.get("description", ""), txn.get("amount", ""),
-                             txn.get("balance", ""), txn.get("type") or txn.get("amount_type") or "")
+                             txn.get("balance", ""), txn.get("type") or txn.get("amount_type") or "",
+                             occurrences[i])
         ref = _transactions_collection().document(doc_id)
         batch.update(ref, {"category": category, "merchant_clean": merchant})
         batch_count += 1
