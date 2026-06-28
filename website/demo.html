@@ -778,8 +778,22 @@
         return 1 - Math.pow(1 - t, 3);
       }
 
+      // Account currency, DATA-DRIVEN: prefer the symbol the backend detected
+      // from the actual scraped amounts (acctMeta.currency — ₹/$/€/…); fall back
+      // to a bank-key guess, then "$". One source of truth, so we never hardcode
+      // a currency per view. `_insightsCur` is set by loadInsights before render.
+      let _insightsCur = { sym: "$", locale: "en-US" };
+      function _acctCurrency(acctMeta) {
+        let sym = (acctMeta && acctMeta.currency) || "";
+        if (!sym) {
+          const bk = ((acctMeta && acctMeta.bank_key) || "").toLowerCase();
+          sym = /icici|hdfc|sbi|axis|kotak|idfc|yes|pnb|bob|indus/.test(bk) ? "₹" : "$";
+        }
+        return { sym, locale: sym === "₹" ? "en-IN" : "en-US" };
+      }
+
       function formatCompactCurrency(value, decimals = 0) {
-        return "$" + Math.abs(value).toLocaleString("en-US", {
+        return _insightsCur.sym + Math.abs(value).toLocaleString(_insightsCur.locale, {
           minimumFractionDigits: decimals,
           maximumFractionDigits: decimals,
         });
@@ -788,7 +802,10 @@
       function animateCountNode(node) {
         if (!node) return;
         const raw = Number(node.dataset.targetValue || 0);
-        const prefix = node.dataset.prefix || "";
+        // data-prefix carries the sign + a "$" placeholder (e.g. "-$"); swap the
+        // "$" for the account's actual currency symbol so insights show ₹/€/…
+        // without touching every template. (animateCountNode is insights-only.)
+        const prefix = (node.dataset.prefix || "").replace("$", _insightsCur.sym);
         const suffix = node.dataset.suffix || "";
         const decimals = Number(node.dataset.decimals || 0);
         const duration = Number(node.dataset.duration || 800);
@@ -797,7 +814,7 @@
         const render = (value) => {
           // Build the full string in one shot — never concatenate "-" after the fact,
           // which causes the minus sign to render on a separate line in some browsers.
-          node.textContent = `${prefix}${Math.abs(value).toLocaleString("en-US", {
+          node.textContent = `${prefix}${Math.abs(value).toLocaleString(_insightsCur.locale, {
             minimumFractionDigits: decimals,
             maximumFractionDigits: decimals,
           })}${suffix}`;
@@ -1356,6 +1373,8 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
       async function loadInsights(accountId, period) {
         if (!accountId) return;
         period = period || _insightsPeriod || "all";
+        // Data-driven currency for this account — used by all insights formatters.
+        _insightsCur = _acctCurrency(_offlineAccounts.get(accountId) || _liveAcctMetaCache[accountId] || null);
         const pane = document.getElementById("insightsPane");
         pane.classList.add("is-loading");
         renderInsightsSkeleton();
@@ -1407,7 +1426,7 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
       function _renderInsights(ins, monthly, period) {
         resetInsightCharts();
         const fmt  = v => formatCompactCurrency(v, 0);
-        const fmtFull = v => "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const fmtFull = v => _insightsCur.sym + v.toLocaleString(_insightsCur.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         const periodLabel  = _periodLabel(period || "all");
         const isCreditCard = ins.account_type === "credit";
         const months       = monthly.months || [];
@@ -2195,9 +2214,11 @@ Current: ${currentCategory}`, currentCategory || "Uncategorized");
           category: t.category || "Uncategorized",
         }));
 
-        const isIndian = /icici|hdfc|sbi|axis|kotak/i.test((acctMeta?.bank_key || ""));
-        const currSym = isIndian ? "₹" : "$";
-        const locale = isIndian ? "en-IN" : "en-US";
+        // Data-driven currency: backend-detected acctMeta.currency, else bank-key
+        // guess, else "$". Flows into the payload as _currSym for the Overview.
+        const _cur = _acctCurrency(acctMeta);
+        const currSym = _cur.sym;
+        const locale = _cur.locale;
         const fmt = v => currSym + Math.abs(v).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         const acctBalance = acctMeta ? (acctMeta.account_balance || "") : "";
         const currentBalNum = acctBalance ? parseAmount(acctBalance) : null;

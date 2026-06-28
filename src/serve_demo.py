@@ -27,7 +27,7 @@ from new_bank_setup import bootstrap_config_if_unknown
 from db import (
     init_db, add_account, get_accounts, get_account,
     delete_account, store_transactions, get_transactions, update_last_synced,
-    set_auto_sync, set_needs_login, set_last_url, set_account_balance,
+    set_auto_sync, set_needs_login, set_last_url, set_account_balance, set_account_currency,
     set_has_credentials,
     set_account_status, get_latest_transaction_date, set_investment_balance,
     set_current_uid, reset_current_uid, get_current_uid, list_user_ids,
@@ -288,6 +288,23 @@ def _categorize_scraped(transactions: list[dict], account_type: Optional[str] = 
           f"of {len(_types)}; sample={_sample}", flush=True)
 
     return transactions
+
+
+def _detect_currency(transactions: list[dict], ending_balance: str = "") -> str:
+    """Best-effort currency symbol from what we actually scraped (₹ for ICICI,
+    $ for BoA, € / £ / ¥ elsewhere) — so the UI shows the right currency for any
+    bank/country instead of hardcoding a per-bank list. Scans the raw amount and
+    balance strings the scraper preserved for the first known symbol."""
+    SYMBOLS = ("₹", "$", "€", "£", "¥")
+    candidates = [str(ending_balance or "")]
+    for t in (transactions or [])[:50]:
+        candidates.append(str(t.get("raw_amount") or ""))
+        candidates.append(str(t.get("balance") or ""))
+    for c in candidates:
+        for s in SYMBOLS:
+            if s in c:
+                return s
+    return ""
 
 
 def _derive_ending_balance(transactions: list[dict], ending_balance: str = "") -> str:
@@ -1403,6 +1420,9 @@ class DemoHandler(SimpleHTTPRequestHandler):
             ending_balance = _derive_ending_balance(transactions, ending_balance)
             if ending_balance:
                 set_account_balance(account_id, ending_balance)
+            # Persist the currency the bank actually rendered (data-driven, not
+            # hardcoded per bank) so the UI shows ₹/$/€/… correctly everywhere.
+            set_account_currency(account_id, _detect_currency(transactions, ending_balance))
             if last_url:
                 set_last_url(account_id, last_url)
             set_needs_login(account_id, False)

@@ -242,6 +242,15 @@ def set_account_balance(account_id: int, balance: str) -> None:
     _accounts_collection().document(str(account_id)).update({"account_balance": balance})
 
 
+def set_account_currency(account_id: int, currency: str) -> None:
+    """Persist the currency symbol the bank actually rendered (₹, $, €, …),
+    detected from the scraped amounts. Lets the UI show the right currency for
+    any bank/country instead of hardcoding per bank. No-op for an empty value
+    so a sync that couldn't detect one never clears a previously-set currency."""
+    if (currency or "").strip():
+        _accounts_collection().document(str(account_id)).update({"currency": currency.strip()})
+
+
 def set_investment_balance(account_id: int, balance: str) -> None:
     """Store the investment portfolio value (e.g. mutual funds) scraped from the bank overview."""
     _accounts_collection().document(str(account_id)).update({"investment_balance": balance})
