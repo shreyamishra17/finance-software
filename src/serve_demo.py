@@ -1096,6 +1096,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
                     "debit":       "td.debit p",
                     "balance":     "td.balance p",
                     "date_mode":   "parent_walk",   # date lives in ancestor element
+                    "fix_year_sequence": True,      # ICICI date cell has no year; fix by sequence
                     "amount_sign": "credit_debit_cols",
                 },
                 "balance_selectors": [

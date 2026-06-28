@@ -438,6 +438,11 @@ async function runScrape(config, currentUrl) {
     log(`Rows visible after pagination: ${afterCount}`);
     transactions = scrapeRows(config);
   }
+  // Sequence-aware year correction (banks whose date cell has no year, e.g.
+  // ICICI's "29 Jun"). The per-row guess can't tell this-year June from
+  // last-year June; this walks the newest-first list and fixes years by month
+  // wrap. Gated by config so banks with real years aren't touched.
+  if (config.rows && config.rows.fix_year_sequence) _fixYearsSequential(transactions);
   const endingBalance = scrapeBalance(config);
 
   log(`Scraped ${transactions.length} transactions, balance: ${endingBalance}`);
@@ -835,6 +840,27 @@ function parseDayMonthDate(raw) {
   let year = now.getFullYear();
   if (mon > now.getMonth()) year -= 1;
   return `${year}-${String(mon + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+// Fix wrong YEARS across a newest-first list of scraped rows whose date cell had
+// no year (parseDayMonthDate guessed per-row and can't tell this-year June from
+// last-year June). The MONTH is correct; only the year may be off. Walk
+// newest→oldest: within a year, months are non-increasing in newest-first order,
+// so whenever the month goes UP from one row to the next-older one, we've crossed
+// a year boundary going back in time → decrement the year. Anchors on the newest
+// row's already-correct year. Mutates rows[].date in place.
+function _fixYearsSequential(rows) {
+  if (!rows || !rows.length) return;
+  let year = null, prevMonth = null;
+  for (const r of rows) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(r.date || "");
+    if (!m) continue;                       // skip Pending / unparseable
+    const mon = parseInt(m[2], 10);
+    if (year === null) { year = parseInt(m[1], 10); prevMonth = mon; continue; }
+    if (mon > prevMonth) year -= 1;         // month jumped up going older → year wrapped
+    prevMonth = mon;
+    r.date = `${year}-${m[2]}-${m[3]}`;
+  }
 }
 
 // ── Button finders ────────────────────────────────────────────────────────
