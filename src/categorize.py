@@ -703,8 +703,21 @@ def detect_recurrent_income(
         if existing in {"income", "transfer", "refund"}:
             continue
         amount = _parse_amount_value(txn.get("amount"))
+        # Direction. `amount_type` is the authoritative field the scrapers set
+        # ("credit"/"debit"); `txn_type`/`type` are categorizer-input aliases.
+        # CRITICAL: scraped amounts are stored as ABSOLUTE values, so `amount > 0`
+        # is NOT a direction signal — using it promoted every recurring DEBIT
+        # (e.g. ICICI SIP investments "ACH/FIN NJ INDIA INVEST", mutual-fund
+        # mandates) to "Income". Trust the explicit direction; only fall back to
+        # the amount sign when none is present, and only a real negative = debit.
+        amount_type = str(txn.get("amount_type") or "").lower()
         txn_type = str(txn.get("txn_type") or txn.get("type") or "").lower()
-        is_credit = txn_type in {"credit", "deposits", "deposit"} or (amount is not None and amount > 0)
+        if amount_type.startswith(("debit", "withdrawal")) or txn_type in {"debit", "withdrawal", "withdrawals"}:
+            is_credit = False
+        elif amount_type == "credit" or txn_type in {"credit", "deposits", "deposit"}:
+            is_credit = True
+        else:
+            is_credit = amount is not None and amount > 0
         if not is_credit:
             continue
         merchant = (txn.get("merchant_clean") or txn.get("merchant_raw") or "").strip().upper()

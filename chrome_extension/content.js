@@ -429,29 +429,31 @@ async function runScrape(config, currentUrl) {
   log(`Rows visible before pagination: ${startCount}`);
   showBanner(`Loading all transactions… (${startCount} so far)`);
 
-  let transactions;
+  // THIN HARVEST: grab RAW innerText per configured cell and ship it. ALL
+  // parsing/normalization — date parse + year-fix, credit/debit direction,
+  // amount parse, empty-row skip, firstLine description, currency detect — now
+  // runs server-side in scrape_normalize.py, so logic changes need NO extension
+  // republish. The extension only does what must run in the bank page.
+  let rawRows;
   if (config.pagination && config.pagination.mode === "replace") {
-    transactions = await scrapeAllPagesReplace(config);
+    rawRows = await harvestAllPagesReplace(config);
   } else {
     await loadAllPages(config);
     const afterCount = document.querySelectorAll(config.rows.selector).length;
     log(`Rows visible after pagination: ${afterCount}`);
-    transactions = scrapeRows(config);
+    rawRows = harvestRawRows(config);
   }
-  // Sequence-aware year correction (banks whose date cell has no year, e.g.
-  // ICICI's "29 Jun"). The per-row guess can't tell this-year June from
-  // last-year June; this walks the newest-first list and fixes years by month
-  // wrap. Gated by config so banks with real years aren't touched.
-  if (config.rows && config.rows.fix_year_sequence) _fixYearsSequential(transactions);
+  // Ending balance is shipped RAW (currency symbol intact) — the server derives
+  // the numeric balance and detects the currency from it.
   const endingBalance = scrapeBalance(config);
 
-  log(`Scraped ${transactions.length} transactions, balance: ${endingBalance}`);
-  showBanner(`✅ Found ${transactions.length} transactions — saving to FIFO…`, "success");
+  log(`Harvested ${rawRows.length} raw rows, balance: ${endingBalance}`);
+  showBanner(`✅ Found ${rawRows.length} transactions — saving to FIFO…`, "success");
   setTimeout(removeBanner, 3000);
 
   chrome.runtime.sendMessage({
     type: "SCRAPE_RESULT",
-    payload: { transactions, endingBalance, currentUrl: window.location.href, navLog: _navLog() },
+    payload: { raw_rows: rawRows, endingBalance, currentUrl: window.location.href, navLog: _navLog() },
   });
 }
 
@@ -567,25 +569,25 @@ function waitForPageChange(config, prevCur, prevSig, timeoutMs) {
   });
 }
 
-// Replace-style pagination: scrape the current page, click "next", wait for the
-// content to swap, repeat until the last page. Dedupes across pages by a
-// (date|desc|amount|balance) key in case of any overlap.
-async function scrapeAllPagesReplace(config) {
+// Replace-style pagination (ICICI): each page REPLACES the rows, so harvest
+// every page and accumulate. Dedupe by the raw row's JSON in case pages overlap;
+// the server dedupes again on store, so this is only an optimization.
+async function harvestAllPagesReplace(config) {
   const all = [];
   const seen = new Set();
   const pattern = config.pagination.page_info_pattern;
   const MAX = config.pagination.max_pages || 60;
 
   for (let p = 0; p < MAX; p++) {
-    const pageRows = scrapeRows(config);
+    const pageRows = harvestRawRows(config);
     let added = 0;
-    for (const t of pageRows) {
-      const key = `${t.date}|${t.description}|${t.amount}|${t.balance}`;
+    for (const raw of pageRows) {
+      const key = JSON.stringify(raw);
       if (seen.has(key)) continue;
-      seen.add(key); all.push(t); added++;
+      seen.add(key); all.push(raw); added++;
     }
     const info = currentPageInfo(pattern);
-    log(`Page ${info ? info.cur + "/" + info.total : "?"}: scraped ${pageRows.length} rows (+${added} new, total ${all.length})`);
+    log(`Page ${info ? info.cur + "/" + info.total : "?"}: harvested ${pageRows.length} rows (+${added} new, total ${all.length})`);
     showBanner(`Loading all transactions… (page ${info ? info.cur + " of " + info.total : p + 1}, ${all.length} so far)`);
 
     if (info && info.cur >= info.total) { log("Pagination: reached last page."); break; }
@@ -601,7 +603,7 @@ async function scrapeAllPagesReplace(config) {
     if (!changed) { log("Pagination: page did not change after clicking next — stopping."); break; }
     await sleep(350);
   }
-  log(`Pagination (replace): done — ${all.length} unique transactions across pages.`);
+  log(`Pagination (replace): done — ${all.length} unique raw rows across pages.`);
   return all;
 }
 
@@ -617,15 +619,22 @@ function oldestVisibleRowDate(config) {
   return isNaN(d.getTime()) ? null : d;
 }
 
-// ── Scrape all visible rows using config columns ──────────────────────────
-function scrapeRows(config) {
+// ── Harvest RAW cell text per row (NO parsing — the server normalizes) ─────
+// The extension is a dumb harvester: it grabs the raw innerText for each cell
+// the bank's scrape-config maps, plus the raw date text and the row's pending
+// flag (a DOM concern that must stay in the page), and ships it. The server's
+// scrape_normalize.py does all parsing (amount, date + year-fix, credit/debit
+// direction, empty-row skip, firstLine description, currency) — so logic
+// iterates server-side with no extension republish. The raw-row keys match the
+// config's cell-selector keys exactly; the server keys off the same names.
+function harvestRawRows(config) {
   const rows = document.querySelectorAll(config.rows.selector);
-  const results = [];
   const r = config.rows;
+  const CELL_KEYS = ["description", "credit", "debit", "balance", "amount", "amount_type"];
+  const out = [];
 
-  // ── One-time DOM diagnostic (set rows.debug_cells:true in scrape-config) ──
-  // Logs the first matched row's cell structure + what each configured
-  // sub-selector currently extracts, so we can tune selectors against the
+  // One-time DOM diagnostic (set rows.debug_cells:true in scrape-config) — logs
+  // the first matched row's <td> structure so selectors can be tuned against the
   // real (often obfuscated) bank DOM via the persisted fifoLog.
   if (r.debug_cells && rows.length && !globalThis.__fifoDebugCellsLogged) {
     globalThis.__fifoDebugCellsLogged = true;
@@ -635,153 +644,49 @@ function scrapeRows(config) {
         `td[${i}].${(td.className || "").trim().replace(/\s+/g, ".") || "(noclass)"}=` +
         `"${(td.innerText || "").trim().slice(0, 30)}"`);
       log("ROW DEBUG: selector matched", rows.length, "rows. Row[0] cells:", cells.join("  |  "));
-      log("ROW DEBUG: desc=", JSON.stringify(text(sample.querySelector(r.description || "x__none"))),
-          "credit=", JSON.stringify(text(sample.querySelector(r.credit || "x__none"))),
-          "debit=", JSON.stringify(text(sample.querySelector(r.debit || "x__none"))),
-          "balance=", JSON.stringify(text(sample.querySelector(r.balance || "x__none"))));
     } catch (e) { log("ROW DEBUG failed:", e.message); }
   }
 
   rows.forEach((row) => {
     try {
-      let date = "", description = "", amount = "", amountType = "", balance = "", rawAmount = "";
-
-      // Description
-      if (r.description) description = firstLine(text(row.querySelector(r.description)));
-
-      // Date
-      if (r.date) {
-        date = normalizeDate(text(row.querySelector(r.date)));
-      } else if (r.date_mode === "parent_walk") {
-        date = extractDateByParentWalk(row);
+      const raw = {};
+      for (const k of CELL_KEYS) {
+        if (r[k]) raw[k] = text(row.querySelector(r[k]));
       }
-
-      // Amount & type
-      if (r.amount_sign === "credit_debit_cols") {
-        const creditTxt = text(row.querySelector(r.credit));
-        const debitTxt  = text(row.querySelector(r.debit));
-        balance         = text(row.querySelector(r.balance));
-        if (creditTxt && creditTxt !== "-" && creditTxt !== "0.00") {
-          amount = parseAmount(creditTxt); amountType = "credit"; rawAmount = creditTxt;
-        } else if (debitTxt && debitTxt !== "-" && debitTxt !== "0.00") {
-          amount = parseAmount(debitTxt);  amountType = "debit";  rawAmount = debitTxt;
-        }
-      } else if (r.amount_sign === "type_column") {
-        const typeTxt = text(row.querySelector(r.amount_type)).toLowerCase();
-        rawAmount = text(row.querySelector(r.amount));
-        amount = parseAmount(rawAmount);
-        const desc = (description || "").toLowerCase();
-        // Safer default: assume debit. Most transactions on a checking
-        // account are spends; defaulting to credit was over-counting income.
-        amountType = "debit";
-        // Explicit type column wins for unambiguous cases. BoA's type column
-        // reads "Credit"/"Debit" (NOT "Deposit"), so match the same credit
-        // keyword set the server crawler uses (base_crawler _CREDIT_KEYWORDS).
-        // Without "credit" here, every deposit — including payroll/company
-        // income — fell through to the debit default above and was mislabeled
-        // as money out.
-        if (/credit|deposit|refund|reversal/.test(typeTxt)) {
-          amountType = "credit";
-        } else if (/debit|withdrawal|purchase/.test(typeTxt)) {
-          amountType = "debit";
-        } else if (/transfer/.test(typeTxt)) {
-          // Transfer = ambiguous. Look at description.
-          // "payment to" / " to " → money out
-          // "payment from" / " from " → money in
-          if (/\bfrom\b/.test(desc)) {
-            amountType = "credit";
-          } else if (/\bto\b/.test(desc)) {
-            amountType = "debit";
-          }
-        }
-        // Explicit negative sign in the amount string ALWAYS overrides
-        // (BoA mostly hides the sign via CSS, but if it's there, trust it).
-        if (rawAmount.includes("(") || rawAmount.trim().startsWith("-") || rawAmount.includes("-$")) {
-          amountType = "debit";
-        }
-        if (r.balance) balance = text(row.querySelector(r.balance));
-      } else {
-        // positive_is_debit (Capital One, Discover)
-        rawAmount = text(row.querySelector(r.amount));
-        const num = parseFloat(rawAmount.replace(/[$,₹€£¥()]/g, "")) || 0;
-        amount = String(Math.abs(num));
-        amountType = num < 0 ? "credit" : "debit";
-      }
-
-      if (!description && !amount) return; // skip empty rows
-
-      // Tag the row's pre-balance-delta direction guess so the post-pass below
-      // can override it without losing the original. (Diagnostic only.)
-      const _preDirGuess = amountType;
-
-      const pending = row.classList.contains("pending") ||
-                      (date || "").toLowerCase() === "pending";
-
-      results.push({ date, description, amount, amount_type: amountType, raw_amount: rawAmount, balance, pending });
+      raw.date = harvestRawDate(config, row);          // raw text, server parses
+      raw.pending = row.classList.contains("pending"); // DOM concern stays here
+      out.push(raw);
     } catch (_) {}
   });
-
-  // ── Balance-delta post-pass (the truth-tier signal) ──────────────────────
-  // Banks that display a running balance per row let us compute each
-  // transaction's direction unambiguously: if my balance went UP, money came
-  // in (credit); if it went DOWN, money went out (debit). This trumps every
-  // other heuristic (amount-sign parsing, type-column text). Used on BoA,
-  // ICICI, and any other bank whose config maps `balance`.
-  _normalizeDirectionFromBalance(results);
-
-  return results;
+  return out;
 }
 
-function _normalizeDirectionFromBalance(rows) {
-  if (!rows || rows.length < 2) return;
-  // Parse each balance once. Skip rows without a parseable balance.
-  const parsedBalance = rows.map((r) => {
-    const s = (r.balance || "").replace(/[$,₹€£¥\s]/g, "").replace(/[()]/g, "-");
-    const n = parseFloat(s);
-    return isFinite(n) ? n : null;
-  });
-  // Detect row order — newest-first vs oldest-first — from the first two
-  // parsed dates we can read. Most bank pages (BoA, ICICI, Capital One) show
-  // newest-first. If we can't tell, assume newest-first.
-  const _dateAt = (i) => {
-    const d = new Date(rows[i]?.date || "");
-    return isFinite(d.valueOf()) ? d : null;
-  };
-  let newestFirst = true;
-  for (let i = 0; i < Math.min(rows.length - 1, 10); i++) {
-    const a = _dateAt(i), b = _dateAt(i + 1);
-    if (a && b && a.valueOf() !== b.valueOf()) {
-      newestFirst = a > b;
-      break;
-    }
+// Raw date TEXT for a row (no parsing). Banks with a date column return its
+// innerText; ICICI keeps the date in an ancestor block ("29 Jun", no year) — we
+// walk up the DOM to find it and return the raw text. The server (parse_day_-
+// month_date + fix_years_sequential) does the parsing and year inference.
+function harvestRawDate(config, row) {
+  const r = config.rows;
+  if (r.date) return text(row.querySelector(r.date));
+  if (r.date_mode === "parent_walk") {
+    try {
+      let el = row.parentElement;
+      for (let i = 0; i < 10 && el; i++) {
+        const dateEl = el.querySelector("div.date, div[class*='date']");
+        if (dateEl) {
+          const day = dateEl.querySelector("p.date-1, span.date-1")?.innerText?.trim();
+          const month = dateEl.querySelector("p.date-2, span.date-2")?.innerText?.trim();
+          if (day && month) return `${day} ${month}`;
+          const full = dateEl.innerText?.trim();
+          if (full) return full;
+        }
+        const prev = el.previousElementSibling;
+        if (prev && /\d{1,2}[\s/-]\w+/i.test(prev.innerText || "")) return prev.innerText.trim();
+        el = el.parentElement;
+      }
+    } catch (_) {}
   }
-  let flipped = 0, confirmed = 0, untrusted = 0, skipped = 0;
-  for (let i = 0; i < rows.length - 1; i++) {
-    const newerIdx = newestFirst ? i : i + 1;
-    const olderIdx = newestFirst ? i + 1 : i;
-    const newerBal = parsedBalance[newerIdx];
-    const olderBal = parsedBalance[olderIdx];
-    if (newerBal == null || olderBal == null) { skipped++; continue; }
-    const delta = newerBal - olderBal;
-    if (Math.abs(delta) < 0.01) { skipped++; continue; }
-    // CRITICAL: only trust delta when |delta| matches |amount| within $0.01.
-    // BoA reorders same-day transactions in its display, so consecutive rows
-    // are not always consecutive in time — if the math doesn't validate, two
-    // rows aren't truly adjacent and we can't trust the direction.
-    const amt = parseFloat(rows[newerIdx].amount);
-    if (!isFinite(amt) || Math.abs(Math.abs(delta) - amt) > 0.01) {
-      untrusted++;
-      continue;
-    }
-    const truth = delta > 0 ? "credit" : "debit";
-    if (rows[newerIdx].amount_type !== truth) {
-      rows[newerIdx].amount_type = truth;
-      flipped++;
-    } else {
-      confirmed++;
-    }
-  }
-  log(`Balance-delta normalization: ${flipped} flipped, ${confirmed} confirmed, ${untrusted} untrusted (math didn't validate), ${skipped} skipped`);
+  return "";
 }
 
 // ── Scrape ending balance ─────────────────────────────────────────────────
@@ -794,73 +699,6 @@ function scrapeBalance(config) {
     }
   }
   return "";
-}
-
-// ── Date extraction by walking up the DOM (ICICI) ─────────────────────────
-function extractDateByParentWalk(row) {
-  try {
-    let el = row.parentElement;
-    for (let i = 0; i < 10; i++) {
-      if (!el) break;
-      const dateEl = el.querySelector("div.date, div[class*='date']");
-      if (dateEl) {
-        const day   = dateEl.querySelector("p.date-1, span.date-1")?.innerText?.trim();
-        const month = dateEl.querySelector("p.date-2, span.date-2")?.innerText?.trim();
-        if (day && month) return parseDayMonthDate(`${day} ${month}`) || normalizeDate(`${day} ${month} ${new Date().getFullYear()}`);
-        const full = dateEl.innerText?.trim();
-        if (full) return parseDayMonthDate(full) || normalizeDate(full);
-      }
-      const prev = el.previousElementSibling;
-      if (prev && /\d{1,2}[\s/-]\w+/i.test(prev.innerText || "")) {
-        return parseDayMonthDate(prev.innerText.trim()) || normalizeDate(prev.innerText.trim());
-      }
-      el = el.parentElement;
-    }
-  } catch (_) {}
-  return "";
-}
-
-// ICICI puts the date in a side block as "MMM\n\nDD" (e.g. "Dec\n\n29") or
-// "DD\nMMM" — month + day, NO year, often with stray newlines / a weekday
-// ("14\nJun\n14 SUN"). Pull out month + day and infer the year from a
-// "last 1 year" window: a month LATER than the current month must belong to
-// last year (e.g. "Dec" seen in June → previous year). Returns "" if it can't
-// find a month+day, so callers fall back to normalizeDate.
-function parseDayMonthDate(raw) {
-  const MON = { jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11 };
-  const toks = (raw || "").split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
-  let mon = null, day = null;
-  for (const t of toks) {
-    const key = t.toLowerCase().slice(0, 3);
-    if (mon === null && key in MON) { mon = MON[key]; continue; }
-    if (day === null && /^\d{1,2}$/.test(t)) day = parseInt(t, 10);
-  }
-  if (mon === null || day === null || day < 1 || day > 31) return "";
-  const now = new Date();
-  let year = now.getFullYear();
-  if (mon > now.getMonth()) year -= 1;
-  return `${year}-${String(mon + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-}
-
-// Fix wrong YEARS across a newest-first list of scraped rows whose date cell had
-// no year (parseDayMonthDate guessed per-row and can't tell this-year June from
-// last-year June). The MONTH is correct; only the year may be off. Walk
-// newest→oldest: within a year, months are non-increasing in newest-first order,
-// so whenever the month goes UP from one row to the next-older one, we've crossed
-// a year boundary going back in time → decrement the year. Anchors on the newest
-// row's already-correct year. Mutates rows[].date in place.
-function _fixYearsSequential(rows) {
-  if (!rows || !rows.length) return;
-  let year = null, prevMonth = null;
-  for (const r of rows) {
-    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(r.date || "");
-    if (!m) continue;                       // skip Pending / unparseable
-    const mon = parseInt(m[2], 10);
-    if (year === null) { year = parseInt(m[1], 10); prevMonth = mon; continue; }
-    if (mon > prevMonth) year -= 1;         // month jumped up going older → year wrapped
-    prevMonth = mon;
-    r.date = `${year}-${m[2]}-${m[3]}`;
-  }
 }
 
 // ── Button finders ────────────────────────────────────────────────────────
@@ -928,12 +766,11 @@ function findNextPageButton(buttonTexts, pageInfoPattern) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 function text(el) { return el?.innerText?.trim() || ""; }
-function firstLine(s) { return (s || "").split("\n")[0].trim(); }
 
-function parseAmount(raw) {
-  return String(Math.abs(parseFloat((raw || "").replace(/[₹$€£¥,\s()]/g, "")) || 0));
-}
-
+// normalizeDate stays in the extension ONLY for the pagination cutoff decision
+// (oldestVisibleRowDate) — i.e. when to stop clicking "view more". It does NOT
+// touch the harvested data: the server parses every transaction date. Amount,
+// year-fix, and direction parsing have all moved server-side.
 function normalizeDate(raw) {
   // BoA (and others) label a not-yet-posted row "Pending" or "Processing" in
   // the date column. Both must map to the pending sentinel — otherwise the

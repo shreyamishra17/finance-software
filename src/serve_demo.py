@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 
 from auth import create_user, authenticate_user, issue_token, verify_token, delete_user, update_password, update_profile
 from categorize import categorize_transactions, detect_recurrent_income
+from scrape_normalize import normalize_raw_rows
 from parse_bank import parse_pdf_to_payload, persist_uploaded_statement, merchant_clean as _merchant_clean_fn
 from new_bank_setup import bootstrap_config_if_unknown
 from db import (
@@ -812,6 +813,9 @@ class DemoHandler(SimpleHTTPRequestHandler):
             if path == "/api/smart-connect/extension-ingest":
                 self._handle_smart_connect_extension_ingest()
                 return
+            if path == "/api/smart-connect/extension-ingest-raw":
+                self._handle_smart_connect_extension_ingest_raw()
+                return
             if path == "/api/connect-bank":
                 self._handle_connect_bank()
                 return
@@ -963,18 +967,14 @@ class DemoHandler(SimpleHTTPRequestHandler):
     # Extension scrape-config endpoint
     # ------------------------------------------------------------------ #
 
-    def _handle_extension_scrape_config(self) -> None:
-        """GET /api/extension/scrape-config?domain=<hostname>
-        Returns scraping instructions for a given bank domain so the
-        universal Chrome extension content script knows what to do.
-        Add new banks here — no extension update needed.
-        """
-        from urllib.parse import parse_qs, urlparse as _up
-        qs = parse_qs(_up(self.path).query)
-        domain = qs.get("domain", [""])[0].lower().strip()
-
+    def _scrape_configs(self) -> dict:
+        """Single source of truth for per-bank scrape configs (CSS selectors,
+        navigate steps, pagination, parsing mode). Served verbatim to the
+        extension via GET /api/extension/scrape-config, and reused server-side
+        by the raw-ingest path to drive scrape_normalize. Add new banks here —
+        no extension update needed."""
         # ── Domain → bank config map ──────────────────────────────────
-        CONFIGS = {
+        return {
             # Capital One
             "myaccounts.capitalone.com": {
                 "bank_key": "capital_one",
@@ -1281,6 +1281,26 @@ class DemoHandler(SimpleHTTPRequestHandler):
             },
         }
 
+    def _config_for_bank_key(self, bank_key: str) -> dict | None:
+        """Find a bank's full scrape config by its bank_key (the raw-ingest
+        path knows bank_key, not domain). Returns None if unknown."""
+        bk = (bank_key or "").strip().lower()
+        for cfg in self._scrape_configs().values():
+            if (cfg.get("bank_key") or "").lower() == bk:
+                return cfg
+        return None
+
+    def _handle_extension_scrape_config(self) -> None:
+        """GET /api/extension/scrape-config?domain=<hostname>
+        Returns scraping instructions for a given bank domain so the
+        universal Chrome extension content script knows what to do.
+        Add new banks in _scrape_configs() — no extension update needed.
+        """
+        from urllib.parse import parse_qs, urlparse as _up
+        qs = parse_qs(_up(self.path).query)
+        domain = qs.get("domain", [""])[0].lower().strip()
+        CONFIGS = self._scrape_configs()
+
         # Direct lookup first, then try suffix matching for subdomains
         # e.g. secure.bankofamerica.com → matches www.bankofamerica.com config
         cfg = CONFIGS.get(domain)
@@ -1370,12 +1390,73 @@ class DemoHandler(SimpleHTTPRequestHandler):
             resp.update(session["result"])
         self._send_json(HTTPStatus.OK, resp)
 
-    def _handle_smart_connect_extension_ingest(self) -> None:
-        """POST /api/smart-connect/extension-ingest
+    def _ingest_and_respond(
+        self,
+        bank_key: str,
+        transactions: list[dict],
+        ending_balance,
+        last_url,
+        log_tag: str = "extension-ingest",
+    ) -> None:
+        """Shared store+respond path for BOTH extension-ingest endpoints.
 
-        Accepts transactions scraped by the FIFO Chrome extension running in the
-        user's own browser.  No Playwright / headless Chromium involved — the
-        user logs in themselves so there is zero bot-detection risk.
+        `transactions` must already be normalized to the per-row shape
+        {date, description, amount, amount_type|type, raw_amount, balance, ...}
+        — i.e. what the legacy content.js sent OR what scrape_normalize produces
+        from raw rows. Categorizes, dedupes/stores, derives balance + currency,
+        marks the account connected, and writes the JSON response.
+        """
+        import sys
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from bank_fetcher import _load_fetcher_config
+
+        cfg = _load_fetcher_config(bank_key)
+        display_name = cfg.get("bank_display_name", bank_key)
+        acct_type = cfg.get("account_type", "checking")
+
+        account_id = add_account(bank_key, display_name, sync_period="1y", account_type=acct_type)
+        _categorize_scraped(transactions, account_type=acct_type)
+        # store_transactions returns the count of *newly inserted* rows
+        # (existing rows are dedup'd). Report THAT, not len(transactions),
+        # so the UI says "5 new" after a delta sync instead of "1180 imported"
+        # when 1175 were duplicates.
+        new_count = store_transactions(account_id, transactions)
+        update_last_synced(account_id, datetime.now())
+        ending_balance = _derive_ending_balance(transactions, ending_balance)
+        if ending_balance:
+            set_account_balance(account_id, ending_balance)
+        # Persist the currency the bank actually rendered (data-driven, not
+        # hardcoded per bank) so the UI shows ₹/$/€/… correctly everywhere.
+        set_account_currency(account_id, _detect_currency(transactions, ending_balance))
+        if last_url:
+            set_last_url(account_id, last_url)
+        set_needs_login(account_id, False)
+        set_account_status(account_id, "connected")
+
+        print(
+            f"[{log_tag}] {bank_key}: stored {new_count} new / {len(transactions)} sent "
+            f"for account_id={account_id}",
+            flush=True,
+        )
+
+        self._send_json(HTTPStatus.OK, {
+            "account":      get_account(account_id),
+            "count":        new_count,
+            "received":     len(transactions),
+            "transactions": transactions,
+        })
+
+    def _handle_smart_connect_extension_ingest(self) -> None:
+        """POST /api/smart-connect/extension-ingest  (LEGACY: pre-parsed rows)
+
+        Accepts transactions ALREADY parsed by content.js running in the user's
+        own browser. No Playwright / headless Chromium involved — the user logs
+        in themselves so there is zero bot-detection risk.
+
+        Kept fully working during the thin-extension migration; superseded by
+        .../extension-ingest-raw, which moves all parsing server-side. Retire
+        this once every client ships the thin extension.
 
         Body JSON:
           {
@@ -1400,48 +1481,69 @@ class DemoHandler(SimpleHTTPRequestHandler):
             return
 
         try:
-            import sys
-            if str(ROOT) not in sys.path:
-                sys.path.insert(0, str(ROOT))
-            from bank_fetcher import _load_fetcher_config
-
-            cfg = _load_fetcher_config(bank_key)
-            display_name = cfg.get("bank_display_name", bank_key)
-            acct_type = cfg.get("account_type", "checking")
-
-            account_id = add_account(bank_key, display_name, sync_period="1y", account_type=acct_type)
-            _categorize_scraped(transactions, account_type=acct_type)
-            # store_transactions returns the count of *newly inserted* rows
-            # (existing rows are dedup'd). Report THAT, not len(transactions),
-            # so the UI says "5 new" after a delta sync instead of "1180 imported"
-            # when 1175 were duplicates.
-            new_count = store_transactions(account_id, transactions)
-            update_last_synced(account_id, datetime.now())
-            ending_balance = _derive_ending_balance(transactions, ending_balance)
-            if ending_balance:
-                set_account_balance(account_id, ending_balance)
-            # Persist the currency the bank actually rendered (data-driven, not
-            # hardcoded per bank) so the UI shows ₹/$/€/… correctly everywhere.
-            set_account_currency(account_id, _detect_currency(transactions, ending_balance))
-            if last_url:
-                set_last_url(account_id, last_url)
-            set_needs_login(account_id, False)
-            set_account_status(account_id, "connected")
-
-            print(
-                f"[extension-ingest] {bank_key}: stored {new_count} new / {len(transactions)} sent "
-                f"for account_id={account_id}",
-                flush=True,
-            )
-
-            self._send_json(HTTPStatus.OK, {
-                "account":      get_account(account_id),
-                "count":        new_count,
-                "received":     len(transactions),
-                "transactions": transactions,
-            })
+            self._ingest_and_respond(bank_key, transactions, ending_balance, last_url)
         except Exception as exc:
             print(f"[extension-ingest] error: {exc}", flush=True)
+            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+
+    def _handle_smart_connect_extension_ingest_raw(self) -> None:
+        """POST /api/smart-connect/extension-ingest-raw  (thin extension)
+
+        Accepts RAW harvested cells from the dumb, generic extension and does
+        ALL parsing/normalization server-side — date parse + year-fix,
+        credit/debit direction, amount parse, empty-row skip, firstLine
+        description, currency detect (via scrape_normalize) — then runs the same
+        categorize+store pipeline as the legacy endpoint. The server owns the
+        per-bank parsing config (rows.amount_sign / date_mode / fix_year_sequence
+        from _scrape_configs), so logic iterates here with ZERO extension
+        republishes.
+
+        Body JSON:
+          {
+            "bank_key":       "icici",
+            "raw_rows":       [               # raw innerText per configured cell
+              {"description": "...", "credit": "₹1,234.56", "debit": "",
+               "balance": "₹10,000.00", "amount": "", "amount_type": "",
+               "date": "29 Jun", "pending": false},
+              ...
+            ],
+            "ending_balance": "₹10,000.00",  # optional, raw
+            "last_url":       "..."          # optional
+          }
+        """
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length)) if length else {}
+
+        bank_key = body.get("bank_key", "").strip()
+        raw_rows = body.get("raw_rows", [])
+        ending_balance = body.get("ending_balance")
+        last_url = body.get("last_url", "").strip() or None
+
+        if not bank_key:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "bank_key is required"})
+            return
+        if not isinstance(raw_rows, list):
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "raw_rows must be a list"})
+            return
+
+        scrape_cfg = self._config_for_bank_key(bank_key)
+        if not scrape_cfg:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": f"unknown bank_key: {bank_key}"})
+            return
+
+        try:
+            transactions = normalize_raw_rows(scrape_cfg.get("rows") or {}, raw_rows)
+            print(
+                f"[extension-ingest-raw] {bank_key}: {len(raw_rows)} raw rows "
+                f"→ {len(transactions)} normalized",
+                flush=True,
+            )
+            self._ingest_and_respond(
+                bank_key, transactions, ending_balance, last_url,
+                log_tag="extension-ingest-raw",
+            )
+        except Exception as exc:
+            print(f"[extension-ingest-raw] error: {exc}", flush=True)
             self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
 
     def _handle_connect_bank(self) -> None:

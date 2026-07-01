@@ -713,17 +713,35 @@ async function syncBank(account, fifoUrl, startUrl, timeoutMs, firstConnect = fa
       return;
     }
 
-    log(`Scraped ${result.transactions.length} transactions from ${account.bank_key}, sending to FIFO…`);
+    // Thin extension: content.js ships RAW rows; the server parses them. Prefer
+    // raw_rows (new path) but fall back to pre-parsed transactions so a stale
+    // content.js still works during the migration window.
+    const rawRows = Array.isArray(result.raw_rows) ? result.raw_rows : null;
+    const scrapedCount = rawRows ? rawRows.length
+                                 : (result.transactions ? result.transactions.length : 0);
+    log(`Scraped ${scrapedCount} rows from ${account.bank_key}, sending to FIFO…`);
 
-    const resp = await fetch(`${fifoUrl}/api/smart-connect/extension-ingest`, {
+    const ingestPath = rawRows
+      ? "/api/smart-connect/extension-ingest-raw"
+      : "/api/smart-connect/extension-ingest";
+    const ingestBody = rawRows
+      ? {
+          bank_key:       account.bank_key,
+          raw_rows:       rawRows,
+          ending_balance: result.endingBalance || "",
+          last_url:       result.currentUrl || "",
+        }
+      : {
+          bank_key:       account.bank_key,
+          transactions:   result.transactions,
+          ending_balance: result.endingBalance || "",
+          last_url:       result.currentUrl || "",
+        };
+
+    const resp = await fetch(`${fifoUrl}${ingestPath}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ..._authHeaders(authToken) },
-      body: JSON.stringify({
-        bank_key:       account.bank_key,
-        transactions:   result.transactions,
-        ending_balance: result.endingBalance || "",
-        last_url:       result.currentUrl || "",
-      }),
+      body: JSON.stringify(ingestBody),
     });
 
     const data = await resp.json();
@@ -733,8 +751,8 @@ async function syncBank(account, fifoUrl, startUrl, timeoutMs, firstConnect = fa
     // can return it to the caller (smartConnectSync uses it to report the
     // accurate count to the UI).
     _syncResult = {
-      newCount:     data.count ?? 0,           // newly-inserted rows
-      scrapedCount: result.transactions.length, // total rows scraped
+      newCount:     data.count ?? 0,  // newly-inserted rows
+      scrapedCount: scrapedCount,     // total rows scraped/harvested
     };
 
     log(`${account.bank_key} sync complete — ${_syncResult.newCount} new / ${_syncResult.scrapedCount} scraped.`);
@@ -801,7 +819,9 @@ function waitForScrapeResult(tabId, timeoutMs, { ignoreLoginErrors = false } = {
       if (Array.isArray(p.navLog)) {
         for (const line of p.navLog) _persistLog(line);
       }
-      log(`waitForScrapeResult: got SCRAPE_RESULT on tab #${tabId} — error=${p.error || "none"} rows=${p.transactions ? p.transactions.length : 0}`);
+      const _rowCount = Array.isArray(p.raw_rows) ? p.raw_rows.length
+                       : (p.transactions ? p.transactions.length : 0);
+      log(`waitForScrapeResult: got SCRAPE_RESULT on tab #${tabId} — error=${p.error || "none"} rows=${_rowCount}`);
       // During first connect the user is still logging in / navigating — skip
       // transient failures and keep waiting until transactions are actually found.
       if (ignoreLoginErrors && (
