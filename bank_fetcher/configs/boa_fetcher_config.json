@@ -1,0 +1,110 @@
+{
+    "bank_key": "boa",
+    "bank_display_name": "Bank of America",
+    "account_type": "checking",
+    "keyring_service": "fifo_bank_fetcher",
+    "keyring_username_key": "boa_username",
+    "keyring_password_key": "boa_password",
+    "keyring_totp_secret_key": "boa_totp_secret",
+    "mfa_mode": "otp_interactive",
+    "mfa_selectors": {
+        "otp_field": "#tlpvt-otp-input",
+        "submit_button": "#btnARVerify"
+    },
+    "download_dir_hint": "7238",
+    "headless": false,
+    "timeouts_ms": {
+        "page_load": 60000,
+        "element_wait": 30000,
+        "download_wait": 60000
+    },
+    "max_statements": 12,
+    "navigation": {
+        "logout_url": "https://www.bankofamerica.com/online-banking/sign-out.go"
+    },
+    "interactive_login_steps": [
+        {
+            "action": "goto",
+            "url": "https://www.bankofamerica.com/"
+        },
+        {
+            "action": "wait_for_url",
+            "pattern": "**/myaccounts**",
+            "timeout": 300000
+        },
+        {
+            "action": "inject_banner",
+            "message": "FIFO: Logged in! Click on your checking or savings account to view transactions \u2014 the browser will close automatically."
+        },
+        {
+            "action": "wait_for_transactions",
+            "timeout": 300000,
+            "min_rows": 3
+        }
+    ],
+    "login_steps": [
+        {
+            "action": "goto",
+            "url": "https://www.bankofamerica.com/"
+        },
+        {
+            "action": "wait_for_selector",
+            "selector": "#oid"
+        },
+        {
+            "action": "fill",
+            "selector": "#oid",
+            "value": "$username"
+        },
+        {
+            "action": "fill",
+            "selector": "#pass",
+            "value": "$password"
+        },
+        {
+            "action": "click",
+            "selector": "#secure-signin-submit"
+        },
+        {
+            "action": "maybe_mfa",
+            "probe_url_contains": ["/authcode", "/auth/signon"],
+            "probe_selectors": ["[id*='otp']", "[name*='code']", "#tlpvt-otp-input"],
+            "probe_timeout": 15000
+        },
+        {
+            "action": "wait_for_url",
+            "pattern": "**/myaccounts**"
+        }
+    ],
+    "statements_steps": [
+        {
+            "action": "wait_for_selector",
+            "selector": "a[href*='estatements'], a[href*='StatementList'], a[title*='Statements']"
+        },
+        {
+            "action": "click",
+            "selector": "a[href*='estatements'], a[href*='StatementList'], a[title*='Statements']"
+        },
+        {
+            "action": "wait_for_load_state",
+            "state": "networkidle"
+        }
+    ],
+    "download_config": {
+        "row_selector": "ul.statements-list li, tr.statement-row, .statement-item",
+        "link_selector": "a[href$='.pdf'], a[data-statement-type], button[data-ga-event*='PDF']"
+    },
+    "transactions_steps": [],
+    "transactions_config": {
+        "row_selector": "tr.activity-row",
+        "view_more_selector": "a.view-more-transactions",
+        "columns": {
+            "date": "td:nth-child(1)",
+            "description": "td:nth-child(2)",
+            "amount": "td:nth-child(4)",
+            "amount_type": "td:nth-child(3)",
+            "balance": "td:nth-child(5)"
+        }
+    },
+    "browser_engine": "chromium"
+}

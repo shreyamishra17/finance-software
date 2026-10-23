@@ -1,0 +1,56 @@
+{
+    "bank_key": "capital_one",
+    "bank_display_name": "Capital One",
+    "account_type": "credit",
+    "keyring_service": "fifo_bank_fetcher",
+    "keyring_username_key": "capital_one_username",
+    "keyring_password_key": "capital_one_password",
+    "keyring_totp_secret_key": "capital_one_totp_secret",
+    "mfa_mode": "otp_interactive",
+    "headless": false,
+    "timeouts_ms": {
+        "page_load": 60000,
+        "element_wait": 10000,
+        "download_wait": 60000
+    },
+    "navigation": {
+        "logout_url": "https://www.capitalone.com/sign-out/"
+    },
+    "interactive_login_steps": [
+        {
+            "action": "goto",
+            "url": "https://verified.capitalone.com/auth/signin"
+        },
+        {
+            "action": "wait_for_url",
+            "pattern": "**/accountSummary**",
+            "timeout": 300000
+        },
+        {
+            "action": "inject_banner",
+            "message": "FIFO: Capital One \u2014 Logged in! Click on your credit card account. Browser closes automatically."
+        },
+        {
+            "action": "wait_for_url",
+            "pattern": "**/Card/**",
+            "timeout": 120000
+        },
+        {
+            "action": "wait_for_selector",
+            "selector": "c1-ease-row.c1-ease-table__row",
+            "timeout": 30000
+        }
+    ],
+    "auto_discover_rows": false,
+    "transactions_steps": [],
+    "transactions_config": {
+        "row_selector": "c1-ease-row.c1-ease-table__row",
+        "view_more_selector": "button.c1-ease-card-transactions-view__load-next-statement--button",
+        "columns": {
+            "date": ".cdk-column-date",
+            "description": ".cdk-column-description",
+            "amount": ".cdk-column-amount"
+        }
+    },
+    "browser_engine": "chromium"
+}

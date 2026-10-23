@@ -1,0 +1,6 @@
+# bank_fetcher dependencies — local dev only, not included in core Docker image
+# Install with: pip install -r bank_fetcher/requirements_fetcher.txt
+# Then run once: playwright install chromium
+playwright>=1.44.0
+keyring>=25.2.0
+pyotp>=2.9.0

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Create Account — FIFO</title>
+    <meta name="description" content="Create your FIFO account." />
+    <link rel="stylesheet" href="styles.css?v=9" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="nav">
+        <a href="about.html" class="logo">FIFO</a>
+        <nav class="nav-links">
+          <a href="about.html#about">About</a>
+          <a href="about.html#product">Product</a>
+          <a href="demo.html">Demo</a>
+        </nav>
+      </header>
+
+      <main class="signup-page">
+        <section class="signup-card">
+          <p class="eyebrow">Create account</p>
+          <h1>Set up your FIFO account</h1>
+          <p class="subhead">Create your account first. After that, we’ll take you back to the main site to connect accounts.</p>
+
+          <div class="signup-grid">
+            <input id="firstName" class="auth-input" type="text" placeholder="First name" />
+            <input id="lastName" class="auth-input" type="text" placeholder="Last name" />
+            <input id="email" class="auth-input signup-span-2" type="email" placeholder="Email" />
+            <input id="password" class="auth-input" type="password" placeholder="Password" />
+            <input id="confirmPassword" class="auth-input" type="password" placeholder="Confirm password" />
+          </div>
+
+          <div class="signup-actions">
+            <button class="primary" onclick="createAccount()">Create account</button>
+            <a class="ghost" href="demo.html">Back to sign in</a>
+          </div>
+          <p id="signupStatus" class="auth-status"></p>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const CLOUD_API_BASE = "https://finance-demo-hf4lgxwbvq-uc.a.run.app";
+      const AUTH_TOKEN_KEY = "fifoAuthToken";
+
+      function apiBase() {
+        return window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "" : CLOUD_API_BASE;
+      }
+
+      async function createAccount() {
+        const status = document.getElementById("signupStatus");
+        status.style.color = "#5f6f69";
+        status.textContent = "Creating account...";
+        try {
+          const resp = await fetch(`${apiBase()}/api/auth/signup`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              first_name: document.getElementById("firstName").value.trim(),
+              last_name: document.getElementById("lastName").value.trim(),
+              email: document.getElementById("email").value.trim(),
+              password: document.getElementById("password").value,
+              confirm_password: document.getElementById("confirmPassword").value,
+            }),
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || "Create account failed");
+          localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+          window.location.href = "about.html";
+        } catch (err) {
+          status.style.color = "#8a2f2f";
+          status.textContent = err.message || String(err);
+        }
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,29 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Local Python virtualenv (host-specific, never commit)
+.venv/
+
+# Local + sensitive user data — never commit
+data/
+my_finance/
+
+*-adminsdk-*.json
+*.serviceaccount.json
+config/banks/unknown_config.json
+config/banks/*_bootstrap_report.json
+config/unknown_config.json
+config/*_bootstrap_report.json
+categorizer/models/
+.env
+
+# Claude Code session artifacts (worktrees, scratch state)
+.claude/
+
+# Dead/retired code kept locally for reference, not tracked
+/DEAD/
+
+# Packaged Chrome-extension builds (Web Store upload artifacts) — not source.
+*.zip
+chrome_extension/*.zip

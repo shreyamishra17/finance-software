@@ -1,0 +1,15 @@
+# Optional ML / model-serving dependencies.
+# Keep these out of the base runtime requirements so local setup for the
+# web server and bank connectors stays portable across macOS/Linux.
+
+-r requirements.txt
+
+scikit-learn
+joblib
+transformers
+
+# Linux/x86 Cloud Run style install
+torch==2.5.1+cpu ; platform_system == "Linux" and platform_machine == "x86_64"
+
+# macOS local development install
+torch ; platform_system == "Darwin"

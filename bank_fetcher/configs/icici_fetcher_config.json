@@ -1,0 +1,246 @@
+{
+    "bank_key": "icici",
+    "bank_display_name": "ICICI Bank",
+    "account_type": "checking",
+    "keyring_service": "fifo_bank_fetcher",
+    "keyring_username_key": "icici_username",
+    "keyring_password_key": "icici_password",
+    "keyring_totp_secret_key": "icici_totp_secret",
+    "mfa_mode": "otp_interactive",
+    "headless": false,
+    "timeouts_ms": {
+        "page_load": 60000,
+        "element_wait": 30000,
+        "download_wait": 60000
+    },
+    "navigation": {
+        "logout_url": "https://retailnetbanking.icici.bank.in/logout"
+    },
+
+    "interactive_login_steps": [
+        {
+            "action": "goto",
+            "url": "https://retailnetbanking.icici.bank.in/login-page"
+        },
+        {
+            "action": "inject_banner",
+            "message": "FIFO: Log in to ICICI Bank — we'll navigate to your statement automatically once you're in."
+        },
+        {
+            "action": "wait_for_url",
+            "pattern": "**/overview**",
+            "timeout": 300000
+        }
+    ],
+
+    "transactions_steps": [
+        {
+            "action": "sleep",
+            "seconds": 3,
+            "_comment": "Let the overview page fully settle after login"
+        },
+        {
+            "action": "capture",
+            "key": "investment_balance",
+            "expression": "() => { try { const els = Array.from(document.querySelectorAll('*')); for (const el of els) { if (el.children.length > 3) continue; const cls = (el.className || '').toString().toLowerCase(); const txt = (el.innerText || '').trim(); if (!txt) continue; if (/(invest|mf|mutual|portfolio|wealth)/i.test(cls)) { const m = txt.match(/[\\d,]+\\.\\d{2}/); if (m && parseFloat(m[0].replace(/,/g,'')) > 10000) return m[0]; } } const amtRe = /^\\d{1,3}(?:,\\d{2})*(?:,\\d{3})\\.\\d{2}$/; for (const el of els) { if (el.children.length > 0) continue; const txt = (el.innerText || '').trim(); if (amtRe.test(txt)) { const val = parseFloat(txt.replace(/,/g,'')); if (val > 100000) return txt; } } return null; } catch(e) { return null; } }",
+            "_comment": "Capture ICICI investment portfolio value from the overview page. Looks for amounts near investment/MF class names, falls back to any large Indian-format amount (>1 lakh). If it captures the wrong value, inspect the page DOM and refine this expression."
+        },
+        {
+            "action": "inject_banner",
+            "message": "FIFO: Opening your account statement…"
+        },
+        {
+            "action": "click_text",
+            "text": "Accounts",
+            "fallback_selector": "a[href*='account'], li[class*='account'] a",
+            "timeout": 15000,
+            "_comment": "Click Accounts in the left nav to reveal the account cards"
+        },
+        {
+            "action": "sleep",
+            "seconds": 2,
+            "_comment": "Let account cards render (Angular SPA — no URL change)"
+        },
+        {
+            "action": "wait_for_selector",
+            "selector": "text=View Statement",
+            "timeout": 20000,
+            "_comment": "Wait until the View Statement button is visible before clicking"
+        },
+        {
+            "action": "click_text",
+            "text": "View Statement",
+            "fallback_selector": "button[class*='viewStatement'], [class*='view-statement'] button, [id*='viewStatement']",
+            "timeout": 15000,
+            "_comment": "Click View Statement to open the account statement panel"
+        },
+        {
+            "action": "sleep",
+            "seconds": 4,
+            "_comment": "Wait for SPA route to settle — no networkidle on Angular"
+        },
+        {
+            "action": "inject_banner",
+            "message": "FIFO: Opening Detailed Statement tab…"
+        },
+        {
+            "action": "click_icase",
+            "text": "detailed statement",
+            "selectors": "button, [role='tab'], li, a, div[class*='tab'], span[class*='tab'], div[class*='Tab'], li[class*='tab']",
+            "exact": false,
+            "max_text_len": 40,
+            "timeout": 20000,
+            "_comment": "Case-insensitive tab click using Playwright inner_text + proper .click()"
+        },
+        {
+            "action": "sleep",
+            "seconds": 3,
+            "_comment": "Wait for Detailed Statement panel to render its Date/Filter controls"
+        },
+        {
+            "action": "inject_banner",
+            "message": "FIFO: Selecting Last 1 Year period…"
+        },
+        {
+            "action": "click_icase",
+            "text": "date",
+            "selectors": "button, div[class*='filter'], span[class*='filter'], div[class*='sort'], button[class*='sort']",
+            "exact": false,
+            "max_text_len": 8,
+            "timeout": 10000,
+            "_comment": "Open the Date filter dropdown — max_text_len=8 skips 'Date\\nFilter' wrapper (11 chars)"
+        },
+        {
+            "action": "sleep",
+            "seconds": 1
+        },
+        {
+            "action": "click_icase",
+            "text": "transaction period",
+            "selectors": "button, div, span, li, label",
+            "exact": false,
+            "max_text_len": 22,
+            "timeout": 8000,
+            "_comment": "Select the Transaction Period radio — max_text_len=22 skips the combined wrapper (34 chars)"
+        },
+        {
+            "action": "sleep",
+            "seconds": 1
+        },
+        {
+            "action": "click_icase",
+            "text": "today",
+            "selectors": "button, select, div, span, [role='combobox'], [role='option']",
+            "exact": true,
+            "max_text_len": 8,
+            "timeout": 8000,
+            "_comment": "Open the period dropdown — area-sort picks smallest element (actual trigger, not parent wrapper)"
+        },
+        {
+            "action": "sleep",
+            "seconds": 2,
+            "_comment": "Wait for dropdown list to fully render"
+        },
+        {
+            "action": "click_icase",
+            "text": "last 1 year",
+            "selectors": "li, div, span, button, option",
+            "exact": false,
+            "max_text_len": 20,
+            "timeout": 10000,
+            "_comment": "Select the Last 1 Year preset — exact:false handles any extra whitespace"
+        },
+        {
+            "action": "sleep",
+            "seconds": 1
+        },
+        {
+            "action": "click_icase",
+            "text": "apply filter",
+            "selectors": "button, div, span",
+            "exact": false,
+            "max_text_len": 15,
+            "timeout": 8000,
+            "_comment": "Click Apply Filter to load the full year of transactions"
+        },
+        {
+            "action": "sleep",
+            "seconds": 8,
+            "_comment": "Let Angular finish re-rendering the full year of data (longer sleep avoids wait_for_selector instability)"
+        },
+        {
+            "action": "wait_for_selector",
+            "selector": "table tbody tr",
+            "timeout": 30000,
+            "_comment": "Don't start scraping until the transaction rows are actually in the DOM"
+        },
+        {
+            "action": "inject_banner",
+            "message": "FIFO: Statement loaded — scraping all pages…"
+        }
+    ],
+
+    "login_steps": [
+        {
+            "action": "goto",
+            "url": "https://retailnetbanking.icici.bank.in/login-page"
+        },
+        {
+            "action": "wait_for_selector",
+            "selector": "#user-id, input[name='username-l']"
+        },
+        {
+            "action": "fill",
+            "selector": "#user-id, input[name='username-l']",
+            "value": "$username"
+        },
+        {
+            "action": "fill",
+            "selector": "#password, input[name='password-l']",
+            "value": "$password"
+        },
+        {
+            "action": "click",
+            "selector": "button.login-btn, button[type='submit']"
+        },
+        {
+            "action": "maybe_mfa",
+            "probe_selector": "input[name*='otp'], input[id*='otp'], #otp",
+            "probe_timeout": 8000
+        },
+        {
+            "action": "wait_for_url",
+            "pattern": "**/overview**",
+            "timeout": 60000
+        }
+    ],
+
+    "transactions_config": {
+        "row_selector": "tr.transfer:not(.trans_space)",
+        "_row_selector_note": "ICICI renders each date-group with TWO tables: mobile (tr.transfer.trans_space, 3-col) and desktop (tr.transfer without trans_space, 5-col). We use only the desktop rows to avoid duplicates and to get the balance column.",
+        "pagination_style": "next_page",
+        "view_more_selector": "",
+        "_view_more_selector_disabled": "Using JS Strategy 2 only — finds > button right of 'Page N of N' text. The CSS selector was accidentally matching the DOWNLOAD DETAILS button.",
+        "columns": {
+            "date":          "",
+            "_date_note":    "No date column in rows. Date lives in ancestor div.transaction > div.date (p.date-1=day, p.date-2=month). Year from sibling div.date-transaction-top p.date. base_crawler DOM finder uses closest('div.transaction') to assemble the full date.",
+            "description":   "td.remarks-details p.name",
+            "credit_amount": "td.credit p",
+            "debit_amount":  "td.debit p",
+            "balance":       "td.balance p"
+        }
+    },
+
+    "browser_engine": "chromium",
+    "_notes": [
+        "ICICI Detailed Statement — actual 3-column <tr> structure (confirmed from icici_rows_debug.html):",
+        "  td:nth-child(1) = td.remarks-details  →  category label + description in p.remark-pos",
+        "  td:nth-child(2) = td.credit (cr-mob) OR td.debit  →  amount in <p> child",
+        "  td:nth-child(3) = td.arrow-mob  →  SVG chevron, no text",
+        "  NO date column in rows — date is in a parent/sibling element outside <tbody>.",
+        "  base_crawler JS DOM-context finder walks up from each row to find nearest date string.",
+        "Date filter uses 'Transaction Period → Last 1 Year' preset — simpler than date pickers.",
+        "Angular SPA: no wait_for_load_state networkidle — use sleep steps instead.",
+        "text= selectors are case-sensitive against DOM textContent (not CSS-rendered text)."
+    ]
+}

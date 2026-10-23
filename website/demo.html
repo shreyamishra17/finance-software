@@ -1,0 +1,3345 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Demo — FIFO</title>
+    <meta name="description" content="Upload a PDF and preview it in the browser." />
+    <link rel="stylesheet" href="styles.css?v=21" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231f5f55'/><text x='50%25' y='50%25' font-family='system-ui,sans-serif' font-size='20' font-weight='800' fill='white' text-anchor='middle' dominant-baseline='central'>F</text></svg>" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  </head>
+  <body class="demo-page">
+    <div class="demo-shell">
+      <header class="nav demo-topbar">
+        <a href="about.html" class="logo">FIFO</a>
+        <div class="demo-auth-bar">
+          <span id="authGreeting" class="demo-auth-greeting" style="display:none"></span>
+          <div id="authAccountMenu" class="account-menu-wrap" style="display:none">
+            <button id="authAccountButton" class="demo-auth-account" type="button" aria-label="Open account menu" onclick="toggleDemoAccountMenu(event)">
+              <svg viewBox="0 0 24 24" role="presentation">
+                <path d="M12 12c2.76 0 5-2.46 5-5.5S14.76 1 12 1 7 3.46 7 6.5 9.24 12 12 12Zm0 2c-4.42 0-8 2.91-8 6.5 0 .83.67 1.5 1.5 1.5h13c.83 0 1.5-.67 1.5-1.5 0-3.59-3.58-6.5-8-6.5Z"/>
+              </svg>
+            </button>
+            <div id="authAccountDropdown" class="account-menu-dropdown" hidden>
+              <a href="myaccounts.html">Account settings</a>
+              <button type="button" onclick="logoutUser()">Log out</button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main class="demo-app-main">
+        <section id="authGate" class="auth-gate" hidden>
+          <div class="auth-gate-card">
+            <button class="auth-gate-close" type="button" aria-label="Close sign in" onclick="_hideAuthGate()">✕</button>
+            <h2 id="demoAuthTitle">Sign in to FIFO</h2>
+            <div id="demoSignupFields" hidden>
+              <input id="demoFirstName" class="auth-input" type="text" placeholder="First name" />
+              <input id="demoLastName" class="auth-input" type="text" placeholder="Last name" />
+            </div>
+            <input id="authEmail" class="auth-input" type="email" placeholder="Email" />
+            <input id="authPassword" class="auth-input" type="password" placeholder="Password" />
+            <input id="demoConfirmPassword" class="auth-input" type="password" placeholder="Confirm password" hidden />
+            <div class="auth-gate-actions">
+              <button id="demoAuthSecondaryBtn" class="demo-connect-ghost-btn" type="button" onclick="demoLeftAction()">Log in</button>
+              <button id="demoAuthPrimaryBtn" class="demo-sandbox-btn" type="button" onclick="demoRightAction()">Create account</button>
+            </div>
+            <p id="authStatus" class="auth-status"></p>
+          </div>
+        </section>
+
+        <div class="demo-app">
+          <!-- ── Left sidebar ──────────────────────────────────────── -->
+          <aside class="demo-sidebar" id="demoSidebar">
+            <div class="sidebar-top-row">
+              <div class="sidebar-section-label">MY ACCOUNTS</div>
+              <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" onclick="toggleSidebar()" title="Collapse sidebar">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
+            <div id="sidebarAccountsList" class="sidebar-accounts-list">
+              <p class="sidebar-no-accounts" id="sidebarNoAccounts">No accounts yet</p>
+            </div>
+            <div class="sidebar-footer">
+              <button class="sidebar-connect-btn" onclick="openBankPicker()">
+                <span class="sidebar-connect-plus">+</span><span class="sidebar-connect-label"> Connect account</span>
+              </button>
+              <p id="connectBankStatus" class="connect-status sidebar-status-msg" style="display:none"></p>
+            </div>
+          </aside>
+
+          <!-- ── Main content ─────────────────────────────────────── -->
+          <div class="demo-main">
+            <!-- Empty state — shown when no account is selected -->
+            <div id="demoEmptyState" class="demo-empty-state">
+              <div class="demo-empty-inner" id="emptyStateNoAccounts">
+                <div class="demo-empty-icon">📊</div>
+                <h2 class="demo-empty-title">Your financial dashboard</h2>
+                <p class="demo-empty-sub">Connect a bank or load sample data to see spending insights, runway, and trends.</p>
+                <div class="demo-empty-actions">
+                  <button class="demo-sandbox-btn" onclick="connectViaPlaIdSandbox()">Try Demo Bank</button>
+                  <button class="demo-connect-ghost-btn" onclick="openBankPicker()">+ Connect account</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Account dashboard — shown when an account is selected -->
+            <div id="results" class="demo-account-view" hidden>
+              <!-- Account header -->
+              <div class="demo-acct-header">
+                <div class="demo-acct-title-block">
+                  <h2 id="resultsHeading" class="demo-acct-name"></h2>
+                  <span id="resultsInfo" class="demo-acct-meta"></span>
+                </div>
+                <span id="mainSandboxBadge" class="sandbox-badge" style="display:none">Demo data</span>
+              </div>
+
+              <!-- Tabs -->
+              <div class="demo-main-tabs">
+                <button class="demo-main-tab is-active" id="mainTabOverview"      onclick="switchMainTab('overview')">Overview</button>
+                <button class="demo-main-tab"            id="mainTabTransactions" onclick="switchMainTab('transactions')">Transactions</button>
+                <button class="demo-main-tab"            id="mainTabInsights"     onclick="switchMainTab('insights')">Insights</button>
+              </div>
+
+              <!-- ── Overview pane ──────────────────────────── -->
+              <div id="mainOverviewPane" class="demo-main-pane">
+                <div class="results-summary results-fade" id="resultsSummary"></div>
+                <div class="overview-lower">
+                  <div class="overview-chart-card">
+                    <div class="overview-card-label" id="overviewChartLabel">MONTHLY CASH FLOW</div>
+                    <div class="overview-chart-wrap" id="overviewChartWrap">
+                      <canvas id="overviewMonthlyChart"></canvas>
+                    </div>
+                  </div>
+                  <div class="overview-recent-card">
+                    <div class="overview-card-label" id="overviewRecentLabel">RECENT TRANSACTIONS</div>
+                    <div id="overviewRecentList" class="overview-recent-list"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ── Transactions pane ──────────────────────── -->
+              <div id="mainTransactionsPane" class="demo-main-pane" style="display:none">
+                <div class="category-block results-fade" id="categoryBlock">
+                  <div class="category-title">Categories</div>
+                  <div class="results-summary category-summary" id="categorySummary"></div>
+                </div>
+                <div id="categoryTotal" class="category-total" hidden></div>
+                <div class="txn-controls-row" id="periodFilterRow" style="display:none">
+                  <div class="period-filter-pills">
+                    <button class="period-btn is-active" data-period="all" onclick="filterByPeriod(this)">All</button>
+                    <button class="period-btn" data-period="1m"  onclick="filterByPeriod(this)">1M</button>
+                    <button class="period-btn" data-period="3m"  onclick="filterByPeriod(this)">3M</button>
+                    <button class="period-btn" data-period="6m"  onclick="filterByPeriod(this)">6M</button>
+                    <button class="period-btn" data-period="1y"  onclick="filterByPeriod(this)">1Y</button>
+                    <button class="period-btn" data-period="ytd" onclick="filterByPeriod(this)">YTD</button>
+                  </div>
+                  <div class="txn-search-wrap">
+                    <svg class="txn-search-icon" width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="6.5" cy="6.5" r="5" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                    <input id="txnSearchInput" class="txn-search-input" type="text" placeholder="Search merchants, amounts…" oninput="_onTxnSearch(this.value)" />
+                    <button class="txn-search-clear" id="txnSearchClear" onclick="_clearTxnSearch()" style="display:none" title="Clear">✕</button>
+                  </div>
+                </div>
+                <div id="txnSearchNoResults" class="txn-search-no-results" style="display:none">No transactions match "<span id="txnSearchTerm"></span>"</div>
+                <div id="searchTotalBanner" style="display:none;margin-bottom:12px;padding:14px 18px;background:#fff8f0;border:1.5px solid #fddcb5;border-radius:10px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                  <div>
+                    <div id="searchBannerAmt" style="font-size:22px;font-weight:700;color:#c2410c;line-height:1.1;"></div>
+                    <div id="searchBannerLabel" style="font-size:12.5px;color:#92400e;margin-top:3px;"></div>
+                  </div>
+                  <div id="searchBannerCount" style="font-size:12px;color:#b45309;background:#fef3c7;border-radius:20px;padding:4px 12px;font-weight:500;white-space:nowrap;"></div>
+                </div>
+                <div class="results-table-wrap results-fade">
+                  <table class="results-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Merchant</th>
+                        <th>Amount</th>
+                        <th id="accountColHeader" style="display:none">Account</th>
+                      </tr>
+                    </thead>
+                    <tbody id="resultsBody"></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- ── Insights pane ──────────────────────────── -->
+              <div id="insightsPane" class="insights-pane-shell demo-main-pane" style="display:none">
+                <div class="insights-period-row">
+                  <button class="insights-period-btn is-active" data-period="all" onclick="setInsightsPeriod(this)">All time</button>
+                  <button class="insights-period-btn" data-period="1y"  onclick="setInsightsPeriod(this)">12 months</button>
+                  <button class="insights-period-btn" data-period="6m"  onclick="setInsightsPeriod(this)">6 months</button>
+                  <button class="insights-period-btn" data-period="3m"  onclick="setInsightsPeriod(this)">3 months</button>
+                  <button class="insights-period-btn" data-period="1m"  onclick="setInsightsPeriod(this)">30 days</button>
+                </div>
+                <div class="insights-header-cards" id="insightsStats"></div>
+                <div id="insightsPaymentHealth" style="display:none"></div>
+                <div class="insights-chart-grid">
+                  <div class="insights-chart-card">
+                    <div class="insights-chart-title">Monthly Cash Flow</div>
+                    <div class="insights-chart-wrap" id="monthlyChartWrap">
+                      <canvas id="monthlyChart"></canvas>
+                    </div>
+                    <p id="monthlyChartNote" class="insights-chart-note" style="display:none">Demo data — identical transactions repeat each month. Real accounts will show actual variation.</p>
+                  </div>
+                  <div class="insights-chart-card">
+                    <div class="insights-chart-title">Spending by Category</div>
+                    <div class="donut-wrap" id="donutChartWrap">
+                      <canvas id="donutChart"></canvas>
+                    </div>
+                    <div id="donutLegend" class="donut-legend"></div>
+                  </div>
+                </div>
+                <div class="insights-merchants-card">
+                  <div class="insights-chart-title">Top Merchants</div>
+                  <div id="insightsTopMerchants"></div>
+                </div>
+              </div>
+            </div><!-- /demo-account-view -->
+          </div><!-- /demo-main -->
+        </div><!-- /demo-app -->
+      </main>
+
+      <footer class="demo-footer">
+        <nav class="demo-footer-links">
+          <a href="about.html#about">About</a>
+          <a href="about.html#goal">Our goal</a>
+          <a href="about.html#product">Product</a>
+          <a href="about.html#who">Who we are</a>
+        </nav>
+        <span class="demo-footer-copy">© 2026 FIFO</span>
+      </footer>
+    </div>
+
+    <script>
+      const input = document.getElementById("pdfInput");
+      const meta = document.getElementById("pdfMeta");
+      const parseMeta = document.getElementById("parseMeta");
+      const uploadLabel = document.getElementById("uploadLabel");
+      const uploadCta = document.querySelector(".upload-cta");
+      const results = document.getElementById("results");
+      const resultsBody = document.getElementById("resultsBody");
+      const categorySummary = document.getElementById("categorySummary");
+      const categoryBlock = document.getElementById("categoryBlock");
+      const categoryTotal = document.getElementById("categoryTotal");
+      const MANUAL_CATEGORY_OPTIONS = ["Auto & Transport","Entertainment","Finance","Food & Drink","Government & Legal","Groceries","Health","Housing","Income","Miscellaneous","Money Transfer","Personal Care","Shopping","Travel","Uncategorized","Utilities & Bills"];
+
+      let lastPayload = null;
+      let activeCategory = "All";
+      let activeDirectionFilter = null; // "money_in" | "money_out" | null
+      let activeMainTab = "overview";
+      let _isPdfMode = false;
+      let _txnSearchQuery = ""; // live search query
+      let _overviewChartInstance = null;
+      const _accountBalanceOverrides = new Map();
+      const SANDBOX_DEFAULT_BALANCE = "$8,500.00";
+
+      // ── Offline demo registry (no backend needed) ─────────────────────
+      const _offlineAccounts = new Map();  // id → account object
+      const _offlineTxns     = new Map();  // id → transactions[]
+      const CHASE_SANDBOX_ID = -1;         // negative = never collides with real DB ids
+
+      function _isLocalhost() {
+        const h = window.location.hostname;
+        return h === "localhost" || h === "127.0.0.1";
+      }
+
+      // ── Static Chase sandbox transactions (12 months of realistic data) ──
+      const CHASE_SANDBOX_TXNS = (() => {
+        // [day-of-month, description, merchant_clean, amount, type, category]
+        const tpl = [
+          [ 1, "DIRECT DEP PAYROLL",   "Employer Payroll",  "2750.00", "credit", "Income"],
+          [ 2, "AUTOPAY RENT ZELLE",   "Rent",              "1850.00", "debit",  "Housing"],
+          [ 3, "WHOLE FOODS MKT",      "Whole Foods",       "118.43",  "debit",  "Groceries"],
+          [ 4, "STARBUCKS",            "Starbucks",         "9.75",    "debit",  "Coffee & Cafes"],
+          [ 5, "PG&E PAYMENT",         "PG&E",              "87.42",   "debit",  "Utilities"],
+          [ 6, "COMCAST AUTOPAY",      "Comcast",           "64.99",   "debit",  "Utilities"],
+          [ 7, "LYFT *RIDE",           "Lyft",              "18.50",   "debit",  "Transport"],
+          [ 8, "AMAZON MKTPLACE PMTS", "Amazon",            "54.99",   "debit",  "Shopping"],
+          [ 9, "CHIPOTLE ONLINE",      "Chipotle",          "13.85",   "debit",  "Dining"],
+          [10, "SHELL OIL",            "Shell",             "52.40",   "debit",  "Gas & Fuel"],
+          [11, "NETFLIX.COM",          "Netflix",           "17.99",   "debit",  "Subscriptions"],
+          [12, "TRADER JOE'S",         "Trader Joe's",      "74.23",   "debit",  "Groceries"],
+          [13, "SWEETGREEN",           "Sweetgreen",        "16.45",   "debit",  "Dining"],
+          [14, "SPOTIFY USA",          "Spotify",           "11.99",   "debit",  "Subscriptions"],
+          [15, "DIRECT DEP PAYROLL",   "Employer Payroll",  "2750.00", "credit", "Income"],
+          [16, "CVS PHARMACY",         "CVS Pharmacy",      "38.15",   "debit",  "Health & Wellness"],
+          [17, "LYFT *RIDE",           "Lyft",              "22.75",   "debit",  "Transport"],
+          [18, "TARGET",               "Target",            "83.47",   "debit",  "Shopping"],
+          [19, "DOORDASH*ORDER",       "DoorDash",          "34.20",   "debit",  "Dining"],
+          [20, "CHEVRON",              "Chevron",           "48.60",   "debit",  "Gas & Fuel"],
+          [21, "SAFEWAY",              "Safeway",           "93.81",   "debit",  "Groceries"],
+          [22, "AMC THEATRES",         "AMC Theatres",      "28.00",   "debit",  "Entertainment"],
+          [23, "AMAZON MKTPLACE PMTS", "Amazon",            "67.50",   "debit",  "Shopping"],
+          [24, "HULU",                 "Hulu",              "17.99",   "debit",  "Subscriptions"],
+          [25, "STARBUCKS",            "Starbucks",         "8.45",    "debit",  "Coffee & Cafes"],
+          [26, "UBER EATS",            "Uber Eats",         "32.75",   "debit",  "Dining"],
+          [27, "WALGREENS",            "Walgreens",         "22.50",   "debit",  "Health & Wellness"],
+          [28, "VENMO PAYMENT",        "Venmo",             "120.00",  "credit", "Transfer"],
+        ];
+        const txns = [];
+        const now = new Date();
+        for (let mo = 11; mo >= 0; mo--) {
+          const d = new Date(now.getFullYear(), now.getMonth() - mo, 1);
+          const yr = d.getFullYear();
+          const mm = String(d.getMonth() + 1).padStart(2, "0");
+          const dim = new Date(yr, d.getMonth() + 1, 0).getDate();
+          for (const [day, desc, merch, amt, type, cat] of tpl) {
+            if (day > dim) continue;
+            txns.push({
+              date: `${yr}-${mm}-${String(day).padStart(2, "0")}`,
+              description: desc, merchant_clean: merch,
+              amount: amt, amount_type: type, category: cat,
+            });
+          }
+        }
+        return txns;
+      })();
+
+      // ── Merchant name normalizer ─────────────────────────────────────────
+      // Strips BofA/ACH metadata noise so all variants of the same merchant
+      // collapse into a single group in the insights charts.
+      //
+      // Handles formats like:
+      //   "GARDENHOMESMANAG DES:WEB PMTS ID:CS06RL INDN:ShreyaMishra CO ID:XXXXX27993 WEB View/Edit"
+      //   "ACH HOLD GARDENHOMESMANAG WEB PMTS ON 04/29"
+      //   "DISCOVER DES:E-PAYMENT ID:3384 INDN:MISHRA SHREYA CO ID:XXXXX20270 WEB"
+      //   "ClickPay DES:PROPRTYPAY ID:65202464 INDN:Shreya Mishra CO ID: XXXXX3316..."
+      function _normalizeMerchant(raw) {
+        if (!raw) return "Unknown";
+        let s = raw.trim();
+        // Remove trailing "View/Edit" that BofA appends to ACH rows
+        s = s.replace(/\s*View\/Edit\s*$/i, "").trim();
+        // Structured ACH format: keep only the prefix BEFORE " DES:"
+        // e.g. "GARDENHOMESMANAG DES:WEB PMTS ID:..." → "GARDENHOMESMANAG"
+        const desMatch = s.match(/^(.*?)\s+DES\s*:/i);
+        if (desMatch) {
+          s = desMatch[1].trim();
+        } else {
+          // Strip remaining ACH metadata if DES: wasn't present
+          s = s.replace(/\s+ID\s*:\s*\S+.*/i, "").trim();
+          s = s.replace(/\s+INDN\s*:.*/i, "").trim();
+          s = s.replace(/\s+CO\s+ID\s*:.*/i, "").trim();
+        }
+        // Strip "ACH HOLD " prefix (appears on pending ACH rows)
+        s = s.replace(/^ACH\s+HOLD\s+/i, "").trim();
+        // Strip trailing "WEB PMTS ON MM/DD" or similar date-qualified suffixes
+        s = s.replace(/\s+(WEB\s+)?PMTS\s+ON\s+\d{1,2}\/\d{1,2}\s*$/i, "").trim();
+        // Strip lone trailing "WEB" channel indicator
+        s = s.replace(/\s+WEB\s*$/i, "").trim();
+        // Title-case if all-caps (e.g. "GARDENHOMESMANAG" → "Gardenhomesmanag")
+        if (s === s.toUpperCase()) {
+          s = s.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+        }
+        return s || raw;
+      }
+
+      // ── Client-side insights computation (for offline accounts) ──────────
+      function _computeOfflineInsights(txns, acct, period) {
+        const now = new Date();
+        let since = null;
+        if      (period === "1m")  since = new Date(now.getFullYear(), now.getMonth() - 1,  now.getDate());
+        else if (period === "3m")  since = new Date(now.getFullYear(), now.getMonth() - 3,  now.getDate());
+        else if (period === "6m")  since = new Date(now.getFullYear(), now.getMonth() - 6,  now.getDate());
+        else if (period === "1y")  since = new Date(now.getFullYear() - 1, now.getMonth(),  now.getDate());
+        else if (period === "ytd") since = new Date(now.getFullYear(), 0, 1);
+
+        const filtered = since
+          ? txns.filter(t => new Date(t.date) >= since)
+          : txns;
+
+        let total_income = 0, total_expenses = 0;
+        const byCat = {};
+        const byMerch = {};
+        for (const t of filtered) {
+          const n = parseFloat(t.amount) || 0;
+          if (t.amount_type === "credit") {
+            total_income += n;
+          } else {
+            total_expenses += n;
+            if (!byCat[t.category]) byCat[t.category] = { category: t.category, total: 0, count: 0 };
+            byCat[t.category].total  += n;
+            byCat[t.category].count += 1;
+            const mRaw = t.merchant_clean || t.description || "";
+            const mKey = _normalizeMerchant(mRaw).toLowerCase(); // lowercase = grouping key
+            const mDisplay = _normalizeMerchant(mRaw);           // title-cased = display name
+            if (!byMerch[mKey]) byMerch[mKey] = { name: mDisplay, total: 0, count: 0 };
+            // Prefer the shorter/cleaner display name (merchant_clean wins over raw description)
+            if (t.merchant_clean && _normalizeMerchant(t.merchant_clean).length < byMerch[mKey].name.length) {
+              byMerch[mKey].name = _normalizeMerchant(t.merchant_clean);
+            }
+            byMerch[mKey].total  += n;
+            byMerch[mKey].count += 1;
+          }
+        }
+        return {
+          account_type:   acct.account_type || "checking",
+          current_balance: acct.account_balance || SANDBOX_DEFAULT_BALANCE,
+          total_income:   Math.round(total_income   * 100) / 100,
+          total_expenses: Math.round(total_expenses * 100) / 100,
+          net:            Math.round((total_income - total_expenses) * 100) / 100,
+          by_category:    Object.values(byCat).sort((a, b) => b.total - a.total),
+          top_merchants:  Object.values(byMerch).sort((a, b) => b.total - a.total).slice(0, 10),
+        };
+      }
+
+      function _computeOfflineMonthly(txns, monthsBack) {
+        const buckets = {};
+        for (const t of txns) {
+          const key = t.date.slice(0, 7); // "YYYY-MM"
+          if (!buckets[key]) buckets[key] = { month: key, income: 0, expenses: 0 };
+          const n = parseFloat(t.amount) || 0;
+          if (t.amount_type === "credit") buckets[key].income   += n;
+          else                            buckets[key].expenses += n;
+        }
+        const months = Object.values(buckets)
+          .sort((a, b) => a.month.localeCompare(b.month))
+          .slice(-(monthsBack || 24));
+        months.forEach(m => {
+          m.income   = Math.round(m.income   * 100) / 100;
+          m.expenses = Math.round(m.expenses * 100) / 100;
+        });
+        return { months };
+      }
+
+      function setUploadState(state) {
+        uploadCta.classList.remove("is-uploaded", "is-loading", "is-error");
+        if (state === "uploaded") uploadCta.classList.add("is-uploaded");
+        if (state === "loading") uploadCta.classList.add("is-loading");
+        if (state === "error") uploadCta.classList.add("is-error");
+      }
+
+      // Backend that parses the PDF and returns JSON.
+      const CLOUD_API_BASE = "https://finance-demo-hf4lgxwbvq-uc.a.run.app";
+      const AUTH_TOKEN_KEY = "fifoAuthToken";
+      let currentUser = null;
+
+      // Route /api/* calls to the cloud backend when running on the static Cloudflare Pages deployment.
+      function _apiFetch(path, options) {
+        const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+        const base = isLocal ? "" : CLOUD_API_BASE;
+        const token = localStorage.getItem(AUTH_TOKEN_KEY);
+        const next = { ...(options || {}) };
+        next.headers = { ...((options && options.headers) || {}) };
+        if (token) next.headers.Authorization = `Bearer ${token}`;
+        return fetch(base + path, next);
+      }
+
+      // ── Cancel in-flight headless sync when the FIFO window closes ──────────
+      // A server-side headless scrape (Playwright) keeps running even if the
+      // user walks away. When the window/tab is closed or hidden, fire a
+      // best-effort beacon so the backend aborts the scrape and shuts the
+      // headless browser down instead of leaving it running. sendBeacon can't
+      // set an Authorization header, so the token rides in the JSON body.
+      function _cancelHeadlessSyncBeacon() {
+        try {
+          const token = localStorage.getItem(AUTH_TOKEN_KEY);
+          if (!token) return;
+          const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+          const base = isLocal ? "" : CLOUD_API_BASE;
+          const url = base + "/api/sync/cancel";
+          const payload = JSON.stringify({ token });
+          if (navigator.sendBeacon) {
+            // Use a text/plain Blob — avoids a CORS preflight that would be
+            // skipped during unload anyway.
+            navigator.sendBeacon(url, new Blob([payload], { type: "text/plain" }));
+          } else {
+            // Fallback for browsers without sendBeacon.
+            fetch(url, { method: "POST", body: payload, headers: { "Content-Type": "text/plain" }, keepalive: true }).catch(() => {});
+          }
+        } catch (_) {}
+      }
+      // pagehide fires reliably on close/navigation (incl. bfcache); also catch
+      // the tab being hidden as a backstop.
+      window.addEventListener("pagehide", _cancelHeadlessSyncBeacon);
+      window.addEventListener("beforeunload", _cancelHeadlessSyncBeacon);
+
+      function _showAuthGate(message = "") {
+        document.getElementById("authGate").hidden = false;
+        setDemoAuthMode("login");
+        document.getElementById("authStatus").textContent = message;
+      }
+
+      function _hideAuthGate() {
+        document.getElementById("authGate").hidden = true;
+        document.getElementById("authStatus").textContent = "";
+      }
+
+      function _hasAuth() {
+        return !!localStorage.getItem(AUTH_TOKEN_KEY);
+      }
+
+      function requireAuthOrPrompt(message = "") {
+        if (_hasAuth()) return true;
+        _showAuthGate(message);
+        return false;
+      }
+
+      let demoAuthMode = "login";
+      function setDemoAuthMode(mode) {
+        demoAuthMode = mode;
+        const isSignup = mode === "signup";
+        document.getElementById("demoAuthTitle").textContent = isSignup ? "Create your FIFO account" : "Sign in to FIFO";
+        document.getElementById("demoSignupFields").hidden = !isSignup;
+        document.getElementById("demoConfirmPassword").hidden = !isSignup;
+        const primary = document.getElementById("demoAuthPrimaryBtn");
+        const secondary = document.getElementById("demoAuthSecondaryBtn");
+        primary.textContent = "Create account";
+        primary.className = isSignup ? "demo-sandbox-btn" : "demo-connect-ghost-btn";
+        secondary.textContent = "Log in";
+        secondary.className = isSignup ? "demo-connect-ghost-btn" : "demo-sandbox-btn";
+      }
+
+      function demoLeftAction() {
+        if (demoAuthMode === "signup") {
+          setDemoAuthMode("login");
+          return;
+        }
+        submitAuth();
+      }
+
+      function demoRightAction() {
+        if (demoAuthMode === "login") {
+          setDemoAuthMode("signup");
+          return;
+        }
+        submitAuth();
+      }
+
+      async function submitAuth() {
+        const email = document.getElementById("authEmail").value.trim();
+        const password = document.getElementById("authPassword").value;
+        const firstName = document.getElementById("demoFirstName").value.trim();
+        const lastName = document.getElementById("demoLastName").value.trim();
+        const confirmPassword = document.getElementById("demoConfirmPassword").value;
+        const status = document.getElementById("authStatus");
+        status.style.color = "#5f6f69";
+        status.textContent = demoAuthMode === "signup" ? "Creating account..." : "Logging in...";
+        try {
+          const base = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "" : CLOUD_API_BASE;
+          const endpoint = demoAuthMode === "signup" ? "/api/auth/signup" : "/api/auth/login";
+          const payload = demoAuthMode === "signup"
+            ? { first_name: firstName, last_name: lastName, email, password, confirm_password: confirmPassword }
+            : { email, password };
+          const resp = await fetch(`${base}${endpoint}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || (demoAuthMode === "signup" ? "Create account failed" : "Login failed"));
+          localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+          currentUser = data.user;
+          window.location.href = "about.html";
+        } catch (err) {
+          status.style.color = "#8a2f2f";
+          status.textContent = err.message || String(err);
+        }
+      }
+
+      function logoutUser() {
+        localStorage.removeItem(AUTH_TOKEN_KEY);
+        currentUser = null;
+        const menu = document.getElementById("authAccountDropdown");
+        if (menu) menu.hidden = true;
+        window.location.href = "about.html";
+      }
+
+      function _refreshAuthChrome() {
+        const accountMenu = document.getElementById("authAccountMenu");
+        const greeting = document.getElementById("authGreeting");
+        if (currentUser && currentUser.email) {
+          accountMenu.style.display = "";
+          const first = (currentUser.first_name || "").trim();
+          if (first) {
+            greeting.textContent = `Hi ${first}`;
+            greeting.style.display = "";
+          } else {
+            greeting.textContent = "";
+            greeting.style.display = "none";
+          }
+        } else {
+          accountMenu.style.display = "none";
+          greeting.style.display = "none";
+        }
+      }
+
+      function toggleDemoAccountMenu(event) {
+        if (event) event.stopPropagation();
+        const menu = document.getElementById("authAccountDropdown");
+        if (!menu) return;
+        menu.hidden = !menu.hidden;
+      }
+
+      document.addEventListener("click", (event) => {
+        const wrap = document.getElementById("authAccountMenu");
+        const menu = document.getElementById("authAccountDropdown");
+        if (!wrap || !menu || wrap.style.display === "none") return;
+        if (!wrap.contains(event.target)) menu.hidden = true;
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          const menu = document.getElementById("authAccountDropdown");
+          if (menu && !menu.hidden) menu.hidden = true;
+          return;
+        }
+        if (event.key === "Enter") {
+          const gate = document.getElementById("authGate");
+          if (gate && !gate.hidden) submitAuth();
+        }
+      });
+
+      async function initAuth() {
+        const token = localStorage.getItem(AUTH_TOKEN_KEY);
+        if (!token) {
+          _refreshAuthChrome();
+          _hideAuthGate();
+          return false;
+        }
+        try {
+          const resp = await _apiFetch("/api/auth/me");
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || "Authentication required");
+          currentUser = data.user;
+          _refreshAuthChrome();
+          _hideAuthGate();
+          return true;
+        } catch (err) {
+          localStorage.removeItem(AUTH_TOKEN_KEY);
+          currentUser = null;
+          _refreshAuthChrome();
+          _hideAuthGate();
+          return false;
+        }
+      }
+
+      async function postParse(formData, baseUrl) {
+        const res = await fetch(`${baseUrl}/api/parse`, { method: "POST", body: formData });
+        if (!res.ok) {
+          let errMsg = "";
+          const contentType = res.headers.get("content-type") || "";
+          if (contentType.includes("application/json")) {
+            const err = await res.json().catch(() => ({}));
+            errMsg = err.error || "";
+          }
+          if (!errMsg && (res.status === 404 || res.status === 405)) {
+            errMsg = "Backend parse API not available.";
+          }
+          if (!errMsg) {
+            errMsg = `Parsing failed (HTTP ${res.status})`;
+          }
+          const error = new Error(errMsg);
+          error.status = res.status;
+          throw error;
+        }
+        return res.json();
+      }
+
+      // Map summary card labels to direction filter keys
+      const _LABEL_TO_DIRECTION = { "Money In": "money_in", "Money Out": "money_out" };
+
+      function _onSummaryCardClick(direction) {
+        // Toggle: clicking the active card clears the filter
+        activeDirectionFilter = activeDirectionFilter === direction ? null : direction;
+        // Refresh active state on cards
+        resultsSummary.querySelectorAll(".result-card[data-direction]").forEach(el => {
+          el.classList.toggle("is-active", el.dataset.direction === activeDirectionFilter);
+        });
+        renderTransactions(lastPayload, activeCategory);
+      }
+
+      // Errored balance cards (Starting/Ending) are clickable: let the user
+      // supply the account balance the sync couldn't read. Reuses the existing
+      // setAccountBalance flow, which re-fetches and re-renders the 4 cards.
+      function _promptSetBalance() {
+        if (!currentAccountId) return;
+        const entered = window.prompt(
+          "We couldn't detect this account's balance from the sync.\n" +
+          "Enter the current (ending) balance to show starting & ending balances:"
+        );
+        if (entered === null) return;
+        const cleaned = String(entered).trim();
+        if (cleaned) setAccountBalance(currentAccountId, cleaned);
+      }
+
+      function renderSummary(payload) {
+        const dynamicCards = Array.isArray(payload.summary_cards) ? payload.summary_cards : [];
+        if (dynamicCards.length) {
+          resultsSummary.innerHTML = dynamicCards
+            .map((card) => {
+              const label = card.label || card.key || "Summary";
+              const value = card.amount || "-";
+              const colorClass = card.color === "positive" ? " value-positive" : card.color === "negative" ? " value-negative" : "";
+              const direction = _LABEL_TO_DIRECTION[label];
+              const dirAttr = direction ? ` data-direction="${direction}"` : "";
+              const activeClass = direction && direction === activeDirectionFilter ? " is-active" : "";
+              const isErr = !!card.error;
+              const errClass = isErr ? " is-error" : "";
+              const titleAttr = isErr ? ` title="${String(card.error).replace(/"/g, "&quot;")}"` : "";
+              const clickAttr = direction
+                ? ` onclick="_onSummaryCardClick('${direction}')"`
+                : (card.setBalance ? ` onclick="_promptSetBalance()"` : "");
+              const note = isErr
+                ? `<div class="result-error-note">⚠ Not detected${card.setBalance ? " · set manually" : ""}</div>`
+                : "";
+              return `<div class="result-card${activeClass}${errClass}"${dirAttr}${titleAttr}${clickAttr}><div class="result-label">${label}</div><div class="result-value${colorClass}">${value}</div>${note}</div>`;
+            })
+            .join("");
+          return;
+        }
+        const summary = payload.account_summary || {};
+        const income = summary.deposits_additions || "-";
+        const expenses = summary.withdrawals_subtractions || "-";
+        const fees = summary.service_fees || "-";
+        const cards = [
+          ["Beginning Balance", summary.beginning_balance || "-"],
+          ["Income", income],
+          ["Expenses", expenses],
+          ["Service Fees", fees],
+          ["Ending Balance", summary.ending_balance || "-"],
+        ];
+        resultsSummary.innerHTML = cards
+          .map(
+            ([label, value]) =>
+              `<div class="result-card"><div class="result-label">${label}</div><div class="result-value">${value}</div></div>`
+          )
+          .join("");
+      }
+
+      function parseAmount(amountStr) {
+        if (!amountStr) return null;
+        const s = String(amountStr).replace(/[₹$,\s]/g, "");
+        const n = parseFloat(s);
+        return isNaN(n) ? null : n;
+      }
+
+      // Format a date string for display.
+      // ISO "2026-04-27" → "27 Apr 2026". Bank-pending strings → null (shows Pending badge).
+      function _formatDate(dateStr) {
+        if (!dateStr) return null;
+        const s = String(dateStr).trim();
+        if (!s) return null;
+        if (/^(pending|processing)$/i.test(s)) return null;
+        // ISO date "2026-04-23" → "23 Apr 2026"
+        const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (iso) {
+          const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+          const d = parseInt(iso[3], 10);
+          const mon = parseInt(iso[2], 10) - 1;
+          const y = parseInt(iso[1], 10);
+          return `${d} ${months[mon]} ${y}`;
+        }
+        // ICICI raw format: "23 Apr 2026 20 Apr 2026" (transaction date + value date)
+        // or "23 Apr 2026" — extract just the first date token
+        const dmy = s.match(/(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{4})/i);
+        if (dmy) return `${parseInt(dmy[1])} ${dmy[2].charAt(0).toUpperCase()+dmy[2].slice(1,3).toLowerCase()} ${dmy[3]}`;
+        // US-style "MM/DD/YYYY"
+        const mdy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+        if (mdy) {
+          const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+          return `${parseInt(mdy[2])} ${months[parseInt(mdy[1])-1]} ${mdy[3]}`;
+        }
+        return s;  // return as-is for any other non-empty format
+      }
+
+      // Normalize an amount for display based on account type.
+      // Credit accounts: bank stores charges positive, payments negative.
+      //   → flip: charges show as -₹X (money out), payments/refunds as +₹X (money in)
+      // Checking accounts: use txn_type to determine sign.
+      //   "debit"/"withdrawals"/"fee" → negative (expense); "credit" → positive (income)
+      // currSym defaults to "$"; pass "₹" for Indian accounts.
+      // This is the ONLY place sign normalization lives — no per-bank hardcoding.
+      function _displayAmt(rawAmount, txnType, isCreditAcct, currSym) {
+        currSym = currSym || "$";
+        const n = parseAmount(rawAmount);
+        if (n === null) return rawAmount;
+        const numLocale = currSym === "₹" ? "en-IN" : "en-US";
+        const abs = Math.abs(n).toLocaleString(numLocale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const raw = String(rawAmount || "").replace(/\s/g, "");
+
+        // Rule 1: trust amount_type when it's explicitly set by the scraper.
+        // This handles credit cards (Capital One: posted positive=charge→debit, negative=refund→credit)
+        // and ICICI-style debit/credit columns. See BANK_CONVENTIONS.md.
+        const type = (txnType || "").toLowerCase();
+        if (type === "credit") return `+${currSym}${abs}`;
+        if (type === "debit" || type === "withdrawals" || type === "fee") return `-${currSym}${abs}`;
+
+        // Rule 2: no explicit type — use raw sign from the bank.
+        if (n < 0) return `-${currSym}${abs}`;
+        if (raw.startsWith("+")) return `+${currSym}${abs}`;
+
+        // Rule 3: unsigned, no type — show as positive.
+        return `+${currSym}${abs}`;
+      }
+
+      function easeOutCubic(t) {
+        return 1 - Math.pow(1 - t, 3);
+      }
+
+      // Account currency, DATA-DRIVEN: prefer the symbol the backend detected
+      // from the actual scraped amounts (acctMeta.currency — ₹/$/€/…); fall back
+      // to a bank-key guess, then "$". One source of truth, so we never hardcode
+      // a currency per view. `_insightsCur` is set by loadInsights before render.
+      let _insightsCur = { sym: "$", locale: "en-US" };
+      function _acctCurrency(acctMeta) {
+        let sym = (acctMeta && acctMeta.currency) || "";
+        if (!sym) {
+          const bk = ((acctMeta && acctMeta.bank_key) || "").toLowerCase();
+          sym = /icici|hdfc|sbi|axis|kotak|idfc|yes|pnb|bob|indus/.test(bk) ? "₹" : "$";
+        }
+        return { sym, locale: sym === "₹" ? "en-IN" : "en-US" };
+      }
+
+      function formatCompactCurrency(value, decimals = 0) {
+        return _insightsCur.sym + Math.abs(value).toLocaleString(_insightsCur.locale, {
+          minimumFractionDigits: decimals,
+          maximumFractionDigits: decimals,
+        });
+      }
+
+      function animateCountNode(node) {
+        if (!node) return;
+        const raw = Number(node.dataset.targetValue || 0);
+        // data-prefix carries the sign + a "$" placeholder (e.g. "-$"); swap the
+        // "$" for the account's actual currency symbol so insights show ₹/€/…
+        // without touching every template. (animateCountNode is insights-only.)
+        const prefix = (node.dataset.prefix || "").replace("$", _insightsCur.sym);
+        const suffix = node.dataset.suffix || "";
+        const decimals = Number(node.dataset.decimals || 0);
+        const duration = Number(node.dataset.duration || 800);
+        const start = performance.now();
+
+        const render = (value) => {
+          // Build the full string in one shot — never concatenate "-" after the fact,
+          // which causes the minus sign to render on a separate line in some browsers.
+          node.textContent = `${prefix}${Math.abs(value).toLocaleString(_insightsCur.locale, {
+            minimumFractionDigits: decimals,
+            maximumFractionDigits: decimals,
+          })}${suffix}`;
+        };
+
+        const tick = (now) => {
+          const progress = Math.min(1, (now - start) / duration);
+          render(raw * easeOutCubic(progress));
+          if (progress < 1) requestAnimationFrame(tick);
+        };
+
+        render(0);
+        requestAnimationFrame(tick);
+      }
+
+      function animateInsightsNumbers() {
+        document.querySelectorAll("#insightsStats [data-target-value]").forEach((node) => animateCountNode(node));
+      }
+
+      function resetInsightCharts() {
+        document.getElementById("monthlyChartWrap").innerHTML = '<canvas id="monthlyChart"></canvas>';
+        document.getElementById("donutChartWrap").innerHTML = '<canvas id="donutChart"></canvas>';
+      }
+
+      function renderInsightsSkeleton() {
+        document.getElementById("insightsStats").innerHTML = `
+          <div class="skeleton-grid">
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+          </div>`;
+        resetInsightCharts();
+        document.getElementById("monthlyChartWrap").innerHTML = '<div class="skeleton-chart"></div>';
+        document.getElementById("donutChartWrap").innerHTML = '<div class="skeleton-chart"></div>';
+        document.getElementById("insightsTopMerchants").innerHTML = `
+          <div class="skeleton-line"></div>
+          <div class="skeleton-line"></div>
+          <div class="skeleton-line"></div>
+          <div class="skeleton-line"></div>`;
+        document.getElementById("donutLegend").innerHTML = `
+          <div class="skeleton-line"></div>
+          <div class="skeleton-line"></div>
+          <div class="skeleton-line"></div>`;
+      }
+
+      function renderTransactions(payload, categoryFilter = "All") {
+        const txns = payload.transactions || [];
+        const isCreditAcct = !!payload._isCreditCard;
+
+        // Apply direction filter (Money In / Money Out) first
+        let dirFiltered = txns;
+        if (activeDirectionFilter) {
+          dirFiltered = txns.filter(t => {
+            const n = parseAmount(t.amount);
+            if (n === null) return false;
+            if (isCreditAcct) {
+              return activeDirectionFilter === "money_in" ? n < 0 : n >= 0;
+            } else {
+              const isCredit = (t.txn_type || "").toLowerCase() === "credit";
+              return activeDirectionFilter === "money_in" ? isCredit : !isCredit;
+            }
+          });
+        }
+
+        let filteredTxns =
+          categoryFilter && categoryFilter !== "All"
+            ? dirFiltered.filter((t) => (t.category || "Uncategorized") === categoryFilter)
+            : dirFiltered;
+
+        // Apply live search query
+        if (_txnSearchQuery) {
+          const q = _txnSearchQuery.toLowerCase();
+          filteredTxns = filteredTxns.filter(t => {
+            const merchant = (t.merchant_clean || t.raw_description || "").toLowerCase();
+            const cat      = (t.category || "").toLowerCase();
+            const amount   = (t.amount || "").toString().toLowerCase();
+            const date     = (t.date || "").toLowerCase();
+            return merchant.includes(q) || cat.includes(q) || amount.includes(q) || date.includes(q);
+          });
+        }
+        // Update "no results" state
+        const noResultsEl = document.getElementById("txnSearchNoResults");
+        const termEl      = document.getElementById("txnSearchTerm");
+        if (noResultsEl) {
+          const showEmpty = _txnSearchQuery && filteredTxns.length === 0;
+          noResultsEl.style.display = showEmpty ? "" : "none";
+          if (termEl) termEl.textContent = _txnSearchQuery;
+        }
+
+        // Search total banner — show at top when a search query is active
+        const searchBanner     = document.getElementById("searchTotalBanner");
+        const searchBannerAmt  = document.getElementById("searchBannerAmt");
+        const searchBannerLbl  = document.getElementById("searchBannerLabel");
+        const searchBannerCnt  = document.getElementById("searchBannerCount");
+        if (searchBanner) {
+          if (_txnSearchQuery && filteredTxns.length > 0) {
+            const _sym2 = payload._currSym || "$";
+            let searchTotal = 0;
+            filteredTxns.forEach((t) => {
+              const n = parseAmount(_displayAmt(t.amount || "", t.txn_type, isCreditAcct, _sym2));
+              if (n !== null) searchTotal += n;
+            });
+            const absFormatted = `${_sym2}${Math.abs(searchTotal).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            searchBannerAmt.textContent = absFormatted;
+            searchBannerLbl.textContent = `spent on "${_txnSearchQuery}"`;
+            searchBannerCnt.textContent = `${filteredTxns.length} transaction${filteredTxns.length !== 1 ? "s" : ""}`;
+            searchBanner.style.display  = "flex";
+          } else {
+            searchBanner.style.display = "none";
+          }
+        }
+
+        // Show total spending for the selected category
+        if (categoryFilter && categoryFilter !== "All") {
+          let total = 0;
+          const _sym = payload._currSym || "$";
+          filteredTxns.forEach((t) => {
+            const n = parseAmount(_displayAmt(t.amount || "", t.txn_type, isCreditAcct, _sym));
+            if (n !== null) total += n;
+          });
+          const sign = total < 0 ? "-" : total > 0 ? "+" : "";
+          const formatted = `${_sym}${Math.abs(total).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+          categoryTotal.textContent = `${categoryFilter}: ${sign}${formatted} across ${filteredTxns.length} transaction${filteredTxns.length !== 1 ? "s" : ""}`;
+          categoryTotal.hidden = false;
+        } else {
+          categoryTotal.hidden = true;
+        }
+
+        const categoryCounts = {};
+        const categoryTotals = {};
+        resultsBody.innerHTML = filteredTxns
+          .map(
+            (t) => {
+              const amount = _displayAmt(t.amount || "", t.txn_type, isCreditAcct, payload._currSym || "$");
+              const raw = t.raw_description || "";
+              let merchant = t.merchant_clean || raw || "";
+              const rawUpper = raw.toUpperCase();
+              const merchUpper = merchant.toUpperCase();
+              if (rawUpper.includes("VENMO") && !merchUpper.includes("VENMO")) {
+                merchant = `VENMO ${merchant}`.trim();
+              }
+              if (rawUpper.includes("ZELLE") && !merchUpper.includes("ZELLE")) {
+                merchant = `ZELLE ${merchant}`.trim();
+              }
+              const formattedDate = _formatDate(t.date);
+              const dateDisplay = formattedDate
+                ? formattedDate
+                : `<span class="txn-date-pending">Pending</span>`;
+              const category = t.category || "Uncategorized";
+              const chipStyle = "margin-top:6px;display:inline-flex;align-items:center;border:1px solid #d6dbe4;background:#f7f8fb;color:#475467;border-radius:999px;padding:4px 10px;font-size:12px;line-height:1.2;";
+              const categoryChip = (!_isPdfMode && t.id)
+                ? `<button class="txn-category-chip" style="${chipStyle}cursor:pointer;" onclick="editTxnCategory(event, ${Number(t.id)}, ${JSON.stringify(merchant)}, ${JSON.stringify(category)})">${category}</button>`
+                : `<span class="txn-category-chip is-readonly" style="${chipStyle}cursor:default;">${category}</span>`;
+              return `<tr class="txn-row${formattedDate ? "" : " txn-pending"}" onclick="toggleTxnDetail(this)"><td>${dateDisplay}</td><td><div>${merchant}</div><div class="txn-category-row">${categoryChip}</div></td><td>${amount}</td></tr><tr class="txn-detail" hidden><td colspan="3" class="txn-raw">Raw: ${t.raw_description || ""} &nbsp;·&nbsp; ${amount}</td></tr>`;
+            }
+          )
+          .join("");
+        // Define sym/locale before forEach so _displayAmt can be used for proper sign normalization
+        const _sym = payload._currSym || "$";
+        const _locale = _sym === "₹" ? "en-IN" : "en-US";
+        txns.forEach((t) => {
+          const category = t.category || "Uncategorized";
+          categoryCounts[category] = (categoryCounts[category] || 0) + 1;
+          // Use _displayAmt (same as transaction rows + search banner) so Capital One charges
+          // (stored as positive raw amounts with amount_type="debit") are treated as negative,
+          // and refunds/payments (amount_type="credit") are treated as positive.
+          const n = parseAmount(_displayAmt(t.amount || "", t.txn_type, isCreditAcct, _sym));
+          if (n !== null) categoryTotals[category] = (categoryTotals[category] || 0) + n;
+        });
+        const orderedCategories = Object.keys(categoryCounts).sort();
+        if (!orderedCategories.length) {
+          categoryBlock.hidden = true;
+          return;
+        }
+        categoryBlock.hidden = false;
+        function fmtCardTotal(total) {
+          if (total === undefined || total === null || isNaN(total)) return "";
+          const sign = total < 0 ? "-" : total > 0 ? "+" : "";
+          return `${sign}${_sym}${Math.abs(total).toLocaleString(_locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        }
+        const allTotal = Object.values(categoryTotals).reduce((s, v) => s + v, 0);
+        // For credit cards show the balance due on the "All" pill; for others show net spending.
+        // allTotal is now properly signed (expenses negative, income positive), so no negation needed.
+        const allDisplayVal = payload._creditBalanceNum != null
+          ? `-${_sym}` + payload._creditBalanceNum.toLocaleString(_locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          : fmtCardTotal(allTotal);
+        const allCard = `<div class="result-card${
+          categoryFilter === "All" ? " is-active" : ""
+        }" data-category="All"><div class="result-label">All</div><div class="result-value">${allDisplayVal}</div></div>`;
+        categorySummary.innerHTML =
+          allCard +
+          orderedCategories
+            .map((category) => {
+              const active = categoryFilter === category ? " is-active" : "";
+              return `<div class="result-card${active}" data-category="${category}"><div class="result-label">${category}</div><div class="result-value">${fmtCardTotal(categoryTotals[category])}</div></div>`;
+            })
+            .join("");
+      }
+
+      // PDF upload was removed from the sidebar UI; guard the handler so the
+       // page doesn't crash when the input element no longer exists.
+       if (input) input.addEventListener("change", (event) => {
+        const file = event.target.files && event.target.files[0];
+        if (!file) {
+          meta.textContent = "No file selected.";
+          parseMeta.textContent = "";
+          uploadLabel.textContent = "Upload PDF";
+          setUploadState("");
+          if (!currentAccountId) showEmptyState();
+          return;
+        }
+        if (file.type !== "application/pdf") {
+          meta.textContent = "Please choose a PDF file.";
+          parseMeta.textContent = "";
+          uploadLabel.textContent = "Upload PDF";
+          setUploadState("error");
+          if (!currentAccountId) showEmptyState();
+          return;
+        }
+        meta.textContent = `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+        uploadLabel.textContent = "PDF uploaded";
+        setUploadState("uploaded");
+        parseMeta.textContent = "Parsing statement...";
+        setUploadState("loading");
+
+        const formData = new FormData();
+        formData.append("file", file, file.name);
+
+        const tryLocalFirst = async () => {
+          try {
+            const payload = await postParse(formData, "");
+            return { payload, backend: "local" };
+          } catch (err) {
+            const msg = String(err && err.message ? err.message : "");
+            const status = Number(err && err.status ? err.status : 0);
+            if (
+              msg.includes("Failed to fetch") ||
+              msg.includes("Load failed") ||
+              msg.includes("Backend parse API not available") ||
+              status === 404 ||
+              status === 405
+            ) {
+              const payload = await postParse(formData, CLOUD_API_BASE);
+              return { payload, backend: "cloud" };
+            }
+            throw err;
+          }
+        };
+
+        // Send PDF to the backend API for parsing (local first, then cloud fallback).
+        tryLocalFirst()
+          .then(({ payload, backend }) => {
+            setUploadState("uploaded");
+            parseMeta.textContent =
+              backend === "cloud"
+                ? "Parsed successfully (cloud backend)."
+                : "Parsed successfully (local backend).";
+            const count = (payload.transactions || []).length;
+            lastPayload = payload;
+            activeCategory = "All";
+            activeDirectionFilter = null;
+            currentAccountId = null;
+            _isPdfMode = true;
+            // Show account view with PDF label
+            showAccountView();
+            const filename = (input.files[0] && input.files[0].name) || "Uploaded PDF";
+            document.getElementById("resultsHeading").textContent = filename.replace(/\.pdf$/i, "");
+            document.getElementById("resultsInfo").textContent = `${count} transactions`;
+            const sandboxBadge = document.getElementById("mainSandboxBadge");
+            if (sandboxBadge) sandboxBadge.style.display = "none";
+            // Hide Insights tab for PDF uploads (no account ID to call API)
+            const insTab = document.getElementById("mainTabInsights");
+            if (insTab) insTab.style.display = "none";
+            document.getElementById("periodFilterRow").style.display = "none";
+            renderSummary(payload);
+            renderTransactions(payload, activeCategory);
+            switchMainTab("overview");
+          })
+          .catch((err) => {
+            setUploadState("error");
+            const msg = String(err && err.message ? err.message : "");
+            const friendly =
+              msg.includes("Failed to fetch") || msg.includes("Load failed")
+                ? "Backend is not reachable. Check the API URL."
+                : `Could not parse PDF: ${msg}`;
+            parseMeta.textContent = friendly;
+            if (!currentAccountId) showEmptyState();
+          });
+      });
+
+      function toggleTxnDetail(row) {
+        const detail = row.nextElementSibling;
+        if (detail && detail.classList.contains("txn-detail")) {
+          detail.hidden = !detail.hidden;
+          row.classList.toggle("is-expanded", !detail.hidden);
+        }
+      }
+
+      async function editTxnCategory(event, transactionId, merchant, currentCategory) {
+        event.stopPropagation();
+        const choice = window.prompt(`Set category for ${merchant}
+
+Options:
+${MANUAL_CATEGORY_OPTIONS.join(", ")}
+
+Current: ${currentCategory}`, currentCategory || "Uncategorized");
+        if (!choice) return;
+        const nextCategory = choice.trim();
+        if (!nextCategory || nextCategory === currentCategory) return;
+        try {
+          await _apiFetch(`/api/transactions/${transactionId}/category`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ category: nextCategory }),
+          });
+          if (currentAccountId) {
+            await loadAccountTransactions(currentAccountId);
+            if (activeMainTab === "insights") await loadInsights(currentAccountId, _insightsPeriod || "all");
+          }
+        } catch (err) {
+          window.alert(`Could not update category: ${err.message || err}`);
+        }
+      }
+
+      categorySummary.addEventListener("click", (event) => {
+        const card = event.target.closest("[data-category]");
+        if (!card || !lastPayload) return;
+        activeCategory = card.getAttribute("data-category") || "All";
+        renderTransactions(lastPayload, activeCategory);
+        // If viewing a live account, re-fetch filtered period from API
+        if (currentAccountId && activeCategory !== "All") {
+          const activePeriodBtn = document.querySelector("#periodFilterRow .period-btn.is-active");
+          const period = activePeriodBtn ? activePeriodBtn.dataset.period : "all";
+          // filtering is done client-side on lastPayload — no extra fetch needed
+        }
+      });
+
+      // ── Bookmarklet setup ──────────────────────────────────────────
+      const BANK_CONFIG = {
+        boa: {
+          name: "Bank of America",
+          url: "https://www.bankofamerica.com/",
+          bookmarkletJs: `(function(){var rows=document.querySelectorAll('tr.activity-row');if(!rows.length){alert('FIFO: No transactions found.\\n\\nMake sure you are on your account Transactions page.');return;}var txns=[];rows.forEach(function(r){var date=(r.querySelector('td:nth-child(1)')||{}).innerText||'';var desc=(r.querySelector('td:nth-child(2)')||{}).innerText||'';var type=(r.querySelector('td:nth-child(3)')||{}).innerText||'';var amt=(r.querySelector('td:nth-child(4)')||{}).innerText||'';if(date.trim()||desc.trim())txns.push({date:date.trim(),description:desc.trim(),amount_type:type.trim(),amount:amt.trim()});});fetch('{ORIGIN}/api/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bank_key:'boa',transactions:txns})}).then(function(r){return r.json();}).then(function(d){alert('FIFO: Imported '+d.count+' transactions!\\nYou can close this tab.');}).catch(function(e){alert('FIFO Error: '+e.message+'\\n\\nMake sure FIFO is running at {ORIGIN}');});})();`,
+        },
+        capital_one: {
+          name: "Capital One",
+          url: "https://www.capitalone.com/",
+          bookmarkletJs: `(function(){var sels=['[data-testid="purchase-list-item"]','[data-testid="txn-row"]','tr[class*="transaction"]','li[class*="TransactionRow"]'];var rows=[];for(var i=0;i<sels.length;i++){rows=Array.from(document.querySelectorAll(sels[i]));if(rows.length)break;}if(!rows.length){alert('FIFO: No transactions found.\\n\\nMake sure you are on the Transactions tab and scroll to load more.');return;}var txns=rows.map(function(r){var dateSel='[data-testid="transaction-date"],[class*="date"],[class*="Date"]';var descSel='[data-testid="merchant-name"],[data-testid="transaction-description"],[class*="merchant"],[class*="Merchant"],[class*="description"],[class*="Description"]';var amtSel='[data-testid="transaction-amount"],[class*="amount"],[class*="Amount"]';return{date:(r.querySelector(dateSel)||{}).innerText||'',description:(r.querySelector(descSel)||{}).innerText||'',amount:(r.querySelector(amtSel)||{}).innerText||''};}).filter(function(t){return t.description.trim();});fetch('{ORIGIN}/api/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bank_key:'capital_one',transactions:txns})}).then(function(r){return r.json();}).then(function(d){alert('FIFO: Imported '+d.count+' transactions!\\nYou can close this tab.');}).catch(function(e){alert('FIFO Error: '+e.message+'\\n\\nMake sure FIFO is running at {ORIGIN}');});})();`,
+        },
+        discover: {
+          name: "Discover",
+          url: "https://portal.discover.com/",
+          bookmarkletJs: `(function(){var sels=['[data-testid="purchase-list-item"]','[data-testid="transaction-row"]','[data-testid="activity-row"]','li[class*="transaction"]','div[class*="transaction-item"]','[role="row"]'];var rows=[];for(var i=0;i<sels.length;i++){rows=Array.from(document.querySelectorAll(sels[i]));if(rows.length)break;}if(!rows.length){alert('FIFO: No transactions found.\\n\\nMake sure you are on the Activity/Transactions page.');return;}var txns=rows.map(function(r){var dateSel='[data-testid*="date"],[class*="date"],[class*="Date"]';var descSel='[data-testid*="merchant"],[data-testid*="description"],[class*="merchant"],[class*="description"],[class*="name"]';var amtSel='[data-testid*="amount"],[class*="amount"],[class*="Amount"]';return{date:(r.querySelector(dateSel)||{}).innerText||'',description:(r.querySelector(descSel)||{}).innerText||'',amount:(r.querySelector(amtSel)||{}).innerText||''};}).filter(function(t){return t.description.trim();});fetch('{ORIGIN}/api/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bank_key:'discover',transactions:txns})}).then(function(r){return r.json();}).then(function(d){alert('FIFO: Imported '+d.count+' transactions!\\nYou can close this tab.');}).catch(function(e){alert('FIFO Error: '+e.message+'\\n\\nMake sure FIFO is running at {ORIGIN}');});})();`,
+        },
+        icici: {
+          name: "ICICI Bank",
+          url: "https://retailnetbanking.icici.bank.in/login-page",
+          bookmarkletJs: `(function(){
+            var rows=Array.from(document.querySelectorAll('table.statement-table tbody tr,table[id*="statement"] tbody tr,table[class*="transaction"] tbody tr,[class*="txnTable"] tbody tr,table tbody tr')).filter(function(r){return r.querySelectorAll('td').length>=4;});
+            if(!rows.length){alert('FIFO: No transactions found.\\n\\nMake sure you are on the Account Statement page and the table is visible.');return;}
+            var txns=rows.map(function(r){var cells=r.querySelectorAll('td');
+              var date=(cells[0]||{}).innerText||'';
+              var desc=(cells[2]||{}).innerText||'';
+              var dr=(cells[3]||{}).innerText||'';
+              var cr=(cells[4]||{}).innerText||'';
+              var isEmpty=function(v){v=v.replace(/[,\s₹]/g,'').trim();return !v||v==='-'||v==='0'||v==='0.00';};
+              var amount=isEmpty(dr)?cr:dr;
+              var type=isEmpty(dr)?'credit':'debit';
+              return{date:date.trim(),description:desc.trim(),amount:amount.trim(),amount_type:type};
+            }).filter(function(t){return t.description.trim();});
+            fetch('{ORIGIN}/api/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bank_key:'icici',transactions:txns})}).then(function(r){return r.json();}).then(function(d){alert('FIFO: Imported '+d.count+' transactions!\\nYou can close this tab.');}).catch(function(e){alert('FIFO Error: '+e.message+'\\n\\nMake sure FIFO is running at {ORIGIN}');});
+          })();`,
+        },
+      };
+
+      let currentBookmarkletBank = null;
+
+      function openBookmarkletSetup(bankKey) {
+        document.getElementById("bankPickerOverlay").style.display = "none";
+        const cfg = BANK_CONFIG[bankKey];
+        if (!cfg) return;
+        currentBookmarkletBank = bankKey;
+        document.getElementById("bookmarkletBankName").textContent = cfg.name;
+        document.getElementById("openBankBtn").textContent = `Open ${cfg.name} →`;
+        // On prod (Cloudflare Pages) there's no local backend — bookmarklet must
+        // POST directly to the Cloud Run API, not to the static Pages origin.
+        const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+        const origin = isLocal ? window.location.origin : CLOUD_API_BASE;
+        const js = cfg.bookmarkletJs.replace(/\{ORIGIN\}/g, origin);
+        document.getElementById("bookmarkletLink").href = "javascript:" + js;
+        document.getElementById("bookmarkletOverlay").style.display = "flex";
+      }
+
+      function closeBookmarkletModal(event) {
+        if (event && event.target !== document.getElementById("bookmarkletOverlay")) return;
+        document.getElementById("bookmarkletOverlay").style.display = "none";
+      }
+
+      function openBankInBrowser() {
+        const cfg = BANK_CONFIG[currentBookmarkletBank];
+        if (cfg) window.open(cfg.url, "_blank");
+      }
+
+      const PERIOD_LABELS = {
+        "1m": "last 30 days", "3m": "last 3 months", "6m": "last 6 months",
+        "1y": "last year", "ytd": "year to date", "all": "all time",
+      };
+
+      // ── Bank picker modal ────────────────────────────────────────────
+      function openBankPicker() {
+        if (!requireAuthOrPrompt()) return;
+        document.getElementById("bankPickerOverlay").style.display = "flex";
+      }
+
+      function closeBankPicker(event) {
+        if (event && event.target !== document.getElementById("bankPickerOverlay")) return;
+        document.getElementById("bankPickerOverlay").style.display = "none";
+      }
+
+      let currentAccountId = null;
+
+      // Cache of ALL transactions per live account — populated on load, used for client-side filtering
+      const _liveTxnsCache   = {};   // accountId → raw txns array
+      const _liveAcctMetaCache = {}; // accountId → acctMeta
+
+      // Robust date parser — handles every format banks use
+      function _parseTxnDate(raw) {
+        const s = (raw || "").trim();
+        if (!s) return null;
+        // YYYY-MM-DD
+        let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+        // MM/DD/YYYY or M/D/YYYY
+        m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (m) return new Date(+m[3], +m[1] - 1, +m[2]);
+        // MM/DD/YY
+        m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+        if (m) { const y = +m[3] + (+m[3] < 50 ? 2000 : 1900); return new Date(y, +m[1] - 1, +m[2]); }
+        // "May 5" or "May 05" (no year → current year)
+        m = s.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})$/i);
+        if (m) { const d = new Date(`${m[1]} ${m[2]} ${new Date().getFullYear()}`); if (!isNaN(d)) return d; }
+        // "May 5, 2025"
+        m = s.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})/i);
+        if (m) { const d = new Date(`${m[1]} ${m[2]} ${m[3]}`); if (!isNaN(d)) return d; }
+        return null; // "Pending", "Processing", etc → always include
+      }
+
+      function _filterTxnsByPeriod(allTxns, period) {
+        if (!period || period === "all") return allTxns;
+        const now = new Date();
+        let since = null;
+        if      (period === "1m")  since = new Date(now.getFullYear(), now.getMonth() - 1,  now.getDate());
+        else if (period === "3m")  since = new Date(now.getFullYear(), now.getMonth() - 3,  now.getDate());
+        else if (period === "6m")  since = new Date(now.getFullYear(), now.getMonth() - 6,  now.getDate());
+        else if (period === "1y")  since = new Date(now.getFullYear() - 1, now.getMonth(),  now.getDate());
+        else if (period === "ytd") since = new Date(now.getFullYear(), 0, 1);
+        if (!since) return allTxns;
+        return allTxns.filter(t => {
+          const d = _parseTxnDate(t.date || "");
+          if (!d) return true;   // Pending / unparseable → always show
+          return d >= since;
+        });
+      }
+
+      function _onTxnSearch(val) {
+        _txnSearchQuery = val.trim();
+        const clearBtn = document.getElementById("txnSearchClear");
+        if (clearBtn) clearBtn.style.display = _txnSearchQuery ? "" : "none";
+        if (lastPayload) renderTransactions(lastPayload, activeCategory);
+      }
+
+      function _clearTxnSearch() {
+        _txnSearchQuery = "";
+        const input = document.getElementById("txnSearchInput");
+        const clearBtn = document.getElementById("txnSearchClear");
+        if (input) input.value = "";
+        if (clearBtn) clearBtn.style.display = "none";
+        if (lastPayload) renderTransactions(lastPayload, activeCategory);
+        if (input) input.focus();
+      }
+
+      function filterByPeriod(btn) {
+        if (!currentAccountId) return;
+        document.querySelectorAll("#periodFilterRow .period-btn").forEach((b) => b.classList.remove("is-active"));
+        btn.classList.add("is-active");
+        const period = btn.dataset.period;
+        const label = document.getElementById("resultsHeading")?.textContent?.trim() || "Account";
+
+        // All accounts — filter from in-memory cache (works for offline AND live)
+        const allTxns  = _offlineAccounts.has(currentAccountId)
+          ? (_offlineTxns.get(currentAccountId) || [])
+          : (_liveTxnsCache[currentAccountId]   || []);
+        const acctMeta = _offlineAccounts.has(currentAccountId)
+          ? _offlineAccounts.get(currentAccountId)
+          : (_liveAcctMetaCache[currentAccountId] || null);
+
+        const filtered = _filterTxnsByPeriod(allTxns, period);
+        _renderLiveTransactions(filtered, label, acctMeta, true);
+        // Ensure we stay on transactions tab (not redirected to overview)
+        switchMainTab("transactions");
+        if (activeMainTab === "insights") loadInsights(currentAccountId, period);
+      }
+
+      // ── Tab switching ────────────────────────────────────────────────
+      let _monthlyChartInstance = null;
+      let _donutChartInstance = null;
+
+      function switchMainTab(tab) {
+        activeMainTab = tab;
+        // Update tab button states
+        ["overview", "transactions", "insights"].forEach(t => {
+          const id = "mainTab" + t.charAt(0).toUpperCase() + t.slice(1);
+          const btn = document.getElementById(id);
+          if (btn) btn.classList.toggle("is-active", t === tab);
+        });
+        // Show/hide panes
+        const panes = { overview: "mainOverviewPane", transactions: "mainTransactionsPane", insights: "insightsPane" };
+        Object.entries(panes).forEach(([t, id]) => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = t === tab ? "" : "none";
+        });
+        // Period filter row: transactions tab + live account only
+        const periodRow = document.getElementById("periodFilterRow");
+        if (periodRow) periodRow.style.display = tab === "transactions" && currentAccountId ? "" : "none";
+        // Load insights on demand
+        if (tab === "insights" && currentAccountId) {
+          loadInsights(currentAccountId, _insightsPeriod || "all");
+        }
+        // Render overview content
+        if (tab === "overview" && lastPayload) {
+          renderOverviewContent(lastPayload);
+        }
+      }
+
+      // Legacy alias (used in a few inline refs)
+      function switchTab(tab) {
+        if (tab === "insights") switchMainTab("insights");
+        else switchMainTab("transactions");
+      }
+
+      let _insightsPeriod = "all";
+
+      function _periodLabel(period) {
+        return { "1m": "Last 30 days", "3m": "Last 3 months", "6m": "Last 6 months",
+                 "1y": "Last 12 months", "ytd": "Year to date", "all": "All time" }[period] || "All time";
+      }
+
+      function setInsightsPeriod(btn) {
+        document.querySelectorAll(".insights-period-btn").forEach(b => b.classList.remove("is-active"));
+        btn.classList.add("is-active");
+        _insightsPeriod = btn.dataset.period;
+        loadInsights(currentAccountId, _insightsPeriod);
+      }
+
+      async function loadInsights(accountId, period) {
+        if (!accountId) return;
+        period = period || _insightsPeriod || "all";
+        // Data-driven currency for this account — used by all insights formatters.
+        _insightsCur = _acctCurrency(_offlineAccounts.get(accountId) || _liveAcctMetaCache[accountId] || null);
+        const pane = document.getElementById("insightsPane");
+        pane.classList.add("is-loading");
+        renderInsightsSkeleton();
+        if (_donutChartInstance) { _donutChartInstance.destroy(); _donutChartInstance = null; }
+        if (_monthlyChartInstance) { _monthlyChartInstance.destroy(); _monthlyChartInstance = null; }
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 180));
+
+          // Offline (static) account — compute insights client-side, no API needed
+          if (_offlineAccounts.has(accountId)) {
+            const acct = _offlineAccounts.get(accountId);
+            const txns = _offlineTxns.get(accountId) || [];
+            const monthsParam = { "1m": 2, "3m": 3, "6m": 6, "1y": 12, "ytd": 12, "all": 24 }[period] || 24;
+            const ins     = _computeOfflineInsights(txns, acct, period);
+            const monthly = _computeOfflineMonthly(txns, monthsParam);
+            _renderInsights(ins, monthly, period);
+            return;
+          }
+
+          const monthsParam = { "1m": 2, "3m": 3, "6m": 6, "1y": 12, "ytd": 12, "all": 24 }[period] || 24;
+          const [ins, monthly] = await Promise.all([
+            _apiFetch(`/api/accounts/${accountId}/insights?period=${period}`).then(r => r.json()),
+            _apiFetch(`/api/accounts/${accountId}/monthly?months=${monthsParam}`).then(r => r.json()),
+          ]);
+          const overrideBalance = _accountBalanceOverrides.get(accountId);
+          if (overrideBalance) ins.current_balance = overrideBalance;
+          if (!String(ins.current_balance || "").trim()) {
+            const accounts = await _apiFetch("/api/accounts").then(r => r.json()).catch(() => []);
+            const acctMeta = accounts.find(a => Number(a.id) === Number(accountId)) || _liveAcctMetaCache[accountId] || null;
+            if (acctMeta?.account_balance) {
+              ins.current_balance = acctMeta.account_balance;
+            } else if (acctMeta && /(sandbox|demo)/i.test(acctMeta.display_name || "")) {
+              ins.current_balance = SANDBOX_DEFAULT_BALANCE;
+            }
+          }
+          _renderInsights(ins, monthly, period);
+        } catch (err) {
+          document.getElementById("insightsStats").innerHTML = `<p class="insights-loading">Error: ${err.message}</p>`;
+        } finally {
+          pane.classList.remove("is-loading");
+        }
+      }
+
+      const DONUT_COLORS = [
+        "#1f5f55","#3b82f6","#f59e0b","#ef4444","#8b5cf6",
+        "#06b6d4","#f97316","#ec4899","#6366f1","#10b981",
+      ];
+
+      function _renderInsights(ins, monthly, period) {
+        resetInsightCharts();
+        const fmt  = v => formatCompactCurrency(v, 0);
+        const fmtFull = v => _insightsCur.sym + v.toLocaleString(_insightsCur.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const periodLabel  = _periodLabel(period || "all");
+        const isCreditCard = ins.account_type === "credit";
+        const months       = monthly.months || [];
+        const statsEl      = document.getElementById("insightsStats");
+        const healthEl     = document.getElementById("insightsPaymentHealth");
+
+        // ── Section title renames for credit cards ────────────────────
+        const monthlyChartTitleEl = document.querySelector("#insightsPane .insights-chart-grid .insights-chart-title");
+        if (monthlyChartTitleEl) {
+          monthlyChartTitleEl.textContent = isCreditCard ? "Monthly Activity" : "Monthly Cash Flow";
+        }
+        document.querySelector(".insights-merchants-card .insights-chart-title").textContent = "Top Merchants";
+
+        if (isCreditCard) {
+          _renderCreditInsights(ins, months, periodLabel, fmt, fmtFull, statsEl, healthEl);
+        } else {
+          healthEl.style.display = "none";
+          _renderCheckingInsights(ins, months, periodLabel, fmt, statsEl);
+        }
+
+        animateInsightsNumbers();
+
+        // ── Monthly chart ─────────────────────────────────────────────
+        _renderMonthlyChart(months, isCreditCard);
+
+        // ── Category donut ────────────────────────────────────────────
+        _renderCategoryDonut(ins, fmt);
+
+        // ── Top merchants ─────────────────────────────────────────────
+        _renderTopMerchants(ins, fmt);
+      }
+
+      // ── Credit card Insights ──────────────────────────────────────────
+      function _renderCreditInsights(ins, months, periodLabel, fmt, fmtFull, statsEl, healthEl) {
+        const charges  = ins.total_charges  || 0;
+        const payments = ins.total_payments || 0;
+        const unpaid   = ins.unpaid_charges || 0;
+
+        // Balance Due card — amber styling (credit balance is always a liability)
+        const balDueColor = unpaid > 0 ? "#b45309" : "#059669";
+        statsEl.innerHTML = `
+          <div class="insights-metric-card insights-balance-due-card">
+            <div class="insights-metric-icon">💳</div>
+            <div class="insights-metric-label">Balance Due</div>
+            <div class="insights-metric-value" style="color:${balDueColor};white-space:nowrap"
+                 data-target-value="${unpaid.toFixed(2)}" data-prefix="-$" data-decimals="2"></div>
+            <div class="insights-metric-period">${periodLabel}</div>
+          </div>
+          <div class="insights-metric-card">
+            <div class="insights-metric-icon">🛍️</div>
+            <div class="insights-metric-label">Total Charges</div>
+            <div class="insights-metric-value negative" style="white-space:nowrap"
+                 data-target-value="${charges.toFixed(2)}" data-prefix="-$" data-decimals="2"></div>
+            <div class="insights-metric-period">${periodLabel}</div>
+          </div>
+          <div class="insights-metric-card">
+            <div class="insights-metric-icon">✅</div>
+            <div class="insights-metric-label">Payments Made</div>
+            <div class="insights-metric-value positive" style="white-space:nowrap"
+                 data-target-value="${payments.toFixed(2)}" data-prefix="+$" data-decimals="2"></div>
+            <div class="insights-metric-period">${periodLabel}</div>
+          </div>
+          <div class="insights-metric-card">
+            <div class="insights-metric-icon">${unpaid > 0 ? "📉" : "🎉"}</div>
+            <div class="insights-metric-label">Unpaid Charges</div>
+            <div class="insights-metric-value ${unpaid > 0 ? "negative" : "positive"}" style="white-space:nowrap"
+                 data-target-value="${unpaid.toFixed(2)}" data-prefix="${unpaid > 0 ? "-$" : "+$"}" data-decimals="2"></div>
+            <div class="insights-metric-period">${periodLabel}</div>
+          </div>`;
+
+        // ── Payment Health section ────────────────────────────────────
+        const pct = charges > 0 ? Math.min(100, Math.round((payments / charges) * 100)) : 0;
+        const fullyPaid = payments >= charges;
+        const barColor  = fullyPaid ? "#059669" : pct >= 70 ? "#d97706" : "#dc2626";
+        const calloutColor = fullyPaid ? "#059669" : "#b45309";
+        const calloutText  = fullyPaid
+          ? "You're fully paid up this period!"
+          : `You have ${fmtFull(unpaid)} in unpaid charges this period`;
+
+        healthEl.style.display = "";
+        healthEl.innerHTML = `
+          <div class="payment-health-card">
+            <div class="payment-health-title">Payment Health</div>
+            <div class="payment-health-meta">${fmtFull(charges)} charged &nbsp;·&nbsp; ${fmtFull(payments)} paid</div>
+            <div class="payment-health-bar-wrap">
+              <div class="payment-health-bar-fill" style="width:${pct}%;background:${barColor}"></div>
+            </div>
+            <div class="payment-health-stats">${pct}% of charges paid this period</div>
+            <div class="payment-health-callout" style="color:${calloutColor}">${calloutText}</div>
+          </div>`;
+      }
+
+      // ── Checking account Insights (original logic) ────────────────────
+      function _renderCheckingInsights(ins, months, periodLabel, fmt, statsEl) {
+        const spendMonths    = months.filter(m => m.expenses > 0);
+        const avgMonthlySpend = spendMonths.length
+          ? spendMonths.reduce((s, m) => s + m.expenses, 0) / spendMonths.length : 0;
+        const balRaw   = (ins.current_balance || "").replace(/[$₹€£¥,]/g, "").trim();
+        const balNum   = balRaw ? parseFloat(balRaw) : null;
+        const avgMonthlyIncome = months.filter(m => m.income > 0).length
+          ? months.filter(m => m.income > 0).reduce((s, m) => s + m.income, 0) / months.filter(m => m.income > 0).length : 0;
+        const isFinanciallyHealthy = avgMonthlyIncome > 0 && avgMonthlyIncome >= avgMonthlySpend * 0.9;
+        const balanceIsSet  = balNum !== null && Number.isFinite(balNum);
+        const runwayMonths  = (balanceIsSet && avgMonthlySpend > 0) ? balNum / avgMonthlySpend : null;
+        const net = ins.net || 0;
+
+        let runwayCard;
+        if (!balanceIsSet) {
+          runwayCard = `<div class="insights-runway-card insights-runway-card--empty">
+             <div class="insights-runway-icon" style="font-size:22px">🏦</div>
+             <div class="insights-runway-label">Runway</div>
+             <div class="insights-runway-empty-msg">Enter your current balance<br>in the account card above<br>to calculate runway</div>
+             <div class="insights-runway-sub" style="margin-top:10px">${avgMonthlySpend > 0 ? "Avg spend: " + fmt(avgMonthlySpend) + "/mo" : ""}</div>
+           </div>`;
+        } else if (isFinanciallyHealthy && (runwayMonths === null || runwayMonths > 24)) {
+          runwayCard = `<div class="insights-runway-card insights-runway-card--healthy">
+             <div class="insights-runway-icon">✅</div>
+             <div class="insights-runway-label">Financial Health</div>
+             <div class="insights-runway-value" style="font-size:22px;line-height:1.2">Positive<br>Cash Flow</div>
+             <div class="insights-runway-sub">${fmt(avgMonthlyIncome)}/mo in · ${fmt(avgMonthlySpend)}/mo out</div>
+           </div>`;
+        } else if (runwayMonths !== null) {
+          const runwayColor = runwayMonths >= 6 ? "" : runwayMonths >= 3 ? "style='color:#f59e0b'" : "style='color:#ef4444'";
+          runwayCard = `<div class="insights-runway-card">
+             <div class="insights-runway-icon">🏦</div>
+             <div class="insights-runway-label">Runway · ${fmt(balNum)} balance</div>
+             <div class="insights-runway-value" ${runwayColor} data-target-value="${runwayMonths.toFixed(1)}" data-decimals="1" data-suffix=" mo"></div>
+             <div class="insights-runway-sub">at ${fmt(avgMonthlySpend)}/mo avg spend</div>
+           </div>`;
+        } else {
+          runwayCard = `<div class="insights-runway-card">
+             <div class="insights-runway-icon">🏦</div>
+             <div class="insights-runway-label">Avg Monthly Spend</div>
+             <div class="insights-runway-value" style="font-size:24px"${avgMonthlySpend > 0 ? ` data-target-value="${avgMonthlySpend.toFixed(0)}" data-prefix="$"` : ""}>${avgMonthlySpend > 0 ? "" : "—"}</div>
+             <div class="insights-runway-sub">Set a balance above to see runway</div>
+           </div>`;
+        }
+
+        statsEl.innerHTML = runwayCard + `
+          <div class="insights-metric-card">
+            <div class="insights-metric-icon">💸</div>
+            <div class="insights-metric-label">Total Spent</div>
+            <div class="insights-metric-value negative" style="white-space:nowrap"
+                 data-target-value="${Math.abs(ins.total_expenses || 0).toFixed(2)}" data-prefix="-$" data-decimals="2"></div>
+            <div class="insights-metric-period">${periodLabel}</div>
+          </div>
+          <div class="insights-metric-card">
+            <div class="insights-metric-icon">💰</div>
+            <div class="insights-metric-label">Total Income</div>
+            <div class="insights-metric-value positive" style="white-space:nowrap"
+                 data-target-value="${Math.abs(ins.total_income || 0).toFixed(2)}" data-prefix="+$" data-decimals="2"></div>
+            <div class="insights-metric-period">${periodLabel}</div>
+          </div>
+          <div class="insights-metric-card">
+            <div class="insights-metric-icon">${net >= 0 ? "📈" : "📉"}</div>
+            <div class="insights-metric-label">Net Change</div>
+            <div class="insights-metric-value ${net >= 0 ? "positive" : "negative"}" style="white-space:nowrap"
+                 data-target-value="${Math.abs(net).toFixed(2)}" data-prefix="${net >= 0 ? "+$" : "-$"}" data-decimals="2"></div>
+            <div class="insights-metric-period">${periodLabel}</div>
+          </div>`;
+      }
+
+      // ── Monthly chart ─────────────────────────────────────────────────
+      function _renderMonthlyChart(months, isCreditCard) {
+        if (_monthlyChartInstance) { _monthlyChartInstance.destroy(); _monthlyChartInstance = null; }
+        const canvas = document.getElementById("monthlyChart");
+        canvas.style.display = "";
+        const noteEl = document.getElementById("monthlyChartNote");
+
+        if (!months.length) { if (noteEl) noteEl.style.display = "none"; return; }
+
+        const labels = months.map(m => {
+          const [y, mo] = m.month.split("-");
+          return new Date(+y, +mo - 1, 1).toLocaleString("default", { month: "short", year: "2-digit" });
+        });
+
+        let datasets;
+        if (isCreditCard) {
+          if (noteEl) noteEl.style.display = "none";
+          datasets = [
+            { label: "Charges",  data: months.map(m => m.charges  ?? m.expenses  ?? 0), backgroundColor: "#f87171", borderRadius: 5, barPercentage: 0.55 },
+            { label: "Payments", data: months.map(m => m.payments ?? m.income    ?? 0), backgroundColor: "#1f5f55", borderRadius: 5, barPercentage: 0.55 },
+          ];
+        } else {
+          const incomeVals = months.map(m => m.income).filter(v => v > 0);
+          const isFlat = incomeVals.length > 1 && incomeVals.every(v => v === incomeVals[0]);
+          if (noteEl) noteEl.style.display = isFlat ? "" : "none";
+          datasets = [
+            { label: "Income",   data: months.map(m => m.income),   backgroundColor: "#1f5f55", borderRadius: 5, barPercentage: 0.55 },
+            { label: "Expenses", data: months.map(m => m.expenses), backgroundColor: "#f87171", borderRadius: 5, barPercentage: 0.55 },
+          ];
+        }
+
+        _monthlyChartInstance = new Chart(canvas, {
+          type: "bar",
+          data: { labels, datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: {
+              duration: 800, easing: "easeOutCubic",
+              delay(ctx) { return ctx.type === "data" ? ctx.dataIndex * 30 : 0; },
+            },
+            plugins: {
+              legend: { position: "top", labels: { font: { size: 12, family: "Inter" }, boxWidth: 10, padding: 14 } },
+              tooltip: {
+                backgroundColor: "#fff", titleColor: "#111", bodyColor: "#444",
+                borderColor: "#e5e7eb", borderWidth: 1, padding: 10,
+                callbacks: { label: ctx => ` ${ctx.dataset.label}: $${ctx.parsed.y.toLocaleString()}` },
+              },
+            },
+            scales: {
+              x: { grid: { display: false }, ticks: { font: { size: 11 }, color: "#9ca3af" } },
+              y: {
+                border: { display: false }, grid: { color: "#f3f4f6" },
+                ticks: { font: { size: 11 }, color: "#9ca3af",
+                         callback: v => "$" + (v >= 1000 ? (v / 1000).toFixed(0) + "k" : v) },
+              },
+            },
+          },
+        });
+      }
+
+      // ── Category donut ────────────────────────────────────────────────
+      function _renderCategoryDonut(ins, fmt) {
+        const _SKIP_CATS = new Set(["Income", "Transfer", "Debt Payments"]);
+        const cats = (ins.by_category || [])
+          .filter(c => c.total > 0 && !_SKIP_CATS.has(c.category))
+          .sort((a, b) => b.total - a.total);
+        const topCats = cats.slice(0, 8);
+        if (_donutChartInstance) { _donutChartInstance.destroy(); _donutChartInstance = null; }
+        const donutCanvas = document.getElementById("donutChart");
+        if (!topCats.length) { document.getElementById("donutLegend").innerHTML = ""; return; }
+
+        _donutChartInstance = new Chart(donutCanvas, {
+          type: "doughnut",
+          data: {
+            labels: topCats.map(c => c.category),
+            datasets: [{ data: topCats.map(c => c.total), backgroundColor: DONUT_COLORS.slice(0, topCats.length), borderWidth: 0, hoverOffset: 6 }],
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false, cutout: "72%",
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: "#fff", titleColor: "#111", bodyColor: "#444",
+                borderColor: "#e5e7eb", borderWidth: 1, padding: 10,
+                callbacks: {
+                  title: items => items[0] ? items[0].label : "",
+                  label: ctx => {
+                    const total = ctx.dataset.data.reduce((s, v) => s + v, 0);
+                    return `Amount: ${fmt(ctx.parsed)} · ${((ctx.parsed / total) * 100).toFixed(1)}%`;
+                  },
+                },
+              },
+            },
+          },
+        });
+        const catTotal = topCats.reduce((s, c) => s + c.total, 0);
+        document.getElementById("donutLegend").innerHTML = topCats.map((c, i) =>
+          `<div class="donut-legend-row">
+             <span class="donut-legend-dot" style="background:${DONUT_COLORS[i]}"></span>
+             <span class="donut-legend-label">${c.category}</span>
+             <span class="donut-legend-pct">${((c.total / catTotal) * 100).toFixed(0)}%</span>
+           </div>`
+        ).join("");
+      }
+
+      // ── Top merchants ─────────────────────────────────────────────────
+      function _renderTopMerchants(ins, fmt) {
+        const _SKIP_CATS = new Set(["Income", "Transfer", "Debt Payments"]);
+        const cats = (ins.by_category || []).filter(c => !_SKIP_CATS.has(c.category));
+
+        // Normalize + re-group merchant list coming from the API so that ACH metadata
+        // variants (different ID: tokens per payment) collapse into one row even if
+        // the server-side grouping didn't catch them all.
+        const rawMerchants = (ins.top_merchants && ins.top_merchants.length
+          ? ins.top_merchants
+          : cats.slice(0, 10).map(c => ({ name: c.category, total: c.total }))
+        );
+        const merged = {};
+        for (const m of rawMerchants) {
+          const key = _normalizeMerchant(m.name).toLowerCase();
+          if (!merged[key]) merged[key] = { name: _normalizeMerchant(m.name), total: 0 };
+          merged[key].total += m.total;
+        }
+        const allMerchants = Object.values(merged)
+          .sort((a, b) => b.total - a.total)
+          .slice(0, 10);
+        const maxM  = allMerchants.reduce((mx, m) => Math.max(mx, m.total), 0) || 1;
+        const topEl = document.getElementById("insightsTopMerchants");
+        if (!allMerchants.length) {
+          topEl.innerHTML = '<p class="insights-empty">No data.</p>';
+        } else {
+          topEl.innerHTML = allMerchants.map((m, i) => {
+            const barPct = Math.max(4, Math.round((m.total / maxM) * 100));
+            return `<div class="insights-merchant-row">
+              <span class="insights-merchant-rank${i < 3 ? " top" : ""}">${i + 1}</span>
+              <span class="insights-merchant-name">${m.name}</span>
+              <div class="insights-merchant-bar-wrap"><div class="insights-merchant-bar-fill" style="width:${barPct}%"></div></div>
+              <span class="insights-merchant-amount">${fmt(m.total)}</span>
+            </div>`;
+          }).join("");
+        }
+      }
+
+      // ── Accounts ─────────────────────────────────────────────────────
+      function _timeAgo(isoStr) {
+        if (!isoStr) return "never";
+        const diff = (Date.now() - new Date(isoStr)) / 1000;
+        if (diff < 60)   return "just now";
+        if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+        if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+        return `${Math.floor(diff / 86400)}d ago`;
+      }
+
+      // ── Account card helpers ──────────────────────────────────────
+
+      // Canonical bank/domain map used for logo lookup.
+      const BANK_DOMAINS = {
+        boa:          "bankofamerica.com",
+        bankofamerica:"bankofamerica.com",
+        capitalone:   "capitalone.com",
+        capital_one:  "capitalone.com",
+        discover:     "discover.com",
+        chase:        "chase.com",
+        wellsfargo:   "wellsfargo.com",
+        wells_fargo:  "wellsfargo.com",
+        citi:         "citi.com",
+        citibank:     "citi.com",
+        usbank:       "usbank.com",
+        ally:         "ally.com",
+        schwab:       "schwab.com",
+        fidelity:     "fidelity.com",
+        amex:         "americanexpress.com",
+        americanexpress: "americanexpress.com",
+        td:           "td.com",
+        pnc:          "pnc.com",
+        sofi:         "sofi.com",
+        icici:        "icici.bank.in",
+        icicibank:    "icici.bank.in",
+        hdfc:         "hdfcbank.com",
+        hdfcbank:     "hdfcbank.com",
+        sbi:          "onlinesbi.sbi",
+        axis:         "axisbank.com",
+        axisbank:     "axisbank.com",
+      };
+
+      const BANK_LOCAL_LOGOS = {
+        boa: "/assets/bank-logos/bank-of-america.svg",
+        bankofamerica: "/assets/bank-logos/bank-of-america.svg",
+        chase: "/assets/bank-logos/chase.svg",
+        discover: "/assets/bank-logos/discover.svg",
+        capital_one: "/assets/bank-logos/capital-one.svg",
+        capitalone: "/assets/bank-logos/capital-one.svg",
+      };
+
+      const BANK_NAME_ALIASES = {
+        "bank of america": "boa",
+        "bofa": "boa",
+        "chase": "chase",
+        "jpmorgan chase": "chase",
+        "capital one": "capital_one",
+        "discover": "discover",
+        "wells fargo": "wells_fargo",
+        "citi": "citi",
+        "citibank": "citi",
+        "american express": "amex",
+        "amex": "amex",
+        "u.s. bank": "usbank",
+        "us bank": "usbank",
+        "ally": "ally",
+        "charles schwab": "schwab",
+        "schwab": "schwab",
+        "fidelity": "fidelity",
+        "td bank": "td",
+        "pnc": "pnc",
+        "sofi": "sofi",
+        "icici": "icici",
+        "icici bank": "icici",
+        "icicibank": "icici",
+        "hdfc": "hdfc",
+        "hdfc bank": "hdfc",
+        "hdfcbank": "hdfc",
+        "sbi": "sbi",
+        "state bank of india": "sbi",
+        "axis": "axis",
+        "axis bank": "axis",
+        "axisbank": "axis",
+      };
+
+      // Fallback initials + gradient when logo unavailable
+      const BANK_FB_COLORS = {
+        boa:         { bg: "linear-gradient(135deg,#dbeafe,#bfdbfe)", fg: "#1d4ed8" },
+        capital_one: { bg: "linear-gradient(135deg,#fee2e2,#fca5a5)", fg: "#991b1b" },
+        discover:    { bg: "linear-gradient(135deg,#fef3c7,#fde68a)", fg: "#92400e" },
+        chase:       { bg: "linear-gradient(135deg,#d1fae5,#a7f3d0)", fg: "#065f46" },
+        wells_fargo: { bg: "linear-gradient(135deg,#fce7f3,#fbcfe8)", fg: "#9d174d" },
+        amex:        { bg: "linear-gradient(135deg,#e0e7ff,#c7d2fe)", fg: "#3730a3" },
+      };
+      const BANK_ABBRS = {
+        boa: "BofA", capital_one: "C1", amex: "Amex",
+        wells_fargo: "WF", discover: "DISC",
+      };
+
+      function _normalizeBankLogoName(name) {
+        return String(name || "")
+          .replace(/\s*\(sandbox\)\s*/ig, " ")
+          .replace(/\s*sandbox\s*/ig, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function _resolveBankLogoKey(name, bankKey) {
+        if (bankKey && BANK_DOMAINS[bankKey]) return bankKey;
+
+        const normalized = _normalizeBankLogoName(name).toLowerCase();
+        if (BANK_NAME_ALIASES[normalized]) return BANK_NAME_ALIASES[normalized];
+
+        for (const [alias, canonical] of Object.entries(BANK_NAME_ALIASES)) {
+          if (normalized.includes(alias)) return canonical;
+        }
+
+        const compact = normalized.replace(/[^a-z0-9]/g, "");
+        if (BANK_DOMAINS[compact]) return compact;
+        return bankKey || "";
+      }
+
+      function _bankLogoFallbackHTML(displayName, resolvedKey, fallbackStyle) {
+        const abbr = BANK_ABBRS[resolvedKey] || _normalizeBankLogoName(displayName || "?").slice(0, 4).toUpperCase();
+        return `<div class="acct-bank-logo-fb" style="${fallbackStyle}">${abbr}</div>`;
+      }
+
+      function _showBankLogoFallback(imgEl) {
+        const wrap = imgEl && imgEl.closest(".acct-bank-logo");
+        if (!wrap) return;
+        imgEl.remove();
+        const fallback = wrap.querySelector(".acct-bank-logo-fb");
+        if (fallback) fallback.style.display = "flex";
+      }
+
+      function _tryRemoteBankLogo(imgEl) {
+        const wrap = imgEl && imgEl.closest(".acct-bank-logo");
+        if (!wrap) return;
+        const domain = wrap.dataset.bankDomain;
+        if (!domain || imgEl.dataset.remoteTried === "1") {
+          _showBankLogoFallback(imgEl);
+          return;
+        }
+        imgEl.dataset.remoteTried = "1";
+        imgEl.src = `https://logo.clearbit.com/${domain}`;
+      }
+
+      function _bankLogo(name, bankKey) {
+        const resolvedKey = _resolveBankLogoKey(name, bankKey);
+        const domain = BANK_DOMAINS[resolvedKey];
+        const localLogo = BANK_LOCAL_LOGOS[resolvedKey];
+        const fc     = BANK_FB_COLORS[resolvedKey] || { bg: "linear-gradient(135deg,#f3f4f6,#e5e7eb)", fg: "#374151" };
+        const fbStyle = `background:${fc.bg};color:${fc.fg}`;
+        const normalizedName = _normalizeBankLogoName(name);
+        const fallbackHTML = _bankLogoFallbackHTML(normalizedName, resolvedKey, fbStyle);
+
+        if (localLogo || domain) {
+          const primarySrc = localLogo || `https://logo.clearbit.com/${domain}`;
+          const onErrorHandler = localLogo ? "_tryRemoteBankLogo(this)" : "_showBankLogoFallback(this)";
+          return `
+            <div class="acct-bank-logo" data-bank-name="${normalizedName}" data-bank-key="${resolvedKey}" data-bank-domain="${domain}">
+              <img
+                class="acct-bank-logo-img"
+                src="${primarySrc}"
+                alt="${normalizedName} logo"
+                loading="lazy"
+                referrerpolicy="no-referrer"
+                onload="this.closest('.acct-bank-logo')?.setAttribute('data-logo-loaded','true')"
+                onerror="${onErrorHandler}"
+              />
+              ${fallbackHTML.replace('style="', 'style="display:none;')}
+            </div>`;
+        }
+        return `<div class="acct-bank-logo" data-bank-name="${normalizedName}" data-bank-key="${resolvedKey}">
+                  ${fallbackHTML}
+                </div>`;
+      }
+
+      function _toggleOverflow(event, btn) {
+        event.stopPropagation();
+        const menu = btn.nextElementSibling;
+        const isOpen = menu.style.display === "block";
+        document.querySelectorAll(".acct-overflow-menu").forEach(m => m.style.display = "none");
+        if (!isOpen) menu.style.display = "block";
+      }
+
+      function startBalanceEdit(displayEl, accountId) {
+        const input = displayEl.nextElementSibling;
+        displayEl.style.display = "none";
+        input.style.display = "block";
+        input.focus(); input.select();
+      }
+
+      function saveBalance(input, accountId) {
+        const display = input.previousElementSibling;   // .acct-balance-display
+        const label   = input.nextElementSibling;        // .acct-card-balance-label
+        const val = input.value.trim();
+        display.style.display = "";
+        input.style.display = "none";
+        if (val) {
+          display.innerHTML = `${val}<span class="acct-balance-pencil"> ✎</span>`;
+          display.classList.remove("acct-balance-empty");
+          if (label) label.style.display = "";
+        } else {
+          display.innerHTML = `<span class="acct-balance-empty-text">Add balance</span>`;
+          display.classList.add("acct-balance-empty");
+          if (label) label.style.display = "none";
+        }
+        setAccountBalance(accountId, val);
+      }
+
+      function cancelBalanceEdit(input) {
+        input.previousElementSibling.style.display = "";
+        input.style.display = "none";
+      }
+
+      function _renderAccountCard(acct) {
+        const s          = acct.status || "connected";
+        const isReauth   = s === "reauth_required" || s === "broken" || s === "otp_required" || !!acct.needs_login;
+        const isPending  = !acct.last_synced_at || !acct.tx_count;
+        const isCreditAcct = acct.account_type === "credit";
+
+        const badgeClass = isReauth ? "status-disconnected" : (isPending || s === "refreshing") ? "status-attention" : "status-connected";
+        const statusText = isReauth ? "Disconnected" : isPending ? "Needs attention" : "Connected";
+
+        const hint     = acct.account_hint || "";
+        const synced   = acct.last_synced_at ? _timeAgo(acct.last_synced_at) : "Never";
+        const balVal   = acct.account_balance || "";
+        const invVal   = acct.investment_balance || "";
+        const balLabel = isCreditAcct ? "Balance due" : "Balance";
+        // Compute total portfolio when both account + investment balances are known
+        const portfolioHtml = (() => {
+          if (!invVal) return "";
+          const stripNum = s => parseFloat(s.replace(/[^0-9.]/g, "")) || 0;
+          const acctNum = stripNum(balVal || "0");
+          const invNum  = stripNum(invVal);
+          const total   = acctNum + invNum;
+          const isIn    = /^\d/.test(invVal);  // Indian amounts stored without $ prefix
+          const sym     = isIn ? "₹" : "$";
+          const totalFmt = sym + total.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          return `<div style="margin-top:4px;line-height:1.3;">
+            <div style="font-size:13px;font-weight:700;color:#1f5f55;">${totalFmt}</div>
+            <div style="font-size:10px;color:#64748b;margin-top:1px;">
+              A/C&nbsp;${balVal}&nbsp;·&nbsp;Invest&nbsp;${invVal}
+            </div>
+          </div>`;
+        })();
+        const txLabel  = acct.tx_count ? `${Number(acct.tx_count).toLocaleString()} transactions` : "No transactions yet";
+
+        const intervalOptions = [2, 6, 12, 24].map(h =>
+          `<option value="${h}"${acct.sync_interval_hours == h ? " selected" : ""}>${h}h</option>`
+        ).join("");
+
+        const typeClass = isCreditAcct ? "acct-credit" : "acct-checking";
+        const cardClass = ["account-card", typeClass, isReauth ? "acct-disconnected" : isPending ? "acct-pending" : ""].filter(Boolean).join(" ");
+
+        return `
+          <div class="${cardClass}" data-id="${acct.id}" onclick="loadAccountTransactions(${acct.id})">
+
+            <!-- Left: logo + name + status -->
+            <div class="acct-row-left">
+              ${_bankLogo(acct.display_name, acct.bank_key)}
+              <div class="acct-row-identity">
+                <span class="acct-name">${acct.display_name}</span>
+                ${hint ? `<span class="acct-card-hint">${hint}</span>` : ""}
+                <span class="acct-status-badge ${badgeClass}">
+                  <span class="acct-status-dot-sm"></span>${statusText}
+                </span>
+              </div>
+            </div>
+
+            <!-- Centre: tx count + synced (inline) -->
+            <div class="acct-row-center">
+              <span class="acct-tx-count">${txLabel}</span>
+              <span class="acct-row-synced">Synced ${synced}</span>
+            </div>
+
+            <!-- Right: balance (click to edit) + optional portfolio breakdown -->
+            <div class="acct-row-right" onclick="event.stopPropagation()">
+              <div class="acct-balance-display${balVal ? "" : " acct-balance-empty"}"
+                   onclick="startBalanceEdit(this,${acct.id})" title="Click to edit balance">
+                ${balVal ? `${balVal}<span class="acct-balance-pencil"> ✎</span>` : `<span class="acct-balance-empty-text">Add balance</span>`}
+              </div>
+              <input class="acct-balance-input" type="text" value="${balVal}"
+                     placeholder="$0.00" style="display:none"
+                     onblur="saveBalance(this,${acct.id})"
+                     onkeydown="if(event.key==='Enter')this.blur();if(event.key==='Escape')cancelBalanceEdit(this)" />
+              <div class="acct-card-balance-label" ${balVal ? "" : 'style="display:none"'}>${balLabel}</div>
+              ${portfolioHtml}
+            </div>
+
+            <!-- Far right: overflow menu -->
+            <div class="acct-overflow" onclick="event.stopPropagation()">
+              <button class="acct-overflow-btn" onclick="_toggleOverflow(event,this)">···</button>
+              <div class="acct-overflow-menu">
+                <button onclick="syncAccount(event,${acct.id})">↻ Sync now</button>
+                <button onclick="reloginAccount(event,${acct.id})">↩ Re-login</button>
+                ${acct.has_credentials ? `<button onclick="openSaveCredentials(event,${acct.id})"${
+                  acct.needs_login ? ' style="background:#fff4e6;color:#9a3412;font-weight:600"' : ""
+                }>${
+                  acct.needs_login ? "🔑 Re-update password" : "🔑 Update password"
+                }</button>` : ""}
+                <button onclick="recategorizeAccount(event,${acct.id})">⟳ Fix Categories</button>
+                <button class="acct-overflow-del" onclick="deleteAccount(event,${acct.id})">✕ Remove</button>
+                <div class="acct-overflow-autosync" onclick="event.stopPropagation()">
+                  <label class="toggle-switch">
+                    <input type="checkbox" ${acct.auto_sync ? "checked" : ""}
+                      onchange="setAutoSync(${acct.id},this.checked,this.closest('.acct-overflow-autosync').querySelector('select').value)">
+                    <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                  </label>
+                  <span>Auto every</span>
+                  <select class="autosync-interval"
+                    onchange="setAutoSync(${acct.id},this.closest('.acct-overflow-autosync').querySelector('input[type=checkbox]').checked,this.value)">
+                    ${intervalOptions}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+          </div>`;
+      }
+
+      async function loadAccounts() {
+        try {
+          // Always fetch from API (_apiFetch routes to Cloud Run on prod, localhost on dev)
+          let accounts = [];
+          try {
+            if (_hasAuth()) {
+              const resp = await _apiFetch("/api/accounts");
+              if (resp.ok) {
+                accounts = await resp.json();
+              } else if (resp.status === 401) {
+                localStorage.removeItem(AUTH_TOKEN_KEY);
+                currentUser = null;
+                _refreshAuthChrome();
+              }
+            }
+          } catch (_) {}
+          // Merge offline (static) accounts — put them first so sandbox appears at top
+          _offlineAccounts.forEach(a => {
+            if (!accounts.find(x => x.id === a.id)) accounts.unshift(a);
+          });
+          // Cache so syncAccount() can look up bank_key / has_credentials without refetching
+          _lastAccountsCache = accounts;
+
+          const sidebarList = document.getElementById("sidebarAccountsList");
+          const noAccts = document.getElementById("sidebarNoAccounts");
+          // Remove old items
+          sidebarList.querySelectorAll(".sidebar-account-item").forEach(el => el.remove());
+          if (!accounts.length) {
+            if (noAccts) noAccts.style.display = "";
+            _dismissReauthBanner();
+            return;
+          }
+
+          // Accounts exist — hide "no accounts" text, show sidebar list
+          if (noAccts) noAccts.style.display = "none";
+          accounts.forEach(acct => {
+            sidebarList.insertAdjacentHTML("beforeend", _renderSidebarAccount(acct));
+          });
+
+          // Show banner if any accounts need re-authentication
+          const reauthAccounts = accounts.filter(_acctNeedsReauth);
+          if (reauthAccounts.length) {
+            _showReauthBanner(reauthAccounts);
+          } else {
+            _dismissReauthBanner();
+          }
+
+          // Re-apply active highlight if an account is already selected.
+          // Do NOT auto-load the first account — user picks explicitly.
+          if (currentAccountId) {
+            const item = sidebarList.querySelector(`.sidebar-account-item[data-id="${currentAccountId}"]`);
+            if (item) item.classList.add("is-active");
+            // Already showing account view — no empty state needed
+          } else {
+            const requestedId = Number(new URLSearchParams(window.location.search).get("account") || "");
+            if (requestedId && accounts.find(a => a.id === requestedId)) {
+              loadAccountTransactions(requestedId);
+              return;
+            }
+          }
+        } catch (_) {}
+      }
+
+      function _showReauthBanner(reauthAccounts) {
+        let banner = document.getElementById("reauthBanner");
+        if (!banner) {
+          banner = document.createElement("div");
+          banner.id = "reauthBanner";
+          banner.className = "reauth-banner";
+          // Insert inside demo-main, before the first child
+          const demoMain = document.querySelector(".demo-main");
+          if (demoMain) demoMain.insertBefore(banner, demoMain.firstChild);
+        }
+        const names = reauthAccounts.map(a =>
+          (a.display_name || "").replace(/\s*\(Sandbox\)\s*/i, "").trim()
+        ).join(", ");
+        const plural = reauthAccounts.length > 1;
+        banner.innerHTML = `
+          <span class="reauth-banner-icon">⚠</span>
+          <span class="reauth-banner-text">
+            <strong>${plural ? reauthAccounts.length + " accounts need" : names + " needs"} re-login</strong>
+            — session expired. Click the account in the sidebar to re-connect.
+          </span>
+          <button class="reauth-banner-dismiss" onclick="_dismissReauthBanner()" title="Dismiss">✕</button>`;
+        banner.style.display = "flex";
+      }
+
+      function _dismissReauthBanner() {
+        const banner = document.getElementById("reauthBanner");
+        if (banner) banner.style.display = "none";
+      }
+
+      async function loadAccountTransactions(accountId) {
+        currentAccountId = accountId;
+        _isPdfMode = false;
+        // Highlight sidebar item
+        document.querySelectorAll(".sidebar-account-item").forEach(c => c.classList.remove("is-active"));
+        const sidebarItem = document.querySelector(`.sidebar-account-item[data-id="${accountId}"]`);
+        if (sidebarItem) sidebarItem.classList.add("is-active");
+        // Reset period filter + search when switching accounts
+        document.querySelectorAll("#periodFilterRow .period-btn").forEach((b) => b.classList.remove("is-active"));
+        const allBtn = document.querySelector('#periodFilterRow .period-btn[data-period="all"]');
+        if (allBtn) allBtn.classList.add("is-active");
+        _txnSearchQuery = "";
+        const _si = document.getElementById("txnSearchInput");
+        const _sc = document.getElementById("txnSearchClear");
+        if (_si) _si.value = "";
+        if (_sc) _sc.style.display = "none";
+
+        // Offline (static) account — no API calls needed
+        if (_offlineAccounts.has(accountId)) {
+          const acctMeta = _offlineAccounts.get(accountId);
+          const txns = _offlineTxns.get(accountId) || [];
+          const label = (acctMeta.display_name || "").replace(/\s*\(Sandbox\)\s*/i, "").replace(/\s*Sandbox\s*/i, "").trim();
+          document.getElementById("periodFilterRow").style.display = "";
+          _renderLiveTransactions(txns, label, acctMeta);
+          return;
+        }
+
+        // Show account view immediately with loading skeleton so the switch feels instant
+        showAccountView();
+        const _cachedMeta = _liveAcctMetaCache[accountId];
+        if (_cachedMeta) {
+          const cachedLabel = _cachedMeta.display_name.replace(/\s*\(Sandbox\)\s*/i, "").replace(/\s*Sandbox\s*/i, "").trim();
+          document.getElementById("resultsHeading").textContent = cachedLabel;
+          document.getElementById("resultsInfo").textContent = "";
+        }
+        document.getElementById("resultsSummary").innerHTML = `<div class="skeleton-summary-cards"><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div></div>`;
+        document.getElementById("resultsBody").innerHTML = `<tr><td colspan="3" style="padding:32px;text-align:center;color:#9ca3af;font-size:13px">Loading…</td></tr>`;
+
+        // Fetch transactions and account list in parallel for speed
+        const [acctResp, accountsResp] = await Promise.all([
+          _apiFetch(`/api/accounts/${accountId}/transactions?period=all`),
+          _apiFetch("/api/accounts"),
+        ]);
+        const txns = await acctResp.json();
+        const accounts = await accountsResp.json();
+        const acctMeta = accounts.find(a => a.id === accountId) || null;
+        const overrideBalance = _accountBalanceOverrides.get(accountId);
+        if (acctMeta && overrideBalance) acctMeta.account_balance = overrideBalance;
+        // Cache all transactions for client-side period filtering
+        _liveTxnsCache[accountId]    = txns;
+        _liveAcctMetaCache[accountId] = acctMeta;
+        const label = acctMeta ? acctMeta.display_name.replace(/\s*\(Sandbox\)\s*/i, "").replace(/\s*Sandbox\s*/i, "").trim() : "Account";
+        _renderLiveTransactions(txns, label, acctMeta);
+      }
+
+      function _renderLiveTransactions(txns, label, acctMeta, keepCurrentTab = false) {
+        // Map DB format → the format renderTransactions expects
+        const mapped = txns.map(t => ({
+          id: t.id,
+          date: t.date || "",
+          merchant_clean: t.merchant_clean || t.description || "",
+          raw_description: t.description || "",
+          amount: t.amount || "",
+          txn_type: (t.amount_type || t.type) === "credit" ? "credit" : "withdrawals",
+          category: t.category || "Uncategorized",
+        }));
+
+        // Data-driven currency: backend-detected acctMeta.currency, else bank-key
+        // guess, else "$". Flows into the payload as _currSym for the Overview.
+        const _cur = _acctCurrency(acctMeta);
+        const currSym = _cur.sym;
+        const locale = _cur.locale;
+        const fmt = v => currSym + Math.abs(v).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const acctBalance = acctMeta ? (acctMeta.account_balance || "") : "";
+        const currentBalNum = acctBalance ? parseAmount(acctBalance) : null;
+        // Detect credit cards: explicit account_type field OR known credit card bank keys.
+        // The bank_key fallback self-heals if an account was stored before account_type support.
+        const _CREDIT_BANK_KEYS = new Set(["capital_one", "chase_credit", "amex", "discover", "citi", "barclays"]);
+        const isCreditCard = acctMeta && (
+          acctMeta.account_type === "credit" ||
+          _CREDIT_BANK_KEYS.has(acctMeta.bank_key || "")
+        );
+
+        // Compute income / expenses for the summary cards.
+        // Credit cards: use amount sign (positive = charge, negative = payment/refund)
+        // Checking: use amount_type field
+        let totalIncome = 0, totalExpenses = 0;
+        txns.forEach(t => {
+          const n = parseAmount(t.amount);
+          if (n === null) return;
+          // For both credit cards and checking: use amount_type field.
+          // Credit card:  amount_type="credit" → payment/refund (money in)
+          //               amount_type="debit"  → charge (money out)
+          // Checking:     amount_type="credit" → income/deposit
+          //               amount_type="debit"  → expense/withdrawal
+          const atype = (t.amount_type || t.type || "").toLowerCase();
+          const isCredit = atype === "credit" || (atype === "" && n > 0);
+          if (isCredit) totalIncome += Math.abs(n);
+          else totalExpenses += Math.abs(n);
+        });
+        const netChange = totalIncome - totalExpenses;
+
+        // Build summary cards.
+        // Credit cards: Balance Due / Money Out (charges) / Money In (payments+refunds)
+        // Checking: Starting Balance / Money In / Money Out / Ending Balance
+        // For credit cards, balance due = net owed = charges - payments
+        const computedBalance = totalExpenses - totalIncome;
+        let summaryCards;
+        if (isCreditCard) {
+          summaryCards = [
+            { label: "Balance Due",  amount: fmt(computedBalance),    color: "negative" },
+            { label: "Money Out",    amount: "-" + fmt(totalExpenses), color: "negative" },
+            { label: "Money In",     amount: "+" + fmt(totalIncome),   color: totalIncome > 0 ? "positive" : "" },
+          ];
+        } else if (currentBalNum !== null) {
+          // Checking/savings with known balance: show starting → ending
+          const startingBal = currentBalNum - netChange;
+          summaryCards = [
+            { label: "Starting Balance", amount: fmt(startingBal),      color: "" },
+            { label: "Money In",         amount: "+" + fmt(totalIncome), color: "positive" },
+            { label: "Money Out",        amount: "-" + fmt(totalExpenses), color: "negative" },
+            { label: "Ending Balance",   amount: fmt(currentBalNum),    color: currentBalNum >= 0 ? "positive" : "negative" },
+          ];
+        } else {
+          // Checking/savings but the account balance wasn't detected this sync.
+          // Keep the full 4-card layout — Money In/Out are exact from the
+          // transactions — and flag the two balance cards as errored instead of
+          // silently collapsing to a 3-card "Net Change" view. Starting Balance
+          // is derived from the ending balance, so both are unknown together.
+          const balErr = "Couldn't read the account balance from this sync. Click to enter it manually.";
+          summaryCards = [
+            { label: "Starting Balance", amount: "—", color: "", error: balErr, setBalance: true },
+            { label: "Money In",         amount: "+" + fmt(totalIncome),   color: "positive" },
+            { label: "Money Out",        amount: "-" + fmt(totalExpenses),  color: "negative" },
+            { label: "Ending Balance",   amount: "—", color: "", error: balErr, setBalance: true },
+          ];
+        }
+
+        const payload = {
+          transactions: mapped,
+          summary_cards: summaryCards,
+          _creditBalanceNum: isCreditCard ? computedBalance : null,
+          _isCreditCard: isCreditCard,
+          _currSym: currSym,
+        };
+
+        lastPayload = payload;
+        activeCategory = "All";
+        activeDirectionFilter = null;
+        document.getElementById("accountColHeader").style.display = "none";
+        renderSummary(payload);
+        renderTransactions(payload, "All");
+        // Show account view, hide empty state
+        showAccountView();
+        // Update header
+        const cleanLabel = label.replace(/\s*\((Sandbox|Demo)\)\s*/i, "").replace(/\s*(Sandbox|Demo)\s*/i, "").trim();
+        document.getElementById("resultsHeading").textContent = cleanLabel;
+        document.getElementById("resultsInfo").textContent = `${txns.length} transactions`;
+        // Sandbox badge
+        const sandboxBadge = document.getElementById("mainSandboxBadge");
+        const isSandbox = (acctMeta && /(sandbox|demo)/i.test(acctMeta.display_name || "")) ||
+                          /(sandbox|demo)/i.test(label || "");
+        if (sandboxBadge) sandboxBadge.style.display = isSandbox ? "" : "none";
+        // Restore insights tab visibility (hidden for PDF mode)
+        const insTab = document.getElementById("mainTabInsights");
+        if (insTab) insTab.style.display = "";
+        // Always switch to Overview when loading a (potentially different) account.
+        // This clears any stale Insights or Transactions content from the previous account.
+        // keepCurrentTab=true when called from filterByPeriod — stay on transactions tab.
+        if (!keepCurrentTab) switchMainTab("overview");
+        // Ensure period filter row is visible on transactions tab
+        const periodRow = document.getElementById("periodFilterRow");
+        if (periodRow && activeMainTab === "transactions") periodRow.style.display = "";
+      }
+
+      async function setAccountBalance(accountId, balanceStr) {
+        try {
+          _accountBalanceOverrides.set(accountId, balanceStr);
+          await _apiFetch(`/api/accounts/${accountId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ account_balance: balanceStr }),
+          });
+          // If this account is currently displayed, refresh the summary
+          if (currentAccountId === accountId && lastPayload) {
+            await loadAccountTransactions(accountId);
+          }
+        } catch (_) {}
+      }
+
+      async function setAutoSync(accountId, enabled, intervalHours) {
+        try {
+          await _apiFetch(`/api/accounts/${accountId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              auto_sync: enabled ? 1 : 0,
+              sync_interval_hours: parseInt(intervalHours, 10),
+            }),
+          });
+        } catch (_) {}
+      }
+
+      async function syncAccount(event, accountId) {
+        event.stopPropagation();
+        const btn = event.currentTarget;
+        btn.disabled = true;
+        btn.textContent = "…";
+        const status = document.getElementById("connectBankStatus");
+        status.style.display = "block";
+        status.textContent = "Syncing in background…";
+
+        // Resolve the account to decide which sync path to use. Order matters:
+        //   1. Prefer extension when installed — uses your live Chrome session
+        //      cookies, which banks accept without bot-detection friction.
+        //   2. Fall back to server-side Playwright when no extension is
+        //      installed AND credentials are saved (silent headless re-login).
+        //   3. Otherwise tell the user to either install the extension or save
+        //      credentials.
+        const acct = (_lastAccountsCache || []).find(a => a.id === accountId);
+        // Use the multi-signal detector (DOM attribute + custom event + window prop).
+        // The window.__FIFO_EXTENSION check alone was always false because
+        // bridge.js runs in an isolated world and can't set page-side window props.
+        const extensionInstalled = typeof _scExtensionInstalled === "function" && _scExtensionInstalled();
+        const useExtension = extensionInstalled && acct && acct.last_url;
+
+        try {
+          if (useExtension) {
+            const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+            const apiBase = isLocal ? location.origin : (typeof CLOUD_API_BASE !== "undefined" ? CLOUD_API_BASE : location.origin);
+            await _syncViaExtension(acct.bank_key, apiBase, status);
+            await loadAccounts();
+            await loadAccountTransactions(accountId);
+            return;
+          }
+
+          const resp = await _apiFetch(`/api/accounts/${accountId}/sync`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          });
+          const data = await resp.json();
+          if (resp.status === 422) {
+            status.textContent = data.error || "Session expired — please click ↩ Re-login or save your password.";
+            const reloginBtn = btn.parentElement?.querySelector("button:last-child");
+            if (reloginBtn) {
+              reloginBtn.style.outline = "2px solid #f97316";
+              setTimeout(() => { reloginBtn.style.outline = ""; }, 3000);
+            }
+            // No saved password → offer to save it so the NEXT sync can sign in
+            // automatically (auto-login). We just save; the user re-clicks Sync.
+            if (acct && !acct.has_credentials) {
+              openSaveCredentials(null, accountId,
+                "Couldn't sign in — save your bank password so FIFO can sync automatically next time, then click Sync now again.");
+            }
+            return;
+          }
+          if (!resp.ok) throw new Error(data.error || "Sync failed");
+          status.textContent = `Synced — ${data.count} transaction${data.count !== 1 ? "s" : ""} fetched`;
+          await loadAccounts();
+          await loadAccountTransactions(accountId);
+        } catch (err) {
+          status.textContent = `Error: ${err.message}`;
+          // If the sync failed because the session is dead / re-login needed and
+          // there's no saved password yet, prompt to save it for future syncs.
+          if (acct && !acct.has_credentials && _isReloginFailure(err.message)) {
+            openSaveCredentials(null, accountId,
+              "Couldn't sign in — save your bank password so FIFO can sync automatically next time, then click Sync now again.");
+          }
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "↻";
+        }
+      }
+
+      // Cache of latest accounts list so syncAccount can resolve bank_key/has_credentials
+      // without re-fetching every click.
+      let _lastAccountsCache = null;
+
+      // ── Save credentials modal ────────────────────────────────────────
+      function openSaveCredentials(event, accountId, promptMsg) {
+        if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+        const acct = (_lastAccountsCache || []).find(a => a.id === accountId);
+        if (!acct) return;
+        document.getElementById("saveCredsAccountId").value = accountId;
+        document.getElementById("saveCredsBankLabel").textContent = acct.display_name || acct.bank_key;
+        document.getElementById("saveCredsUsername").value = "";
+        document.getElementById("saveCredsPassword").value = "";
+        const statusEl = document.getElementById("saveCredsStatus");
+        if (promptMsg) {
+          // Contextual hint, e.g. when we prompt right after a sync failed for
+          // lack of a saved password. Shown in amber, not as an error.
+          statusEl.style.display = "block";
+          statusEl.style.color = "#9a3412";
+          statusEl.textContent = promptMsg;
+        } else {
+          statusEl.style.display = "none";
+          statusEl.textContent = "";
+        }
+        document.getElementById("saveCredsOverlay").style.display = "flex";
+        setTimeout(() => document.getElementById("saveCredsUsername").focus(), 50);
+      }
+
+      // Does this sync-failure message indicate a dead session / re-login /
+      // missing-password situation (as opposed to a transient/technical error)?
+      // Used to decide whether to offer "save your password for next time".
+      function _isReloginFailure(msg) {
+        const m = (msg || "").toLowerCase();
+        return m.includes("re-login") || m.includes("relogin") ||
+               m.includes("session expired") || m.includes("verification code") ||
+               m.includes("save your password") || m.includes("log in") ||
+               m.includes("sign in") || m.includes("signin");
+      }
+      function closeSaveCredentials(event) {
+        if (event && event.target !== document.getElementById("saveCredsOverlay")) return;
+        document.getElementById("saveCredsOverlay").style.display = "none";
+      }
+      async function submitSaveCredentials(event) {
+        event.preventDefault();
+        const accountId = document.getElementById("saveCredsAccountId").value;
+        const username  = document.getElementById("saveCredsUsername").value.trim();
+        const password  = document.getElementById("saveCredsPassword").value;
+        const statusEl  = document.getElementById("saveCredsStatus");
+        statusEl.style.display = "block";
+        statusEl.style.color = "#555";
+        statusEl.textContent = "Saving…";
+        try {
+          const resp = await _apiFetch(`/api/accounts/${accountId}/save-credentials`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || "Save failed");
+          statusEl.style.color = "#166534";
+          statusEl.textContent = data.saved_to === "keychain"
+            ? "✓ Saved to your macOS Keychain."
+            : "✓ Saved (encrypted).";
+          await loadAccounts();
+          setTimeout(closeSaveCredentials, 1200);
+        } catch (err) {
+          statusEl.style.color = "#991b1b";
+          statusEl.textContent = "Error: " + err.message;
+        }
+      }
+
+      // Trigger the extension's per-bank sync via postMessage. Waits for the
+      // FIFO_SYNC_STATUS "done"/"error" reply from the extension bridge.
+      function _syncViaExtension(bankKey, apiBase, statusEl) {
+        return new Promise((resolve, reject) => {
+          const handler = (event) => {
+            if (event.source !== window) return;
+            const msg = event.data;
+            if (!msg || msg.type !== "FIFO_SYNC_STATUS") return;
+            const labels = {
+              logging_in: "🔐 Authenticating in a hidden window…",
+              scraping:   "📋 Reading your transactions…",
+              saving:     "💾 Saving to your account…",
+            };
+            if (labels[msg.status]) { statusEl.textContent = labels[msg.status]; return; }
+            if (msg.status === "done") {
+              window.removeEventListener("message", handler);
+              const newCount = msg.data?.count ?? 0;
+              const received = msg.data?.received ?? 0;
+              if (newCount === 0 && received > 0) {
+                // We scraped data but every row was already in the DB.
+                statusEl.textContent = `✓ Already up to date (${received} transactions checked, 0 new).`;
+              } else if (newCount === 0) {
+                statusEl.textContent = `✓ Already up to date.`;
+              } else {
+                statusEl.textContent = `✅ Synced — ${newCount} new transaction${newCount !== 1 ? "s" : ""}.`;
+              }
+              resolve();
+            } else if (msg.status === "error") {
+              window.removeEventListener("message", handler);
+              reject(new Error(msg.message || "Sync failed"));
+            }
+          };
+          window.addEventListener("message", handler);
+          window.postMessage({ type: "FIFO_SMART_CONNECT", bank: bankKey, apiBase }, "*");
+          // Safety timeout: if no response in 5 min, give up
+          setTimeout(() => {
+            window.removeEventListener("message", handler);
+            reject(new Error("Sync timed out"));
+          }, 5 * 60 * 1000);
+        });
+      }
+
+      async function reloginAccount(event, accountId) {
+        event.stopPropagation();
+        const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+
+        if (isLocal) {
+          // Local: server opens the browser directly, no extension needed
+          const item = event.currentTarget;
+          const meta = item.querySelector(".sidebar-acct-meta");
+          if (meta) meta.textContent = "Opening browser…";
+          try {
+            const resp = await _apiFetch(`/api/accounts/${accountId}/relogin`, { method: "POST" });
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || "Re-login failed");
+            await loadAccounts();
+            await loadAccountTransactions(accountId);
+          } catch (err) {
+            if (meta) meta.textContent = "Tap to re-connect →";
+            alert("Re-login failed: " + err.message);
+          }
+        } else {
+          // Prod: use extension flow
+          const allAccounts = await _apiFetch("/api/accounts").then(r => r.json()).catch(() => []);
+          const acct = (Array.isArray(allAccounts) ? allAccounts : allAccounts.accounts || [])
+                         .find(a => a.id === accountId);
+          openSmartConnect(acct?.bank_key || "boa");
+        }
+      }
+
+      async function recategorizeAccount(event, accountId) {
+        event.stopPropagation();
+        const btn = event.currentTarget;
+        btn.disabled = true;
+        btn.textContent = "Categorizing…";
+        const status = document.getElementById("connectBankStatus");
+        status.style.display = "block";
+        status.textContent = "Re-running categorizer on all transactions — this may take a moment…";
+        try {
+          const resp = await _apiFetch(`/api/accounts/${accountId}/recategorize`, { method: "POST" });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || "Recategorize failed");
+          status.textContent = `Done — ${data.updated} transaction${data.updated !== 1 ? "s" : ""} categorized`;
+          await loadAccountTransactions(accountId);
+        } catch (err) {
+          status.textContent = `Error: ${err.message}`;
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "⟳ Fix Categories";
+        }
+      }
+
+      async function deleteAccount(event, accountId) {
+        event.stopPropagation();
+        if (!confirm("Remove this account and all its stored transactions?")) return;
+        if (_offlineAccounts.has(accountId)) {
+          _offlineAccounts.delete(accountId);
+          _offlineTxns.delete(accountId);
+        } else {
+          await _apiFetch(`/api/accounts/${accountId}`, { method: "DELETE" });
+        }
+        if (currentAccountId === accountId) {
+          currentAccountId = null;
+          showEmptyState();
+        }
+        document.getElementById("connectBankStatus").style.display = "none";
+        await loadAccounts();
+      }
+
+      // ── Load Chase sandbox — fully static, no backend needed ────────────
+      async function connectViaPlaIdSandbox() {
+        document.getElementById("bankPickerOverlay").style.display = "none";
+        const status = document.getElementById("connectBankStatus");
+        status.style.display = "block";
+        status.textContent = "Loading demo bank data…";
+
+        // Register static account + transactions in the offline registry
+        const acct = {
+          id:              CHASE_SANDBOX_ID,
+          display_name:    "Chase (Demo)",
+          account_type:    "checking",
+          account_balance: SANDBOX_DEFAULT_BALANCE,
+          account_hint:    "••4567",
+          last_synced_at:  new Date().toISOString(),
+          source:          "plaid",
+          tx_count:        CHASE_SANDBOX_TXNS.length,
+          status:          "connected",
+        };
+        _offlineAccounts.set(CHASE_SANDBOX_ID, acct);
+        _offlineTxns.set(CHASE_SANDBOX_ID, CHASE_SANDBOX_TXNS);
+        _accountBalanceOverrides.set(CHASE_SANDBOX_ID, SANDBOX_DEFAULT_BALANCE);
+
+        status.textContent = `Chase connected — ${CHASE_SANDBOX_TXNS.length} transactions loaded.`;
+        await loadAccounts();
+        _renderLiveTransactions(CHASE_SANDBOX_TXNS, "Chase", acct);
+        currentAccountId = CHASE_SANDBOX_ID;
+        document.getElementById("periodFilterRow").style.display = "";
+      }
+
+      // ── Credential modal ──────────────────────────────────────────────
+      const BANK_META = {
+        capital_one: { name: "Capital One", icon: "💳" },
+        boa:         { name: "Bank of America", icon: "🏦" },
+        icici:       { name: "ICICI Bank", icon: "🏦" },
+        discover:    { name: "Discover", icon: "💳" },
+      };
+
+      let _credentialModalBank = null;
+
+      function openCredentialModal(bankKey) {
+        _credentialModalBank = bankKey;
+        const meta = BANK_META[bankKey] || { name: bankKey, icon: "🏦" };
+        document.getElementById("credentialModalTitle").textContent = `Connect ${meta.name}`;
+        document.getElementById("credentialBankIcon").textContent = meta.icon;
+        document.getElementById("credentialUsername").value = "";
+        document.getElementById("credentialPassword").value = "";
+        document.getElementById("credentialSubmitBtn").disabled = false;
+        document.getElementById("credentialSubmitLabel").textContent = "Connect & Sync";
+        // Hide bank picker, show credential modal
+        document.getElementById("bankPickerOverlay").style.display = "none";
+        document.getElementById("credentialModalOverlay").style.display = "flex";
+        setTimeout(() => document.getElementById("credentialUsername").focus(), 80);
+      }
+
+      function closeCredentialModal(event) {
+        if (event && event.target !== document.getElementById("credentialModalOverlay")) return;
+        document.getElementById("credentialModalOverlay").style.display = "none";
+        _credentialModalBank = null;
+      }
+
+      function toggleCredentialPasswordVis() {
+        const inp = document.getElementById("credentialPassword");
+        const icon = document.getElementById("credentialEyeIcon");
+        if (inp.type === "password") {
+          inp.type = "text";
+          icon.innerHTML = `<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>`;
+        } else {
+          inp.type = "password";
+          icon.innerHTML = `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>`;
+        }
+      }
+
+      async function submitCredentialForm(event) {
+        event.preventDefault();
+        const bankKey  = _credentialModalBank;
+        const username = document.getElementById("credentialUsername").value.trim();
+        const password = document.getElementById("credentialPassword").value;
+        if (!bankKey || !username || !password) return;
+
+        // Close modal, hand off to connectBank with credentials
+        document.getElementById("credentialModalOverlay").style.display = "none";
+        await connectBank(bankKey, username, password);
+      }
+
+      // ── Connect bank (add new account, store in DB) ───────────────────
+      async function connectBank(bankKey, username, password) {
+        // On production (Cloudflare Pages / Cloud Run) the Playwright browser
+        // scraper is unavailable — route to the bookmarklet flow instead.
+        if (!_isLocalhost()) {
+          openBookmarkletSetup(bankKey);
+          return;
+        }
+
+        document.getElementById("bankPickerOverlay").style.display = "none";
+
+        const status = document.getElementById("connectBankStatus");
+        status.style.display = "block";
+        if (username && password) {
+          status.textContent = "Connecting — FIFO is logging in headlessly and fetching your transactions…";
+        } else {
+          status.textContent = "Opening browser — log in and complete MFA, then navigate to your Transactions page. Transactions will appear as soon as the browser closes.";
+        }
+
+        try {
+          const payload = { bank: bankKey, period: "1y" };
+          if (username) payload.username = username;
+          if (password) payload.password = password;
+          const resp = await _apiFetch("/api/accounts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.detail || data.error || "Connection failed");
+
+          status.textContent = `${data.account.display_name} connected — ${data.count} transaction${data.count !== 1 ? "s" : ""} stored.`;
+          await loadAccounts();
+          _renderLiveTransactions(data.transactions, data.account.display_name, data.account);
+          currentAccountId = data.account.id;
+          document.getElementById("periodFilterRow").style.display = "";
+        } catch (err) {
+          status.textContent = `Error: ${err.message}`;
+        }
+      }
+
+      // ── Sidebar account items ─────────────────────────────────────────
+      const ACCT_TYPE_COLORS = { checking: "#22a35a", savings: "#0d9488", credit: "#6366f1" };
+
+      function _acctNeedsReauth(acct) {
+        const s = acct.status || "";
+        return s === "reauth_required" || s === "broken" || s === "otp_required" || !!acct.needs_login;
+      }
+
+      function _renderSidebarAccount(acct) {
+        const needsAuth  = _acctNeedsReauth(acct);
+        const dotColor   = needsAuth
+          ? "#ef4444"                                          // red  — session expired / needs re-login
+          : acct.last_synced_at
+            ? "#22c55e"                                        // green — connected & synced
+            : "#9ca3af";                                       // gray  — added but never synced yet
+        const hint       = acct.account_hint ? ` · ${acct.account_hint}` : "";
+        const typeStr    = acct.account_type
+          ? acct.account_type.charAt(0).toUpperCase() + acct.account_type.slice(1) + " account"
+          : "Account";
+        const cleanName  = (acct.display_name || "").replace(/\s*\(Demo\)\s*/i, "").replace(/\s*\(Sandbox\)\s*/i, "").replace(/\s*Sandbox\s*/i, "").trim();
+        const isSandbox  = (acct.display_name || "").toLowerCase().includes("sandbox") || (acct.display_name || "").toLowerCase().includes("demo");
+        const isActive   = currentAccountId === acct.id;
+        const statusBadge = needsAuth
+          ? `<span class="sidebar-reauth-badge" title="Session expired — click to re-login">!</span>`
+          : (isSandbox ? '<span class="sidebar-sandbox-badge">demo</span>' : "");
+        const isSandboxAcct = isSandbox;
+        return `
+          <div class="sidebar-account-item${isActive ? " is-active" : ""}${needsAuth ? " needs-reauth" : ""}" data-id="${acct.id}"
+               onclick="loadAccountTransactions(${acct.id})">
+            <span class="sidebar-acct-dot${needsAuth ? " dot-pulse" : ""}" style="background:${dotColor}"></span>
+            <div class="sidebar-acct-info">
+              <span class="sidebar-acct-name">${cleanName}</span>
+              <span class="sidebar-acct-meta">${needsAuth ? "Re-login needed — old data still visible" : typeStr + hint}</span>
+            </div>
+            ${statusBadge}
+            <div class="sidebar-acct-overflow" onclick="event.stopPropagation()">
+              <button class="sidebar-overflow-btn" onclick="_toggleOverflow(event,this)" title="Account options">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="3" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="8" cy="13" r="1.4"/></svg>
+              </button>
+              <div class="acct-overflow-menu sidebar-overflow-menu">
+                ${!isSandboxAcct ? `<button onclick="syncAccount(event,${acct.id})">↻ Sync now</button>` : ""}
+                ${!isSandboxAcct ? `<button onclick="reloginAccount(event,${acct.id})">↩ Re-login</button>` : ""}
+                ${(!isSandboxAcct && acct.has_credentials) ? `<button onclick="openSaveCredentials(event,${acct.id})"${
+                  acct.needs_login ? ' style="background:#fff4e6;color:#9a3412;font-weight:600"' : ""
+                }>${
+                  acct.needs_login ? "🔑 Re-update password" : "🔑 Update password"
+                }</button>` : ""}
+                <button class="acct-overflow-del" onclick="deleteAccount(event,${acct.id})">✕ Remove</button>
+              </div>
+            </div>
+          </div>`;
+      }
+
+      // ── Overview tab content ──────────────────────────────────────────
+      function _categoryIcon(cat) {
+        const icons = {
+          "Food & Drink": "🍔", Groceries: "🛒", Dining: "🍽️",
+          Shopping: "🛍️", Housing: "🏠", Transportation: "🚗",
+          "Auto & Transport": "🚗", Entertainment: "🎬",
+          Healthcare: "💊", Travel: "✈️", Income: "💰",
+          Transfer: "↔️", Utilities: "💡",
+        };
+        return icons[cat] || "💳";
+      }
+
+      // ── Merchant letter avatar ─────────────────────────────────────────
+      // Consistent color seeded from the merchant name, first 2 letters shown
+      const _AVATAR_COLORS = [
+        ["#e0e7ff","#4338ca"], ["#fce7f3","#be185d"], ["#d1fae5","#065f46"],
+        ["#fef3c7","#92400e"], ["#fee2e2","#991b1b"], ["#e0f2fe","#0369a1"],
+        ["#f3e8ff","#6b21a8"], ["#ffedd5","#9a3412"], ["#ecfdf5","#047857"],
+        ["#fdf2f8","#9d174d"],
+      ];
+      function _merchantAvatar(name, size = 32) {
+        const str = (name || "?").trim();
+        // Pick 2 initials: first letter of each word (max 2 words), else first 2 chars
+        const words = str.split(/\s+/).filter(Boolean);
+        const initials = words.length >= 2
+          ? (words[0][0] + words[1][0]).toUpperCase()
+          : str.slice(0, 2).toUpperCase();
+        // Seed color from character codes
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) & 0xffffffff;
+        const [bg, fg] = _AVATAR_COLORS[Math.abs(hash) % _AVATAR_COLORS.length];
+        const fs = size <= 28 ? 10 : 12;
+        return `<span class="merch-avatar" style="width:${size}px;height:${size}px;background:${bg};color:${fg};font-size:${fs}px">${initials}</span>`;
+      }
+
+      // Turn a stored date into a "YYYY-MM" bucket. Handles clean ISO dates
+      // (2025-12-29) AND messy bank blocks with no year, e.g. ICICI's
+      // "Dec\n\n29" / "14 Jun" — month + day only. For the year-less case we
+      // infer the year from a "last 1 year" window: a month later than the
+      // current month belongs to last year (Dec seen in June → previous year).
+      function _monthKeyFromDate(raw) {
+        raw = (raw || "").trim();
+        const iso = raw.match(/^(\d{4})-(\d{2})/);
+        if (iso) return raw.slice(0, 7);
+        const MON = { jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11 };
+        let mon = null;
+        for (const tok of raw.split(/[\s,]+/)) {
+          const k = tok.trim().toLowerCase().slice(0, 3);
+          if (k in MON) { mon = MON[k]; break; }
+        }
+        if (mon === null) return "";
+        const now = new Date();
+        let y = now.getFullYear();
+        if (mon > now.getMonth()) y -= 1;
+        return `${y}-${String(mon + 1).padStart(2, "0")}`;
+      }
+
+      function _computeMonthlyFromPayload(payload) {
+        const txns = payload.transactions || [];
+        const isCreditCard = !!payload._isCreditCard;
+        const monthMap = {};
+        txns.forEach(t => {
+          const month = _monthKeyFromDate(t.date);
+          if (!month || !/^\d{4}-\d{2}$/.test(month)) return;
+          if (!monthMap[month]) monthMap[month] = { income: 0, expenses: 0, charges: 0, payments: 0 };
+          const n = parseAmount(t.amount);
+          if (n === null) return;
+          if (isCreditCard) {
+            if (n < 0) { monthMap[month].payments += Math.abs(n); monthMap[month].income += Math.abs(n); }
+            else       { monthMap[month].charges  += n;           monthMap[month].expenses += n; }
+          } else {
+            const atype = (t.txn_type || t.amount_type || "").toLowerCase();
+            const isCredit = atype === "credit";
+            if (isCredit) monthMap[month].income += Math.abs(n);
+            else          monthMap[month].expenses += Math.abs(n);
+          }
+        });
+        return Object.keys(monthMap).sort().map(m => ({ month: m, ...monthMap[m] }));
+      }
+
+      // ── Category palette (donut) ─────────────────────────────────────
+      const CAT_COLORS = [
+        "#6366f1","#f59e0b","#10b981","#f87171","#3b82f6","#ec4899",
+        "#14b8a6","#8b5cf6","#f97316","#84cc16","#06b6d4","#a78bfa",
+      ];
+
+      function renderOverviewContent(payload) {
+        const txns = payload.transactions || [];
+        const isCreditCard = !!payload._isCreditCard;
+        // Currency for this account (₹ for Indian banks, else $). Used by the
+        // recent-transactions list and the chart axis/tooltip so the Overview
+        // matches the summary cards instead of hardcoding "$".
+        const _rsym = payload._currSym || "$";
+        const _rloc = _rsym === "₹" ? "en-IN" : "en-US";
+
+        // ── Update panel labels ─────────────────────────────────────────
+        const chartLabelEl  = document.getElementById("overviewChartLabel");
+        const recentLabelEl = document.getElementById("overviewRecentLabel");
+        if (chartLabelEl)  chartLabelEl.textContent  = isCreditCard ? "MONTHLY ACTIVITY" : "MONTHLY CASH FLOW";
+        if (recentLabelEl) recentLabelEl.textContent = isCreditCard ? "RECENT CHARGES"    : "RECENT TRANSACTIONS";
+
+        // ── LEFT PANEL ──────────────────────────────────────────────────
+        if (_overviewChartInstance) { _overviewChartInstance.destroy(); _overviewChartInstance = null; }
+        const wrapEl = document.getElementById("overviewChartWrap");
+
+        {
+          // Bar chart: Charges vs Payments (credit card) or Income vs Expenses (checking)
+          const months = _computeMonthlyFromPayload(payload).slice(-6);
+          if (wrapEl && months.length > 0) {
+            wrapEl.innerHTML = '<canvas id="overviewMonthlyChart"></canvas>';
+            const canvas = document.getElementById("overviewMonthlyChart");
+            const labels = months.map(m => {
+              const [y, mo] = m.month.split("-");
+              return new Date(+y, +mo - 1, 1).toLocaleString("default", { month: "short", year: "2-digit" });
+            });
+            const datasets = isCreditCard
+              ? [
+                  { label: "Charges",  data: months.map(m => m.charges),  backgroundColor: "#f87171", borderRadius: 4, barPercentage: 0.6 },
+                  { label: "Payments", data: months.map(m => m.payments), backgroundColor: "#1f5f55", borderRadius: 4, barPercentage: 0.6 },
+                ]
+              : [
+                  { label: "Income",   data: months.map(m => m.income),   backgroundColor: "#1f5f55", borderRadius: 4, barPercentage: 0.6 },
+                  { label: "Expenses", data: months.map(m => m.expenses), backgroundColor: "#f87171", borderRadius: 4, barPercentage: 0.6 },
+                ];
+            _overviewChartInstance = new Chart(canvas, {
+              type: "bar",
+              data: { labels, datasets },
+              options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                  legend: { position: "top", labels: { font: { size: 11, family: "Inter" }, boxWidth: 8, padding: 10 } },
+                  tooltip: { backgroundColor: "#fff", titleColor: "#111", bodyColor: "#444", borderColor: "#e5e7eb", borderWidth: 1, padding: 8,
+                    callbacks: { label: ctx => ` ${ctx.dataset.label}: ${_rsym}${ctx.parsed.y.toLocaleString(_rloc)}` } },
+                },
+                scales: {
+                  x: { grid: { display: false }, ticks: { font: { size: 10 }, color: "#9ca3af" } },
+                  y: { border: { display: false }, grid: { color: "#f3f4f6" },
+                       ticks: { font: { size: 10 }, color: "#9ca3af",
+                                callback: v => _rsym + (v >= 1000 ? (v / 1000).toFixed(0) + "k" : v) } },
+                },
+              },
+            });
+          } else if (wrapEl) {
+            wrapEl.innerHTML = '<p style="font-size:13px;color:#9ca3af;padding:24px 0 0">Not enough data to chart yet.</p>';
+          }
+        }
+
+        // ── RIGHT PANEL ─────────────────────────────────────────────────
+        const recentEl = document.getElementById("overviewRecentList");
+        if (!recentEl) return;
+
+        if (isCreditCard) {
+          // Recent charges (last 8 debit/charge transactions)
+          const recentCharges = txns.filter(t => (parseAmount(t.amount) || 0) > 0).slice(0, 8);
+
+          if (recentCharges.length > 0) {
+            recentEl.innerHTML = recentCharges.map(t => {
+              const merchant = t.merchant_clean || t.raw_description || "Unknown";
+              const amt = parseAmount(t.amount) || 0;
+              const cat = t.category || "Uncategorized";
+              // Robust date formatter — handles YYYY-MM-DD, MM/DD/YYYY, M/D/YYYY
+              const dateStr = (() => {
+                const s = (t.date || "").trim();
+                if (!s) return "";
+                let d;
+                const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+                if (iso) d = new Date(+iso[1], +iso[2] - 1, +iso[3]);
+                else {
+                  const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+                  if (us) d = new Date(+us[3], +us[1] - 1, +us[2]);
+                }
+                if (!d || isNaN(d)) return "";
+                return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+              })();
+              return `<div class="overview-recent-row">
+                <span class="overview-recent-icon">${_categoryIcon(cat)}</span>
+                <div class="overview-recent-info">
+                  <span class="overview-recent-merchant">${merchant}</span>
+                  <span class="overview-recent-cat">${cat}${dateStr ? " · " + dateStr : ""}</span>
+                </div>
+                <span class="overview-recent-amount neg">-${_rsym}${amt.toLocaleString(_rloc, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>`;
+            }).join("");
+          } else {
+            recentEl.innerHTML = '<p style="font-size:13px;color:#9ca3af;padding:12px 0">No transactions loaded.</p>';
+          }
+
+        } else {
+          // Recent transactions (checking/savings)
+          const recent = txns.slice(0, 5);
+          recentEl.innerHTML = recent.map(t => {
+            const merchant = t.merchant_clean || t.raw_description || "";
+            const amount = _displayAmt(t.amount || "", t.txn_type, false, _rsym);
+            const isNeg = amount.startsWith("-");
+            const cat = t.category || "Other";
+            return `<div class="overview-recent-row">
+              <span class="overview-recent-icon">${_categoryIcon(cat)}</span>
+              <div class="overview-recent-info">
+                <span class="overview-recent-merchant">${merchant}</span>
+                <span class="overview-recent-cat">${cat}</span>
+              </div>
+              <span class="overview-recent-amount${isNeg ? " neg" : " pos"}">${amount}</span>
+            </div>`;
+          }).join("") || '<p style="font-size:13px;color:#9ca3af;padding:12px 0">No transactions loaded.</p>';
+        }
+      }
+
+      // Close overflow menus when clicking anywhere outside
+      document.addEventListener("click", () => {
+        document.querySelectorAll(".acct-overflow-menu").forEach(m => m.style.display = "none");
+      });
+
+      // ── State enforcement — exactly one of these is visible at a time ──
+      function showAccountView() {
+        document.getElementById("demoEmptyState").style.display = "none";
+        results.removeAttribute("hidden");
+      }
+      function showEmptyState() {
+        results.setAttribute("hidden", "");
+        document.getElementById("demoEmptyState").style.display = "";
+      }
+
+      // ── Sidebar collapse ─────────────────────────────────────────────
+      let _sidebarCollapsed = false;
+      function toggleSidebar() {
+        _sidebarCollapsed = !_sidebarCollapsed;
+        const sidebar = document.getElementById("demoSidebar");
+        const btn = document.getElementById("sidebarCollapseBtn");
+        sidebar.classList.toggle("is-collapsed", _sidebarCollapsed);
+        // Flip the arrow direction
+        btn.style.transform = _sidebarCollapsed ? "rotate(180deg)" : "";
+      }
+
+      // Load accounts on page start
+      initAuth().then(() => loadAccounts());
+
+      // When the user returns to this tab (e.g. after running the bookmarklet on their
+      // bank's website), silently refresh the account list so newly imported data appears.
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible" && currentUser) {
+          loadAccounts();
+        }
+      });
+
+      // ── Smart Connect ─────────────────────────────────────────────────────── //
+      // Uses the FIFO Chrome Extension — users install it once, then bank
+      // connections are fully automatic. No credentials ever leave their device.
+
+      let _scBank = null;
+      const _scBankNames = { boa: "Bank of America", capital_one: "Capital One", discover: "Discover", icici: "ICICI Bank" };
+
+      // Tracks whether bridge.js has confirmed the extension is present.
+      // Set by the custom DOM event (method 2) before any user interaction.
+      let _fifoExtReady = false;
+      document.addEventListener("fifo-extension-ready", () => { _fifoExtReady = true; });
+
+      function _scExtensionInstalled() {
+        // Accept any of the three signals bridge.js emits:
+        //   1. Custom event already fired (most reliable for in-page UI)
+        //   2. DOM attribute set by bridge.js in its isolated world
+        //   3. window property injected via script tag (original method)
+        return _fifoExtReady
+          || document.documentElement.getAttribute("data-fifo-ext") === "1"
+          || typeof window.__FIFO_EXTENSION !== "undefined";
+      }
+
+      function openSmartConnect(bankKey) {
+        _scBank = bankKey;
+        closeBankPicker();
+        document.getElementById("smartConnectBankLabel").textContent = _scBankNames[bankKey] || bankKey;
+
+        if (_scExtensionInstalled()) {
+          _scShowStatus("⚡ Opening your bank…");
+          document.getElementById("smartConnectInstallPrompt").style.display = "none";
+          document.getElementById("smartConnectOverlay").style.display = "flex";
+          _scTrigger();
+        } else {
+          document.getElementById("smartConnectStatus").style.display = "none";
+          document.getElementById("smartConnectInstallPrompt").style.display = "";
+          document.getElementById("smartConnectOverlay").style.display = "flex";
+        }
+      }
+
+      function closeSmartConnect(event) {
+        if (event && event.target !== document.getElementById("smartConnectOverlay")) return;
+        window.removeEventListener("message", _scOnMessage);
+        document.getElementById("smartConnectOverlay").style.display = "none";
+      }
+
+      // After a successful Smart Connect, offer (once) to save the bank login for
+      // unattended background sync. Skipped if the account already has credentials.
+      let _scCredsAccountId = null;
+      function _scOfferSaveCreds(bankKey) {
+        const acct = (_lastAccountsCache || []).find(a => a.bank_key === bankKey);
+        if (!acct || acct.has_credentials) return;
+        _scCredsAccountId = acct.id;
+        document.getElementById("saveCredsRecommendBank").textContent =
+          acct.display_name || _scBankNames[bankKey] || bankKey;
+        document.getElementById("saveCredsRecommendOverlay").style.display = "flex";
+      }
+      function acceptSaveCredsRecommend() {
+        document.getElementById("saveCredsRecommendOverlay").style.display = "none";
+        if (_scCredsAccountId != null) {
+          openSaveCredentials({ stopPropagation() {} }, _scCredsAccountId);
+        }
+      }
+      function declineSaveCredsRecommend() {
+        document.getElementById("saveCredsRecommendOverlay").style.display = "none";
+        _scCredsAccountId = null;
+      }
+
+      function _scShowStatus(text) {
+        document.getElementById("smartConnectInstallPrompt").style.display = "none";
+        document.getElementById("smartConnectStatus").style.display = "";
+        document.getElementById("smartConnectStatusMsg").textContent = text;
+      }
+
+      function _scTrigger() {
+        const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+        window.addEventListener("message", _scOnMessage);
+        window.postMessage({ type: "FIFO_SMART_CONNECT", bank: _scBank,
+                             apiBase: isLocal ? location.origin : CLOUD_API_BASE }, "*");
+      }
+
+      function _scOnMessage(event) {
+        if (event.source !== window) return;
+        const msg = event.data;
+        if (!msg || msg.type !== "FIFO_SYNC_STATUS") return;
+        const labels = {
+          logging_in: "🔐 Log into your bank in the new tab…",
+          scraping:   "📋 Reading your transactions…",
+          saving:     "💾 Saving to your account…",
+        };
+        if (labels[msg.status]) { _scShowStatus(labels[msg.status]); return; }
+        if (msg.status === "done") {
+          window.removeEventListener("message", _scOnMessage);
+          _scShowStatus("✅ Connected! " + (msg.data?.count ?? 0) + " transactions imported.");
+          const connectedBank = _scBank;
+          setTimeout(async () => {
+            document.getElementById("smartConnectOverlay").style.display = "none";
+            await loadAccounts();
+            _scOfferSaveCreds(connectedBank);
+          }, 1400);
+        } else if (msg.status === "error") {
+          window.removeEventListener("message", _scOnMessage);
+          _scShowStatus("❌ " + (msg.message || "Something went wrong. Please try again."));
+          setTimeout(() => { document.getElementById("smartConnectOverlay").style.display = "none"; }, 4000);
+        }
+      }
+    </script>
+  <!-- Modals live outside all content containers so display:none on parents never hides them -->
+  <div id="bankPickerOverlay" class="bank-picker-overlay" style="display:none" onclick="closeBankPicker(event)">
+    <div class="bank-picker-modal">
+      <div class="bank-picker-title">Select your bank</div>
+      <div class="bank-picker-list">
+        <button class="bank-option bank-option-plaid" onclick="connectViaPlaIdSandbox()">
+          <span class="bank-name">🏦 Chase</span>
+          <span class="bank-soon" style="color:#1f5f55;font-weight:600">Try Demo Bank</span>
+        </button>
+        <div class="bank-picker-divider">— connect your bank —</div>
+        <button class="bank-option" onclick="openSmartConnect('boa')">
+          <span class="bank-name">Bank of America</span>
+          <span class="bank-option-method">⚡ Connect</span>
+        </button>
+        <button class="bank-option" onclick="openSmartConnect('capital_one')">
+          <span class="bank-name">Capital One</span>
+          <span class="bank-option-method">⚡ Connect</span>
+        </button>
+        <button class="bank-option" onclick="openSmartConnect('discover')">
+          <span class="bank-name">Discover</span>
+          <span class="bank-option-method">⚡ Connect</span>
+        </button>
+        <button class="bank-option" onclick="openSmartConnect('icici')">
+          <span class="bank-name">ICICI Bank</span>
+          <span class="bank-option-method">⚡ Connect</span>
+        </button>
+      </div>
+      <button class="bank-picker-cancel" onclick="closeBankPicker()">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Credential modal — enter username + password for headless auto-sync -->
+  <div id="credentialModalOverlay" class="bank-picker-overlay" style="display:none" onclick="closeCredentialModal(event)">
+    <div class="bank-picker-modal credential-modal">
+      <div class="credential-modal-header">
+        <div class="credential-bank-icon" id="credentialBankIcon">🏦</div>
+        <div class="credential-modal-titles">
+          <div class="bank-picker-title" id="credentialModalTitle">Connect Bank</div>
+          <div class="credential-modal-subtitle">Credentials are encrypted and stored securely. FIFO uses them only for automatic background syncing — never shared.</div>
+        </div>
+      </div>
+
+      <div class="credential-pills">
+        <span class="credential-pill">🔒 End-to-end encrypted</span>
+        <span class="credential-pill">⚡ Auto-syncs every 6 hrs</span>
+        <span class="credential-pill">🙈 Never shared</span>
+      </div>
+
+      <form id="credentialForm" onsubmit="submitCredentialForm(event)" autocomplete="on">
+        <div class="credential-field-group">
+          <label class="credential-label" for="credentialUsername">Username or Email</label>
+          <input
+            id="credentialUsername"
+            class="credential-input"
+            type="text"
+            placeholder="Enter your bank username"
+            autocomplete="username"
+            required
+          />
+        </div>
+        <div class="credential-field-group">
+          <label class="credential-label" for="credentialPassword">Password</label>
+          <div class="credential-password-wrap">
+            <input
+              id="credentialPassword"
+              class="credential-input"
+              type="password"
+              placeholder="Enter your bank password"
+              autocomplete="current-password"
+              required
+            />
+            <button type="button" class="credential-eye-btn" id="credentialEyeBtn" onclick="toggleCredentialPasswordVis()" title="Show/hide password">
+              <svg id="credentialEyeIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="credential-mfa-note">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1f5f55" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          If your bank uses two-factor authentication, FIFO will prompt you to enter a one-time code the first time.
+        </div>
+
+        <div class="credential-actions">
+          <button type="button" class="bank-picker-cancel credential-cancel-btn" onclick="closeCredentialModal()">Cancel</button>
+          <button type="submit" class="credential-submit-btn" id="credentialSubmitBtn">
+            <span id="credentialSubmitLabel">Connect &amp; Sync</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="bookmarkletOverlay" class="bank-picker-overlay" style="display:none" onclick="closeBookmarkletModal(event)">
+    <div class="bank-picker-modal bookmarklet-modal">
+      <div class="bank-picker-title">Import from <span id="bookmarkletBankName">Bank</span></div>
+      <p class="bookmarklet-intro">Use your real browser — no automation, no special icons.</p>
+      <ol class="bookmarklet-steps">
+        <li class="bookmarklet-step">
+          <strong>Drag this button to your bookmarks bar:</strong>
+          <a id="bookmarkletLink" class="bookmarklet-btn" href="#">FIFO Import ★</a>
+          <span class="bookmarklet-drag-hint">(drag the button above to your toolbar)</span>
+        </li>
+        <li class="bookmarklet-step">
+          <strong>Open your bank in a new tab:</strong>
+          <button id="openBankBtn" class="open-bank-btn" onclick="openBankInBrowser()">Open Bank →</button>
+        </li>
+        <li class="bookmarklet-step">
+          Log in and navigate to your <strong>Transactions</strong> page.
+          Scroll down to load as many transactions as you want.
+        </li>
+        <li class="bookmarklet-step">
+          Click <strong>FIFO Import ★</strong> in your bookmarks bar.
+          You'll see an alert confirming how many transactions were imported.
+        </li>
+        <li class="bookmarklet-step">
+          Come back to this tab and click <strong>Done — Load My Data</strong> below.
+        </li>
+      </ol>
+      <p class="bookmarklet-note">
+        ⚠ If you see "No transactions found", make sure you're on the Transactions page and transactions are visible on screen.
+      </p>
+      <button class="demo-sandbox-btn" style="width:100%;margin-bottom:8px" onclick="closeBookmarkletModal(); loadAccounts();">Done — Load My Data</button>
+      <button class="bank-picker-cancel" onclick="closeBookmarkletModal()">Cancel</button>
+    </div>
+  </div>
+  <!-- Smart Connect modal -->
+  <!-- Save credentials modal -->
+  <div id="saveCredsRecommendOverlay" class="bank-picker-overlay" style="display:none" onclick="if(event.target===this)declineSaveCredsRecommend()">
+    <div class="bank-picker-modal smart-connect-modal">
+      <div class="bank-picker-title">✅ Connected!</div>
+      <div class="smart-connect-subtitle">Keep <span id="saveCredsRecommendBank"></span> synced automatically?</div>
+      <p class="smart-connect-note" style="margin:14px 0;line-height:1.6;font-size:13px;color:#555">
+        Save your bank login so FIFO can refresh in the background even when you're not
+        signed in. It's kept in your device's secure Keychain and used only to log in on
+        your behalf — <strong>no one else can read it, and we never share it</strong>.
+        You can remove it anytime from the account menu.
+      </p>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
+        <button type="button" class="demo-sandbox-btn" onclick="acceptSaveCredsRecommend()">Yes, keep it synced (recommended)</button>
+        <button type="button" class="bank-picker-cancel" onclick="declineSaveCredsRecommend()">Not now</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="saveCredsOverlay" class="bank-picker-overlay" style="display:none" onclick="closeSaveCredentials(event)">
+    <div class="bank-picker-modal smart-connect-modal">
+      <div class="bank-picker-title">🔑 Save your bank password</div>
+      <div id="saveCredsBankLabel" class="smart-connect-subtitle"></div>
+      <p class="smart-connect-note" style="margin-bottom:14px;line-height:1.6;font-size:13px;color:#555">
+        Stored only in your computer's macOS Keychain (or encrypted in Firestore on Cloud Run).
+        FIFO can read it to silently re-authenticate when your bank cookies expire — no one else can.
+      </p>
+      <!-- Deliberately NOT a <form> with type="password". Chrome's password
+           manager triggers on that combo regardless of autocomplete hints.
+           We mask the password input via -webkit-text-security so it looks
+           like dots but isn't tagged as a credential field. -->
+      <div id="saveCredsForm">
+        <input type="hidden" id="saveCredsAccountId" value="">
+        <input class="smart-connect-input" id="saveCredsUsername" type="text" placeholder="Username" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
+        <input class="smart-connect-input" id="saveCredsPassword" type="text" placeholder="Password" autocomplete="off" data-lpignore="true" data-1p-ignore="true" style="margin-top:8px;-webkit-text-security:disc;text-security:disc">
+        <div id="saveCredsStatus" style="margin-top:10px;font-size:13px;color:#555;display:none"></div>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button type="button" class="demo-sandbox-btn" style="flex:1" onclick="submitSaveCredentials(event)">Save</button>
+          <button type="button" class="bank-picker-cancel" onclick="closeSaveCredentials()" style="flex:0 0 auto">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="smartConnectOverlay" class="bank-picker-overlay" style="display:none" onclick="closeSmartConnect(event)">
+    <div class="bank-picker-modal smart-connect-modal">
+      <div class="bank-picker-title">⚡ Let FIFO handle it</div>
+      <div id="smartConnectBankLabel" class="smart-connect-subtitle"></div>
+
+      <!-- State A: extension not installed → one-time setup prompt -->
+      <div id="smartConnectInstallPrompt" style="display:none">
+        <p class="smart-connect-note" style="margin-bottom:16px;line-height:1.6">
+          FIFO uses a browser extension to securely read your transactions.<br>
+          Install it once — then connecting any bank takes one click.
+        </p>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:4px">
+          <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:#555">
+            <span style="font-size:18px">🔒</span> Your bank credentials never leave your device
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:#555">
+            <span style="font-size:18px">⚡</span> Future syncs happen in the background automatically
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:#555">
+            <span style="font-size:18px">🏦</span> Works with every bank, no extra configuration
+          </div>
+        </div>
+        <a class="demo-sandbox-btn"
+           href="https://chrome.google.com/webstore/detail/fifo-bank-connector"
+           target="_blank" rel="noopener"
+           style="display:block;text-align:center;text-decoration:none;width:100%;box-sizing:border-box;margin-top:16px">
+          Add FIFO to Chrome — it's free →
+        </a>
+        <p style="margin-top:10px;font-size:12px;color:#aaa;text-align:center">
+          After installing, reload this page and try again.
+        </p>
+      </div>
+
+      <!-- State B: extension installed → live sync status -->
+      <div id="smartConnectStatus" style="display:none">
+        <div id="smartConnectStatusMsg" class="smart-connect-status-msg">⚡ Opening your bank…</div>
+      </div>
+
+      <button class="bank-picker-cancel" style="margin-top:16px" onclick="closeSmartConnect()">Cancel</button>
+    </div>
+  </div>
+  </body>
+</html>

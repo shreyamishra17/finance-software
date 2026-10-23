@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>About Us — FIFO</title>
+    <meta name="description" content="FIFO is a personalized finance platform that turns messy PDFs into clear, actionable insights." />
+    <link rel="stylesheet" href="styles.css?v=7" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="nav">
+        <a href="about.html" class="logo">FIFO</a>
+        <nav class="nav-links">
+          <a href="#about">About</a>
+          <a href="#goal">Our goal</a>
+          <a href="#product">Product</a>
+          <a href="#who">Who we are</a>
+        </nav>
+        <div class="nav-cta">
+          <a id="primaryNavCta" class="primary" href="demo.html">Try our demo</a>
+          <a class="ghost" id="signInLink" href="#" onclick="openAboutSignIn(event)">Sign in</a>
+          <div id="navAccountMenu" class="account-menu-wrap" hidden>
+            <button id="navAccountButton" class="nav-account-link" type="button" aria-label="Open account menu" onclick="toggleAboutAccountMenu(event)">
+              <svg viewBox="0 0 24 24" role="presentation">
+                <path d="M12 12c2.76 0 5-2.46 5-5.5S14.76 1 12 1 7 3.46 7 6.5 9.24 12 12 12Zm0 2c-4.42 0-8 2.91-8 6.5 0 .83.67 1.5 1.5 1.5h13c.83 0 1.5-.67 1.5-1.5 0-3.59-3.58-6.5-8-6.5Z"/>
+              </svg>
+            </button>
+            <div id="navAccountDropdown" class="account-menu-dropdown" hidden>
+              <a href="myaccounts.html">Account settings</a>
+              <button type="button" onclick="aboutLogout()">Log out</button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <section id="about" class="hero reveal-section">
+          <div class="hero-copy reveal-item">
+            <h1>Clarity for every financial decision.</h1>
+            <p class="subhead">
+              FIFO is a personalized finance platform designed for control, and real-world simplicity. We are a one-stop solution for your personal finances. 
+              We help you get clear data on your full financial history, to help you get usable insights you can act on.
+            </p>
+            <div class="hero-cta">
+              <a class="ghost" href="#product">See how it works</a>
+            </div>
+          </div>
+          <div class="hero-visual reveal-item reveal-delay-1" aria-hidden="true">
+            <div class="hero-preview">
+              <div class="hero-preview-header">
+                <span class="hero-preview-dot"></span>
+                <span class="hero-preview-dot"></span>
+                <span class="hero-preview-dot"></span>
+                <span class="hero-preview-chip">Insights dashboard</span>
+              </div>
+              <div class="hero-preview-body">
+                <div class="hero-preview-card hero-preview-card-wide">
+                  <span class="hero-preview-label">Net change</span>
+                  <span class="hero-preview-number">+$4,820</span>
+                  <span class="hero-preview-sub">Last 90 days</span>
+                </div>
+                <div class="hero-preview-grid">
+                  <div class="hero-preview-card">
+                    <span class="hero-preview-label">Income</span>
+                    <span class="hero-preview-number">$12.4K</span>
+                  </div>
+                  <div class="hero-preview-card">
+                    <span class="hero-preview-label">Expenses</span>
+                    <span class="hero-preview-number">-$7.6K</span>
+                  </div>
+                </div>
+                <div class="hero-preview-chart">
+                  <div class="hero-bar" style="--bar-height: 36%"></div>
+                  <div class="hero-bar" style="--bar-height: 58%"></div>
+                  <div class="hero-bar" style="--bar-height: 44%"></div>
+                  <div class="hero-bar" style="--bar-height: 72%"></div>
+                  <div class="hero-bar" style="--bar-height: 61%"></div>
+                  <div class="hero-bar hero-bar-accent" style="--bar-height: 84%"></div>
+                </div>
+                <div class="hero-preview-list">
+                  <div class="hero-preview-row">
+                    <span>Housing</span>
+                    <span>$2,665</span>
+                  </div>
+                  <div class="hero-preview-row">
+                    <span>Food & Drink</span>
+                    <span>$812</span>
+                  </div>
+                  <div class="hero-preview-row">
+                    <span>Auto & Transport</span>
+                    <span>$231</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="stats-bar reveal-section">
+          <div class="stats-bar-card reveal-item">
+            <span class="stats-bar-value" data-counter="192" data-suffix="+">0</span>
+            <span class="stats-bar-label">transactions analyzed</span>
+          </div>
+          <div class="stats-bar-card reveal-item reveal-delay-1">
+            <span class="stats-bar-value" data-counter="82" data-prefix="$" data-suffix="K">0</span>
+            <span class="stats-bar-label">income tracked</span>
+          </div>
+          <div class="stats-bar-card reveal-item reveal-delay-2">
+            <span class="stats-bar-value" data-counter="8">0</span>
+            <span class="stats-bar-label">spending categories</span>
+          </div>
+        </section>
+
+        <section id="goal" class="section section-soft section-soft-sage reveal-section">
+          <div class="section-title reveal-item">
+            <p class="eyebrow">Our goal</p>
+            <h2>We help you track everything that matters.</h2>
+          </div>
+          <div class="pillars">
+            <div class="pillar reveal-item">
+              <div class="pillar-icon" aria-hidden="true">💰</div>
+              <h3>Income</h3>
+              <p>Your various sources of income, including salary and business income</p>
+            </div>
+            <div class="pillar reveal-item reveal-delay-1">
+              <div class="pillar-icon" aria-hidden="true">💳</div>
+              <h3>Expenses</h3>
+              <p>Help categorize and keep track of all your expenses</p>
+            </div>
+            <div class="pillar reveal-item reveal-delay-2">
+              <div class="pillar-icon" aria-hidden="true">📈</div>
+              <h3>Investments</h3>
+              <p>We integrate various investment instruments including debt and equity</p>
+            </div>
+          </div>
+          <div class="pillars-note">... and a lot more</div>
+        </section>
+
+        <section id="product" class="section glass section-soft section-soft-ivory reveal-section">
+          <div class="section-title reveal-item">
+            <p class="eyebrow">Product</p>
+            <h2>Personalized finance that starts with your documents.</h2>
+          </div>
+          <div class="product-grid">
+            <div class="product-card reveal-item">
+              <h3>Smooth integration</h3>
+              <p>We work in the background without interrupting you</p>
+            </div>
+            <div class="product-card reveal-item reveal-delay-1">
+              <h3>Smart summaries</h3>
+              <p>Clear insights about cash flow, recurring charges, and upcoming risks.</p>
+            </div>
+            <div class="product-card reveal-item reveal-delay-2">
+              <h3>Next steps</h3>
+              <p>We give you the power to take your next steps confidently.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="who" class="section section-soft section-soft-mist reveal-section">
+          <div class="section-title reveal-item">
+            <h2>Get to know us</h2>
+          </div>
+          <div class="team-grid">
+            <div class="team-card reveal-item">
+              <div class="headshot" data-initials="SM" aria-label="Profile placeholder for Shreya Mishra"></div>
+              <h3>Shreya Mishra</h3>
+              <p>A graduate from University of Massachusetts, Amherst, Shreya brings her passion for solving complex problems through technology. Shreya has had over 3 years of experience working as a software enginner at Qualcomm.</p>
+            </div>
+            <div class="team-card reveal-item reveal-delay-1">
+              <div class="headshot" data-initials="KG" aria-label="Profile placeholder for Kshitij Gupta"></div>
+              <h3>Kshitij Gupta</h3>
+              <p>A graduate from Columbia University, Kshitij brings his mathematical and problem solving skills to help simplify the world of finance. Kshitij is currently finishing his PhD in theoretical physics.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="demo" class="cta reveal-section">
+          <div class="reveal-item">
+            <h2>Try our demo</h2>
+            <p class="subhead">Upload a PDF statement. We will connect this to our parser to extract and summarize data.</p>
+          </div>
+          <div class="demo reveal-item reveal-delay-1">
+            <a id="sectionDemoCta" class="primary" href="demo.html">Go to demo page</a>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <div class="logo">FIFO</div>
+        <div class="footer-links">
+          <a href="#about">About</a>
+          <a href="#product">Product</a>
+          <a href="demo.html">Demo</a>
+        </div>
+        <div class="footer-note">© 2026 FIFO. All rights reserved.</div>
+      </footer>
+    </div>
+    <section id="aboutAuthGate" class="auth-gate" hidden>
+      <div class="auth-gate-card">
+        <button class="auth-gate-close" type="button" aria-label="Close sign in" onclick="closeAboutSignIn()">✕</button>
+        <h2 id="aboutAuthTitle">Sign in to FIFO</h2>
+        <div id="aboutSignupFields" hidden>
+          <input id="aboutFirstName" class="auth-input" type="text" placeholder="First name" />
+          <input id="aboutLastName" class="auth-input" type="text" placeholder="Last name" />
+        </div>
+        <input id="aboutAuthEmail" class="auth-input" type="email" placeholder="Email" />
+        <input id="aboutAuthPassword" class="auth-input" type="password" placeholder="Password" />
+        <input id="aboutConfirmPassword" class="auth-input" type="password" placeholder="Confirm password" hidden />
+        <div class="auth-gate-actions">
+          <button id="aboutAuthSecondaryBtn" class="demo-connect-ghost-btn" type="button" onclick="aboutLeftAction()">Log in</button>
+          <button id="aboutAuthPrimaryBtn" class="demo-sandbox-btn" type="button" onclick="aboutRightAction()">Create account</button>
+        </div>
+        <p id="aboutAuthStatus" class="auth-status"></p>
+      </div>
+    </section>
+    <script>
+      (() => {
+        const CLOUD_API_BASE = "https://finance-demo-hf4lgxwbvq-uc.a.run.app";
+        const AUTH_TOKEN_KEY = "fifoAuthToken";
+        const authToken = localStorage.getItem(AUTH_TOKEN_KEY) || "";
+        const hasAuth = !!authToken;
+        const signInLink = document.getElementById("signInLink");
+        const navAccountMenu = document.getElementById("navAccountMenu");
+        const primaryNavCta = document.getElementById("primaryNavCta");
+        const sectionDemoCta = document.getElementById("sectionDemoCta");
+        function apiBase() {
+          return window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "" : CLOUD_API_BASE;
+        }
+
+        async function setAuthedCtaState() {
+          try {
+            const resp = await fetch(`${apiBase()}/api/accounts`, {
+              headers: { Authorization: `Bearer ${authToken}` },
+            });
+            const accounts = resp.ok ? await resp.json() : [];
+            const hasAccounts = Array.isArray(accounts) && accounts.length > 0;
+            primaryNavCta.textContent = hasAccounts ? "My Finance" : "Get Started";
+            sectionDemoCta.textContent = hasAccounts ? "My Finance" : "Get Started";
+            primaryNavCta.style.visibility = "";
+            sectionDemoCta.style.visibility = "";
+          } catch (_) {
+            primaryNavCta.textContent = "Get Started";
+            sectionDemoCta.textContent = "Get Started";
+            primaryNavCta.style.visibility = "";
+            sectionDemoCta.style.visibility = "";
+          }
+        }
+
+        if (hasAuth) {
+          signInLink.hidden = true;
+          navAccountMenu.hidden = false;
+          primaryNavCta.style.visibility = "hidden";
+          sectionDemoCta.style.visibility = "hidden";
+          setAuthedCtaState();
+        } else {
+          signInLink.hidden = false;
+          navAccountMenu.hidden = true;
+          primaryNavCta.style.visibility = "";
+          sectionDemoCta.style.visibility = "";
+          primaryNavCta.textContent = "Try our demo";
+          sectionDemoCta.textContent = "Go to demo page";
+        }
+
+        window.toggleAboutAccountMenu = (event) => {
+          if (event) event.stopPropagation();
+          const menu = document.getElementById("navAccountDropdown");
+          menu.hidden = !menu.hidden;
+        };
+
+        window.aboutLogout = () => {
+          localStorage.removeItem(AUTH_TOKEN_KEY);
+          window.location.reload();
+        };
+
+        document.addEventListener("click", (event) => {
+          const wrap = document.getElementById("navAccountMenu");
+          const menu = document.getElementById("navAccountDropdown");
+          if (!wrap || !menu || wrap.hidden) return;
+          if (!wrap.contains(event.target)) menu.hidden = true;
+        });
+
+        const revealNodes = document.querySelectorAll(".reveal-item, .reveal-section");
+        const io = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            entry.target.classList.add("is-visible");
+            io.unobserve(entry.target);
+          });
+        }, { threshold: 0.18, rootMargin: "0px 0px -40px 0px" });
+        revealNodes.forEach((node) => io.observe(node));
+
+        const counters = document.querySelectorAll("[data-counter]");
+        const animateCounter = (el) => {
+          const target = Number(el.dataset.counter || 0);
+          const prefix = el.dataset.prefix || "";
+          const suffix = el.dataset.suffix || "";
+          const start = performance.now();
+          const duration = 1200;
+          const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+
+          const frame = (now) => {
+            const progress = Math.min(1, (now - start) / duration);
+            const value = Math.round(target * easeOut(progress));
+            el.textContent = `${prefix}${value.toLocaleString()}${suffix}`;
+            if (progress < 1) requestAnimationFrame(frame);
+          };
+          requestAnimationFrame(frame);
+        };
+
+        const counterObserver = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            animateCounter(entry.target);
+            counterObserver.unobserve(entry.target);
+          });
+        }, { threshold: 0.4 });
+        counters.forEach((counter) => counterObserver.observe(counter));
+
+        window.openAboutSignIn = (event) => {
+          if (event) event.preventDefault();
+          document.getElementById("aboutAuthGate").hidden = false;
+          setAboutAuthMode("login");
+          document.getElementById("aboutAuthStatus").textContent = "";
+        };
+
+        window.closeAboutSignIn = () => {
+          document.getElementById("aboutAuthGate").hidden = true;
+          document.getElementById("aboutAuthStatus").textContent = "";
+        };
+
+        let aboutAuthMode = "login";
+        function setAboutAuthMode(mode) {
+          aboutAuthMode = mode;
+          const isSignup = mode === "signup";
+          document.getElementById("aboutAuthTitle").textContent = isSignup ? "Create your FIFO account" : "Sign in to FIFO";
+          document.getElementById("aboutSignupFields").hidden = !isSignup;
+          document.getElementById("aboutConfirmPassword").hidden = !isSignup;
+          const primary = document.getElementById("aboutAuthPrimaryBtn");
+          const secondary = document.getElementById("aboutAuthSecondaryBtn");
+          primary.textContent = "Create account";
+          primary.className = isSignup ? "demo-sandbox-btn" : "demo-connect-ghost-btn";
+          secondary.textContent = "Log in";
+          secondary.className = isSignup ? "demo-connect-ghost-btn" : "demo-sandbox-btn";
+        }
+        window.aboutLeftAction = () => {
+          if (aboutAuthMode === "signup") {
+            setAboutAuthMode("login");
+            return;
+          }
+          window.aboutSubmitAuth();
+        };
+        window.aboutRightAction = () => {
+          if (aboutAuthMode === "login") {
+            setAboutAuthMode("signup");
+            return;
+          }
+          window.aboutSubmitAuth();
+        };
+
+        window.aboutSubmitAuth = async () => {
+          const email = document.getElementById("aboutAuthEmail").value.trim();
+          const password = document.getElementById("aboutAuthPassword").value;
+          const firstName = document.getElementById("aboutFirstName").value.trim();
+          const lastName = document.getElementById("aboutLastName").value.trim();
+          const confirmPassword = document.getElementById("aboutConfirmPassword").value;
+          const status = document.getElementById("aboutAuthStatus");
+          status.style.color = "#5f6f69";
+          status.textContent = aboutAuthMode === "signup" ? "Creating account..." : "Logging in...";
+          try {
+            const endpoint = aboutAuthMode === "signup" ? "/api/auth/signup" : "/api/auth/login";
+            const payload = aboutAuthMode === "signup"
+              ? { first_name: firstName, last_name: lastName, email, password, confirm_password: confirmPassword }
+              : { email, password };
+            const resp = await fetch(`${apiBase()}${endpoint}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || (aboutAuthMode === "signup" ? "Create account failed" : "Login failed"));
+            localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+            window.location.reload();
+          } catch (err) {
+            status.style.color = "#8a2f2f";
+            status.textContent = err.message || String(err);
+          }
+        };
+
+        const aboutAuthEmail = document.getElementById("aboutAuthEmail");
+        const aboutAuthPassword = document.getElementById("aboutAuthPassword");
+        const aboutConfirmPassword = document.getElementById("aboutConfirmPassword");
+        const aboutEnterHandler = (event) => {
+          if (event.key === "Enter") window.aboutSubmitAuth();
+        };
+        aboutAuthEmail.addEventListener("keydown", aboutEnterHandler);
+        aboutAuthPassword.addEventListener("keydown", aboutEnterHandler);
+        aboutConfirmPassword.addEventListener("keydown", aboutEnterHandler);
+
+        document.addEventListener("keydown", (event) => {
+          if (event.key !== "Escape") return;
+          const menu = document.getElementById("navAccountDropdown");
+          if (menu && !menu.hidden) menu.hidden = true;
+        });
+      })();
+    </script>
+  </body>
+</html>

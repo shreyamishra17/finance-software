@@ -1,0 +1,13 @@
+pdfplumber
+python-dotenv
+firebase-admin
+google-cloud-firestore
+playwright
+pyotp
+keyring
+pandas
+rapidfuzz
+geonamescache
+
+# ── Session encryption ────────────────────────────────────────────────
+cryptography>=42.0.0

@@ -1,0 +1,255 @@
+{
+  "locations": [
+    "San Diego",
+    "Los Angeles",
+    "La Jolla",
+    "New York",
+    "Berlin",
+    "Paris",
+    "Madrid",
+    "Philadelphia",
+    "Carlsbad",
+    "Universal City",
+    "San Francisco",
+    "Los Gatos",
+    "Seattle",
+    "Austin",
+    "Chicago",
+    "Miami",
+    "Boston",
+    "Denver",
+    "Manhattan",
+    "San Bruno",
+    "Jamaica",
+    "Carmel",
+    "Del Mar",
+    "La Colombe",
+    "Bellevue",
+    "Brooklyn",
+    "Hoboken",
+    "Jersey City",
+    "Portland",
+    "Atlanta",
+    "Dallas",
+    "Houston",
+    "Phoenix",
+    "Minneapolis",
+    "Detroit",
+    "Las Vegas",
+    "Nashville",
+    "NYC",
+    "San Francisco CA"
+  ],
+  "state_abbrs": [
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+    "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+    "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+    "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+    "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"
+  ],
+  "token_replacements": {
+    "WHOLEFDS": "WHOLE FOODS"
+  },
+  "aliases": {
+    "WHOLE FOODS": "Whole Foods",
+    "WHOLE FOODS LAJ": "Whole Foods",
+    "WHOLE FOODS LAJ 1": "Whole Foods",
+    "DRIVE INS": "Drive Insurance",
+    "DRIVE INS CO": "Drive Insurance",
+    "TRADER JOE": "Trader Joe's",
+    "TRADER JOES": "Trader Joe's"
+  },
+  "contains_aliases": {
+    "WHOLE FOODS": "Whole Foods",
+    "DRIVE INS": "Drive Insurance",
+    "DOORDASH": "DoorDash",
+    "LYFT": "Lyft",
+    "NETFLIX": "Netflix",
+    "BARNESNOBLE": "Barnes & Noble",
+    "ZARA": "Zara",
+    "COURSERA": "Coursera",
+    "ANTHROPOLOGIE": "Anthropologie",
+    "HEADSPACE": "Headspace",
+    "SPOTIFY": "Spotify",
+    "HULU": "Hulu",
+    "AMAZON": "Amazon",
+    "APPLE": "Apple",
+    "TMOBILE": "T-Mobile",
+    "VICTORIA": "Victoria's Secret",
+    "UBR": "Uber",
+    "UBER": "Uber",
+    "COLOMBE": "La Colombe"
+  },
+  "merchant_url_tld_strip": ["com", "org", "net", "ca", "io"],
+  "strip_suffix_tokens": [
+    "LAJ",
+    "SANFRANCISCOCA",
+    "FRANCISCOCA",
+    "MANHATTANNY",
+    "BROOKLYNNY",
+    "SAN"
+  ],
+  "trailing_merchant_descriptors": [
+    "RESTAURANTS",
+    "RESTAURANT",
+    "MERCHANDISE",
+    "SERVICES",
+    "SERVICE",
+    "DEPARTMENT STORE",
+    "TRAVEL/ENTERTAINMENT",
+    "TRAVEL ENTERTAINMENT",
+    "TRAVEL-ENTERTAINMENT",
+    "AUTOMOTIVE",
+    "GASOLINE",
+    "GROCERY",
+    "SHOPPING & RETAIL",
+    "FOOD & DINING",
+    "FINANCIAL SERVICES",
+    "EDUCATION",
+    "SUPERMARKETS",
+    "AUTO DEALERS",
+    "HEALTH & BEAUTY",
+    "SUBSCRIPTION",
+    "RECURRING",
+    "CHECKCARD",
+    "PURCHASE",
+    "MOBILE PURCHASE",
+    "ONLINE",
+    "PENDING",
+    "ADMISSIONS",
+    "ADMISSION"
+  ],
+  "merchant_processor_prefixes": [
+    "SP",
+    "SQ",
+    "TST*",
+    "DD",
+    "PAYPAL",
+    "PP*"
+  ],
+  "merchant_tail_junk_patterns": [
+    "^\\d{2,4}-$",
+    "^[A-Z]\\d{4,}$",
+    "^\\d+[A-Z]+$",
+    "^[A-Z]+\\d+$"
+  ],
+  "merchant_short_token_keep": [
+    "BB",
+    "JR",
+    "SR",
+    "US",
+    "UK",
+    "NY",
+    "LA",
+    "SF"
+  ],
+  "merchant_connector_tokens": [
+    "&",
+    "AND",
+    "THE",
+    "OF",
+    "IN",
+    "AT",
+    "TO",
+    "FOR"
+  ],
+  "non_transaction_patterns": [
+    "cashback\\s+bonus",
+    "redeemed\\s*this\\s*period",
+    "important\\s*information",
+    "credit\\s*scorecard",
+    "see\\s+details\\s+of\\s+your\\s+next\\s+directpay",
+    "trans\\.?\\s*date\\s+purchases\\s+merchant"
+  ],
+  "payment_channel_rules": [
+    ["EXT TRNSFR", "External Transfer"],
+    ["EXT TRNSF", "External Transfer"],
+    ["EXTERNAL TRANSFER", "External Transfer"],
+    ["E-PAYMENT", "E-Payment"],
+    ["ZELLE", "Zelle"],
+    ["VENMO", "Venmo"],
+    ["DIRECT DEP", "Direct Dep"],
+    ["CHECKCARD", "Checkcard"],
+    ["MOBILE PURCHASE", "Mobile Purchase"],
+    ["CARD PURCHASE", "Card Purchase"],
+    ["PURCHASE", "Purchase"],
+    ["ACH", "ACH"],
+    ["WIRE", "Wire"]
+  ],
+  "transaction_code_patterns": [
+    "\\bSQ\\b",
+    "\\bTST\\*?\\b",
+    "\\bDES:?\\b",
+    "\\bID:?\\b",
+    "\\bACH\\b"
+  ],
+  "statement_type_credit_signals": [
+    "minimum payment due", "credit limit", "available credit",
+    "new balance", "payments and credits", "purchases",
+    "cash advance", "balance transfer"
+  ],
+  "statement_type_debit_signals": [
+    "beginning balance", "ending balance", "deposits",
+    "withdrawals", "checks", "service fees"
+  ],
+  "summary_ignore_markers": [
+    "trans date", "merchantcategory", "importantinformation",
+    "cashback bonus", "redeemedthisperiod", "warning",
+    "minimum payment warning", "midnight eastern",
+    "account made after", "cardmember agreement",
+    "directpayautomaticpayment",
+    "your next directpay automatic payment", "willbeon"
+  ],
+  "summary_signal_terms": [
+    "balance", "payment", "payments", "credit", "credits",
+    "purchase", "purchases", "debit", "debits", "fee", "fees",
+    "interest", "checks", "deposit", "deposits",
+    "withdrawal", "withdrawals", "due", "minimum", "total"
+  ],
+  "summary_canonical_labels": {
+    "beginning_balance": "Previous Balance",
+    "deposits_additions": "Payments and Credits",
+    "withdrawals_subtractions": "Purchases",
+    "checks": "Checks",
+    "service_fees": "Fees Charged",
+    "ending_balance": "New Balance"
+  },
+  "summary_aliases": {
+    "beginning_balance": [
+      "beginning balance",
+      "opening balance",
+      "previous balance",
+      "starting balance"
+    ],
+    "deposits_additions": [
+      "deposits",
+      "credits",
+      "payments and credits",
+      "money in",
+      "total credits"
+    ],
+    "withdrawals_subtractions": [
+      "withdrawals",
+      "debits",
+      "purchases",
+      "money out",
+      "total debits"
+    ],
+    "checks": [
+      "checks",
+      "check payments"
+    ],
+    "service_fees": [
+      "service fees",
+      "fees charged",
+      "finance charges",
+      "charges and fees"
+    ],
+    "ending_balance": [
+      "ending balance",
+      "new balance",
+      "closing balance",
+      "current balance"
+    ]
+  }
+}
