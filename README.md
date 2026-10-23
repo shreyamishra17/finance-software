@@ -1,58 +1,72 @@
-# FIFO — Personal Finance, Auto-Synced
+# Finance Software
 
-FIFO is a personal finance platform that pulls your bank transactions in
-automatically, categorizes them, and shows spending, income, cash flow, and
-runway across all your accounts — in one place.
+A personal-finance platform that connects your bank accounts, keeps transactions in sync automatically, categorizes them with a hybrid ML pipeline, and turns them into spending, income, and cash-flow insights — across all your accounts in one place.
 
-It gets your data two ways:
-
-1. **Chrome extension (primary)** — syncs transactions straight from your bank,
-   running inside your own logged-in Chrome. No passwords shared with a server,
-   and **no OTP** (because it's your real browser, not a headless bot).
-2. **PDF statement upload (fallback)** — drop a statement PDF into the web app
-   and it parses and imports the transactions.
-
-Once connected, accounts keep themselves fresh (background sync every ~6 hours)
-or refresh on demand with **Sync Now**.
+The interesting engineering here isn't the dashboard. It's the two hard problems underneath it: **getting clean transaction data out of banks that have no public API**, and **labeling messy, abbreviated merchant strings accurately**. The sections below focus on how those are solved.
 
 ---
 
-## How it works
+## Architecture at a glance
+
+The design splits cleanly into a **dumb client** and a **smart server**. The browser extension does only what *must* happen inside the bank's page; every bit of parsing, categorization, and storage logic lives server-side.
 
 ```
-  ┌─────────────────────────┐        ┌──────────────────────────────┐
-  │  Chrome Extension        │        │  Backend  (Cloud Run / local)│
-  │  "thin harvester"        │        │  src/serve_demo.py           │
-  │                          │  raw   │                              │
-  │  • auto-login (saved     │  rows  │  • normalize raw rows        │
-  │    creds, in YOUR Chrome)│──────▶ │    (scrape_normalize.py)     │
-  │  • navigate the bank SPA │        │  • categorize (categorize.py)│
-  │  • harvest raw cell text │        │  • dedupe + store (db.py →   │
-  │  • paginate              │        │    Firestore)                │
-  └─────────────────────────┘        │  • detect currency           │
-                                      │  • serve the web app         │
-  ┌─────────────────────────┐        │                              │
-  │  PDF upload  ────────────┼──────▶ │  parse_bank.py (pdfplumber)  │
-  └─────────────────────────┘        └───────────────┬──────────────┘
-                                                      │
-                                          ┌───────────▼──────────────┐
-                                          │  Web app (website/)       │
-                                          │  Dashboard · Transactions │
-                                          │  · Insights (vanilla JS)  │
-                                          └──────────────────────────┘
+        BANK SITE (in the user's own logged-in browser)
+                         │  raw DOM cells (no parsing)
+                         ▼
+┌───────────────────────────────────┐        ┌──────────────────────────────────────┐
+│  Chrome Extension — "thin          │  POST  │  Backend  (Python, Cloud Run)         │
+│  harvester"                        │  raw   │                                       │
+│                                    │  rows  │  scrape_normalize  →  dates, amounts, │
+│  • reads a server-supplied config  │───────▶│                       credit/debit,   │
+│  • clicks through the bank's pages │        │                       currency detect │
+│  • harvests raw cell text          │        │  categorize        →  4-layer hybrid  │
+│  • paginates                       │        │  db                →  dedupe + store  │
+│  • ZERO parsing / business logic   │        │                       (Firestore)     │
+└───────────────────────────────────┘        └──────────────────┬───────────────────┘
+                                                                 │
+┌───────────────────────────────────┐                           │
+│  PDF statement upload (fallback)   │─── parse_bank (pdfplumber)┤
+└───────────────────────────────────┘                           │
+                                                     ┌───────────▼───────────┐
+                                                     │  Web app (vanilla JS)  │
+                                                     │  Dashboard · Txns ·    │
+                                                     │  Insights · Trends     │
+                                                     └────────────────────────┘
 ```
 
-**Design principle:** the extension contains **no business logic** — it only does
-what must run inside the bank's page (log in, click through, read raw DOM text)
-and posts the raw rows to the server. **All parsing/normalization lives on the
-server** (`src/scrape_normalize.py`): date parsing, credit/debit direction,
-amount parsing, currency detection, dedup, categorization. This means logic
-changes ship by deploying the server — the extension rarely needs a Web Store
-republish.
+**Why this split matters.** The per-bank scraping instructions (which CSS selectors to read, which buttons to click, how to paginate, how to tell credit from debit) live in a single server-side config map and are served to the extension at runtime. So **adding a new bank, or fixing one when it changes its HTML, is a server-side config change — no extension rebuild, no Chrome Web Store re-review.** The extension is a generic, rarely-touched shell; the logic iterates on the server where it can ship instantly.
 
-Supported banks (scrape config lives server-side in `serve_demo.py`):
-**Bank of America, ICICI, Capital One, Discover.** Adding a bank that uses the
-existing navigation actions is a server-config change — no extension update.
+Four institutions are live today — **Bank of America, Capital One, ICICI, and Discover** — each defined purely as config, not code. Because the per-bank logic is pure config, bringing on a new institution such as **Chase** or **American Express** is a server-side config change (selectors, navigation, pagination), not an extension rebuild or a code change.
+
+---
+
+## The categorization engine
+
+Bank transaction strings are hostile to classify: `MOBILE PURCHASE WHOLEFDS LAJ 100 LA JOLLA CA`, `QUALCOMM TECHNOL DES:DIRECT DEP ID:...`, `TST* BLUE BOTTLE`. The same merchant appears a dozen different ways, padded with processor codes and store numbers.
+
+The engine runs **four layers in order**, stopping at the first confident hit. Cheap and precise first; the ML model only handles what the earlier layers can't:
+
+1. **High-confidence pattern rules** — structured patterns like Zelle/Venmo P2P, direct-deposit payroll, and statement-category tails. Deterministic and near-certain.
+2. **Fuzzy merchant matching (RapidFuzz)** — matches a cleaned merchant name against a known-company reference list using `WRatio`, accepting only matches above a 90/100 threshold.
+3. **Fine-tuned DistilBERT** — a transformer fine-tuned on transaction merchant strings handles everything the rules miss, but its prediction is only accepted above a 0.7 confidence floor.
+4. **Recurrence post-pass** — a statistical pass that catches income the other layers miss: it groups credits by merchant, and promotes any group with a regular cadence (weekly/biweekly/monthly, within tolerance) *and* a consistent amount to "Income" — so an unknown employer's deposits get labeled correctly from their *pattern*, not a keyword.
+
+Every layer is **confidence-gated and fails safe**: if the model isn't available, rows become explicitly `Uncategorized` rather than silently mislabeled. Direction (credit vs debit) is sign-guarded so a recurring *debit* (e.g. a monthly mutual-fund mandate) can never be mistaken for income.
+
+**Merchant normalization** feeds all of this: ACH/bank metadata (`DES:`, `INDN:`, `CO ID:`, `ACH HOLD`, trailing store numbers) is stripped first, so every payment variant of the same merchant collapses to one clean name before matching.
+
+---
+
+## Sync reliability (the part that's easy to underestimate)
+
+Scraping a logged-in bank session in the background is full of edge cases, and most of the backend's complexity is in handling them *correctly* rather than nagging the user:
+
+- **OTP-aware fallback chain** — on a background sync the server tries saved credentials, then a saved session, and distinguishes a *genuine* one-time-passcode challenge from a plain technical failure (stale selector, timeout, bot block). It only asks the user to re-login when that's actually the problem — a technical error never masquerades as "please re-authenticate."
+- **Cancel on window close** — a thread-safe registry lets an in-flight headless scrape be cancelled cleanly the moment the user closes the app, instead of leaving an orphaned browser running.
+- **Idempotent dedup** — each transaction's identity is a hash of `account + date + normalized description + signed amount`, with an occurrence-index tiebreaker for genuine same-day repeats. Running balance is deliberately excluded from the key because banks report it inconsistently and it would forge false duplicates. Re-syncing an account re-imports nothing already stored.
+- **Quota circuit breaker** — the auto-sync scheduler trips a one-hour cooldown on a Firestore quota error instead of hammering the recovering quota with retries.
+- **Data-driven currency** — currency (₹/$/€/£/¥) is detected from the amounts actually scraped and stored per account, so the UI renders the right symbol for any bank in any country with no hardcoding.
 
 ---
 
@@ -60,133 +74,50 @@ existing navigation actions is a server-config change — no extension update.
 
 ```
 src/
-  serve_demo.py        ThreadingHTTPServer: web app + JSON API + ingest endpoints
-  scrape_normalize.py  Server-side parsing of raw scraped rows (dates, direction,
-                       amounts, year-fix) — the "brain" the extension used to hold
+  serve_demo.py        HTTP server: web app + JSON API + ingest endpoints + sync scheduler
+  scrape_normalize.py  Server-side parsing of raw scraped cells (dates, direction, amounts, year-fix)
   parse_bank.py        PDF statement parser (pdfplumber), config-driven per bank
-  categorize.py        Rule-based transaction categorization (config/category_rules.json)
-  db.py                Firestore access: accounts + transactions, dedup, currency
-  auth.py              User-scoped auth (accounts isolated per user)
-  cloud_persistence.py Firebase Storage for raw PDFs
-  new_bank_setup.py    Auto-generates a parser config for an unknown bank
+  categorize.py        The 4-layer hybrid categorizer + recurrence detection
+  db.py                Firestore access: accounts, transactions, dedup, currency
+  auth.py              User-scoped auth (every account isolated per user)
+  cloud_persistence.py Firebase Storage for raw statement files
 
-chrome_extension/      MV3 extension: content.js (thin harvester), background.js
-                       (sync orchestration + posts raw rows), bridge.js, popup
+categorizer/
+  src/                 Training + inference scripts for the DistilBERT model and the
+                       RapidFuzz / BERT hybrid combiner
 
-website/               Web app frontend (demo.html + about.html), vanilla JS/CSS
-
+chrome_extension/      MV3 extension: the thin harvester (content script + background sync)
 config/
-  banks/*.json         Per-bank PDF-parser configs (markers, patterns)
-  category_rules.json  Categorization rules
-  common_config.json   Shared aliases / token replacements
-
-bank_fetcher/          Playwright configs for interactive first-connect (login_steps)
-tests/                 test_scrape_normalize.py — parser drift-guard vs real configs
-Dockerfile, deploy.sh  Container + manual deploy
-.github/workflows/     deploy-cloud-run.yml — CI/CD to Cloud Run
+  banks/*.json         Per-bank PDF-parser configs (BoA, Capital One, ICICI, Discover; Chase/Amex add here)
+  category_rules.json  Keyword / amount rules for the rules layer
+website/               Frontend (vanilla JS / HTML / CSS, Chart.js)
+tests/                 Parser drift-guard tests run against the real scrape configs
+Dockerfile             Container for Cloud Run
 ```
 
 ---
 
-## Run it locally
+## Tech stack
 
-**Requirements:** Python 3.11, and Google Application Default Credentials for
-Firestore (`gcloud auth application-default login`, or a service-account JSON via
-`GOOGLE_APPLICATION_CREDENTIALS`).
+- **Backend:** Python 3.11, `http.server` (`ThreadingHTTPServer`), pdfplumber, firebase-admin / google-cloud-firestore, Playwright, keyring
+- **ML:** PyTorch, Hugging Face Transformers (fine-tuned DistilBERT), RapidFuzz, pandas
+- **Frontend:** vanilla JS / HTML / CSS, Chart.js
+- **Extension:** Chrome Manifest V3
+- **Infra:** Docker, Google Cloud Run, Firestore, Firebase Storage
+
+---
+
+## Run it locally
 
 ```bash
 pip install -r requirements.txt
 python3 src/serve_demo.py            # serves on http://127.0.0.1:8000
 ```
 
-Open **http://127.0.0.1:8000/about.html** (or `/demo.html` for the app directly).
-
-To exercise the **extension** locally:
-
-1. `chrome://extensions` → enable Developer mode → **Load unpacked** →
-   select `chrome_extension/`.
-2. Open the local app, **Connect account**, and Sync.
-
-> The extension's content script only runs on `localhost`, `127.0.0.1`, and the
-> deployed Cloud Run URL — so use one of those origins, not a static file server.
-
-### Environment variables
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `PORT` | Server port | `8000` |
-| `PERSIST_MODE` | `local` (files under `my_finance/`) or `firebase_storage` | `local` |
-| `FIRESTORE_DATABASE` | Named Firestore DB (cloud uses `finance-database`) | `(default)` |
-| `FIREBASE_STORAGE_BUCKET` | Bucket for raw PDFs in firebase mode | — |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Service-account JSON path (local Firestore) | ADC |
-| `NO_BROWSER` | Set to skip auto-opening a browser tab on start | — |
-
-> **Note:** with no `FIRESTORE_DATABASE`, local dev talks to the `(default)`
-> Firestore database, which is **separate** from the cloud's `finance-database`.
-> To share data with the cloud, run with `FIRESTORE_DATABASE=finance-database`.
+Firestore access uses Application Default Credentials (`gcloud auth application-default login`, or a service-account JSON via `GOOGLE_APPLICATION_CREDENTIALS`). To load the extension: `chrome://extensions` → Developer mode → **Load unpacked** → `chrome_extension/`.
 
 ---
 
-## Deployment
+## A note on data & privacy
 
-The backend runs on **Google Cloud Run**, and deploys **automatically** via
-GitHub Actions.
-
-- Pushing to `main` triggers `.github/workflows/deploy-cloud-run.yml` **when the
-  change touches** `src/`, `bank_fetcher/`, `core/`, `api/`, `website/`,
-  `requirements.txt`, `Dockerfile`, or the workflow itself. It builds the
-  container and deploys to the `finance-demo` service.
-- So **backend and web-app changes ship on push — no manual step.**
-- Manual deploy (if ever needed): `bash deploy.sh` (requires `gcloud` + Docker),
-  or `gcloud builds submit` + `gcloud run deploy` without local Docker.
-
-> Editing files under `.github/workflows/` and pushing requires a token with the
-> `workflow` scope: `gh auth refresh -h github.com -s workflow`.
-
-### The Chrome extension is separate
-
-The extension is **not** part of CI/CD — it's distributed through the Chrome Web
-Store and updated manually:
-
-1. Build the upload zip from `chrome_extension/` (strip `localhost`/`127.0.0.1`
-   from the manifest — the store rejects them).
-2. Upload to the Web Store dashboard and submit for review.
-
-Thanks to the thin-harvester design, this is rare — most changes are server-side.
-
----
-
-## Data & correctness notes
-
-- **Dedup** — each transaction's identity is a hash of
-  `account + date + normalized-description + signed-amount` (the description
-  carries the bank's own unique reference, which distinguishes real same-day
-  repeats). A running-balance is intentionally **not** in the key (it's read
-  inconsistently and would forge duplicates). An occurrence-index tiebreaker
-  keeps genuinely-identical, reference-less repeats distinct.
-- **Currency** — detected from the actual scraped amounts (₹ / $ / € / £ / ¥)
-  and stored per account, so the UI shows the right currency for any bank/country
-  without hardcoding.
-- **Dates** — banks that render a date with no year (e.g. ICICI's "29 Jun") are
-  corrected sequence-aware (newest-first, drop a year at each month wrap).
-
----
-
-## Tests
-
-```bash
-python3 tests/test_scrape_normalize.py      # or: pytest tests/
-```
-
-Covers the server-side normalizers (amount/date/direction/year-fix) and includes
-a drift-guard that runs against the **real** `serve_demo.py` scrape configs.
-
----
-
-## Tech stack
-
-- **Backend:** Python 3.11, `http.server`, pdfplumber, firebase-admin /
-  google-cloud-firestore, Playwright (interactive first-connect), keyring.
-- **Frontend:** vanilla JS / HTML / CSS (no framework), Chart.js.
-- **Extension:** Chrome Manifest V3.
-- **Infra:** Docker, Google Cloud Run, Firestore, Firebase Storage, GitHub Actions.
+The transaction datasets and trained model used to build and evaluate the categorizer are **intentionally excluded** from this repository, because they derive from real personal financial data. The code, configs, and pipeline are all here; the private data is not. The design keeps bank credentials in the OS keychain (or Fernet-encrypted at rest), and the login page itself is never seen by the system — the user authenticates directly with their bank.
