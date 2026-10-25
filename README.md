@@ -4,6 +4,8 @@ A personal-finance platform that connects your bank accounts, keeps transactions
 
 The interesting engineering here isn't the dashboard. It's the two hard problems underneath it: **getting clean transaction data out of banks that have no public API**, and **labeling messy, abbreviated merchant strings accurately**. The sections below focus on how those are solved.
 
+**Live demo:** [finance-software.pages.dev/about](https://finance-software.pages.dev/about) — hosted on Cloudflare Pages. If your browser shows a security warning, it's a false-positive flag that free `pages.dev` finance apps commonly trigger; the code in this repository is the authoritative reference.
+
 ---
 
 ## Architecture at a glance
